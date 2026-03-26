@@ -1,0 +1,22 @@
+services:
+  openclaw:
+    image: ghcr.io/openclaw/openclaw:latest
+    container_name: openclaw
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - TZ=${TZ:-Etc/UTC}
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./.openclaw:/root/.openclaw
+      - ./openclaw-workspace:/root/workspace
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    mem_limit: 4g
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

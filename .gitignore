@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+
+# OpenClaw local state
+.openclaw/
+openclaw-workspace/
+
+# Ollama local state (if you choose to store it here)
+.ollama/
+
+# OS / editor
+.DS_Store
+.vscode/
+
