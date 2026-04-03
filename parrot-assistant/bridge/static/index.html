@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Parrot Voice Chat</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #242836;
+    --border: #2e3345;
+    --text: #e4e6ed;
+    --text-muted: #8b8fa3;
+    --accent: #6c5ce7;
+    --accent-glow: rgba(108, 92, 231, 0.3);
+    --user-bg: #2d3250;
+    --assistant-bg: #1e2235;
+    --danger: #e74c5c;
+    --success: #2ecc71;
+  }
+
+  body {
+    font-family: 'Inter', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  header {
+    padding: 16px 24px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-shrink: 0;
+  }
+
+  header .logo {
+    width: 36px; height: 36px;
+    background: var(--accent);
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px;
+  }
+
+  header h1 { font-size: 18px; font-weight: 600; }
+
+  .status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--danger);
+    margin-left: auto;
+    transition: background 0.3s;
+  }
+  .status-dot.ok { background: var(--success); }
+
+  .status-label {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  #chat-log {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    scroll-behavior: smooth;
+  }
+
+  .msg {
+    max-width: 80%;
+    padding: 12px 16px;
+    border-radius: 16px;
+    line-height: 1.5;
+    font-size: 14px;
+    animation: fadeIn 0.2s ease;
+  }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+  .msg.user {
+    align-self: flex-end;
+    background: var(--user-bg);
+    border-bottom-right-radius: 4px;
+  }
+
+  .msg.assistant {
+    align-self: flex-start;
+    background: var(--assistant-bg);
+    border: 1px solid var(--border);
+    border-bottom-left-radius: 4px;
+  }
+
+  .msg .meta {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 6px;
+  }
+
+  .msg .meta .emotion-tag {
+    background: var(--surface2);
+    padding: 2px 8px;
+    border-radius: 8px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .controls {
+    padding: 16px 24px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-shrink: 0;
+    background: var(--surface);
+  }
+
+  #text-input {
+    flex: 1;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 12px 16px;
+    color: var(--text);
+    font-size: 14px;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  #text-input:focus { border-color: var(--accent); }
+  #text-input::placeholder { color: var(--text-muted); }
+
+  button {
+    border: none;
+    cursor: pointer;
+    font-family: inherit;
+    font-weight: 500;
+    transition: all 0.15s;
+  }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  #send-btn {
+    background: var(--accent);
+    color: white;
+    padding: 12px 20px;
+    border-radius: 12px;
+    font-size: 14px;
+  }
+  #send-btn:hover:not(:disabled) { filter: brightness(1.15); }
+
+  #mic-btn {
+    width: 56px; height: 56px;
+    border-radius: 50%;
+    background: var(--surface2);
+    border: 2px solid var(--border);
+    color: var(--text);
+    font-size: 22px;
+    display: flex; align-items: center; justify-content: center;
+    position: relative;
+    flex-shrink: 0;
+  }
+
+  #mic-btn:hover:not(:disabled) { border-color: var(--accent); }
+
+  #mic-btn.recording {
+    background: var(--danger);
+    border-color: var(--danger);
+    color: white;
+    animation: pulse 1.2s ease infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(231, 76, 92, 0.4); }
+    50% { box-shadow: 0 0 0 12px rgba(231, 76, 92, 0); }
+  }
+
+  .thinking {
+    display: flex;
+    gap: 4px;
+    padding: 8px 0;
+  }
+  .thinking span {
+    width: 6px; height: 6px;
+    background: var(--text-muted);
+    border-radius: 50%;
+    animation: bounce 1.2s infinite;
+  }
+  .thinking span:nth-child(2) { animation-delay: 0.15s; }
+  .thinking span:nth-child(3) { animation-delay: 0.3s; }
+  @keyframes bounce {
+    0%, 60%, 100% { transform: translateY(0); }
+    30% { transform: translateY(-6px); }
+  }
+
+  .hint {
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 13px;
+    padding: 40px 20px;
+  }
+  .hint kbd {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 11px;
+  }
+</style>
+</head>
+<body>
+  <header>
+    <div class="logo">🦜</div>
+    <h1>Parrot Voice Chat</h1>
+    <div class="status-dot" id="status-dot"></div>
+    <span class="status-label" id="status-label">checking…</span>
+  </header>
+
+  <div id="chat-log">
+    <div class="hint">
+      Click the mic button and speak, or type a message below.<br>
+      <kbd>Enter</kbd> to send text &nbsp;·&nbsp; Hold <kbd>Space</kbd> to talk
+    </div>
+  </div>
+
+  <div class="controls">
+    <button id="mic-btn" title="Hold to talk">🎤</button>
+    <input id="text-input" type="text" placeholder="Type a message…" autocomplete="off">
+    <button id="send-btn">Send</button>
+  </div>
+
+<script>
+const BRIDGE = location.origin;
+const chatLog = document.getElementById('chat-log');
+const textInput = document.getElementById('text-input');
+const sendBtn = document.getElementById('send-btn');
+const micBtn = document.getElementById('mic-btn');
+const statusDot = document.getElementById('status-dot');
+const statusLabel = document.getElementById('status-label');
+
+let mediaRecorder = null;
+let audioChunks = [];
+let isRecording = false;
+let busy = false;
+
+// --- Health check ---
+async function checkHealth() {
+  try {
+    const r = await fetch(`${BRIDGE}/health`);
+    const data = await r.json();
+    const sttOk = data.services?.stt === 'ok';
+    statusDot.classList.toggle('ok', data.status === 'ok' || data.status === 'degraded');
+    statusLabel.textContent = sttOk ? 'STT ready' : `STT: ${data.services?.stt || 'unknown'}`;
+  } catch {
+    statusDot.classList.remove('ok');
+    statusLabel.textContent = 'bridge offline';
+  }
+}
+checkHealth();
+setInterval(checkHealth, 15000);
+
+// --- Chat rendering ---
+function addMessage(role, text, extra) {
+  const hint = chatLog.querySelector('.hint');
+  if (hint) hint.remove();
+
+  const div = document.createElement('div');
+  div.className = `msg ${role}`;
+
+  let html = text.replace(/</g, '&lt;').replace(/\n/g, '<br>');
+  if (extra) {
+    const parts = [];
+    if (extra.emotion) parts.push(`<span class="emotion-tag">${extra.emotion}</span>`);
+    if (extra.action) parts.push(extra.action);
+    if (extra.gesture) parts.push(`🎬 ${extra.gesture}`);
+    if (parts.length) html += `<div class="meta">${parts.join(' · ')}</div>`;
+  }
+  div.innerHTML = html;
+  chatLog.appendChild(div);
+  chatLog.scrollTop = chatLog.scrollHeight;
+  return div;
+}
+
+function addThinking() {
+  const div = document.createElement('div');
+  div.className = 'msg assistant';
+  div.id = 'thinking';
+  div.innerHTML = '<div class="thinking"><span></span><span></span><span></span></div>';
+  chatLog.appendChild(div);
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
+
+function removeThinking() {
+  const el = document.getElementById('thinking');
+  if (el) el.remove();
+}
+
+// --- Text chat ---
+async function sendText(text) {
+  if (!text.trim() || busy) return;
+  busy = true;
+  setBusy(true);
+  addMessage('user', text);
+  addThinking();
+
+  try {
+    const r = await fetch(`${BRIDGE}/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, include_audio: true, json_response: true }),
+    });
+    const data = await r.json();
+    removeThinking();
+    addMessage('assistant', data.assistant_text, {
+      emotion: data.emotion,
+      action: data.action,
+      gesture: data.gesture,
+    });
+
+    if (data.audio_generated) {
+      playAudioFromVoice(text);
+    }
+  } catch (e) {
+    removeThinking();
+    addMessage('assistant', `Error: ${e.message}`);
+  }
+  busy = false;
+  setBusy(false);
+}
+
+async function playAudioFromVoice(text) {
+  try {
+    const r = await fetch(`${BRIDGE}/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, include_audio: true, json_response: false }),
+    });
+    if (r.headers.get('content-type')?.includes('audio/wav')) {
+      const blob = await r.blob();
+      playBlob(blob);
+    }
+  } catch { /* audio playback is best-effort */ }
+}
+
+// --- Voice chat ---
+async function sendVoice(blob) {
+  if (busy) return;
+  busy = true;
+  setBusy(true);
+  addMessage('user', '🎤 (listening…)');
+  addThinking();
+
+  try {
+    const form = new FormData();
+    form.append('file', blob, 'recording.wav');
+    const r = await fetch(`${BRIDGE}/voice`, { method: 'POST', body: form });
+
+    const contentType = r.headers.get('content-type') || '';
+
+    if (contentType.includes('audio/wav')) {
+      const userText = r.headers.get('X-User-Text') || '';
+      const assistantText = r.headers.get('X-Assistant-Text') || '';
+      const emotion = r.headers.get('X-Emotion') || '';
+      const gesture = r.headers.get('X-Gesture') || '';
+
+      // Update user bubble with transcript
+      const userBubbles = chatLog.querySelectorAll('.msg.user');
+      const lastUser = userBubbles[userBubbles.length - 1];
+      if (lastUser && lastUser.textContent.includes('listening')) {
+        lastUser.textContent = userText || '🎤 (transcribed)';
+      }
+
+      removeThinking();
+      addMessage('assistant', assistantText, { emotion, gesture });
+
+      const audioBlob = await r.blob();
+      playBlob(audioBlob);
+    } else {
+      const data = await r.json();
+      const userBubbles = chatLog.querySelectorAll('.msg.user');
+      const lastUser = userBubbles[userBubbles.length - 1];
+      if (lastUser && lastUser.textContent.includes('listening')) {
+        lastUser.textContent = data.user_text || data.error || '🎤';
+      }
+      removeThinking();
+      if (data.error) {
+        addMessage('assistant', data.error);
+      } else {
+        addMessage('assistant', data.assistant_text, {
+          emotion: data.emotion,
+          gesture: data.gesture,
+        });
+      }
+    }
+  } catch (e) {
+    removeThinking();
+    addMessage('assistant', `Voice error: ${e.message}`);
+  }
+
+  busy = false;
+  setBusy(false);
+}
+
+function playBlob(blob) {
+  const url = URL.createObjectURL(blob);
+  const audio = new Audio(url);
+  audio.play().catch(() => {});
+  audio.onended = () => URL.revokeObjectURL(url);
+}
+
+function setBusy(b) {
+  sendBtn.disabled = b;
+  textInput.disabled = b;
+}
+
+// --- Microphone ---
+async function startRecording() {
+  if (isRecording) return;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    audioChunks = [];
+    mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
+    mediaRecorder.ondataavailable = e => { if (e.data.size > 0) audioChunks.push(e.data); };
+    mediaRecorder.onstop = async () => {
+      stream.getTracks().forEach(t => t.stop());
+      if (audioChunks.length === 0) return;
+
+      const webmBlob = new Blob(audioChunks, { type: 'audio/webm' });
+      const wavBlob = await convertToWav(webmBlob);
+      sendVoice(wavBlob);
+    };
+    mediaRecorder.start();
+    isRecording = true;
+    micBtn.classList.add('recording');
+  } catch (e) {
+    alert('Microphone access denied. Please allow mic access and try again.');
+  }
+}
+
+function stopRecording() {
+  if (!isRecording || !mediaRecorder) return;
+  mediaRecorder.stop();
+  isRecording = false;
+  micBtn.classList.remove('recording');
+}
+
+async function convertToWav(webmBlob) {
+  const audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+  const arrayBuf = await webmBlob.arrayBuffer();
+  const audioBuf = await audioCtx.decodeAudioData(arrayBuf);
+
+  const numSamples = audioBuf.length;
+  const sampleRate = audioBuf.sampleRate;
+  const pcm = audioBuf.getChannelData(0);
+
+  // Resample to 16kHz if needed
+  let finalPcm = pcm;
+  let finalRate = sampleRate;
+  if (sampleRate !== 16000) {
+    const ratio = 16000 / sampleRate;
+    const newLen = Math.round(numSamples * ratio);
+    finalPcm = new Float32Array(newLen);
+    for (let i = 0; i < newLen; i++) {
+      const srcIdx = i / ratio;
+      const lo = Math.floor(srcIdx);
+      const hi = Math.min(lo + 1, numSamples - 1);
+      const frac = srcIdx - lo;
+      finalPcm[i] = pcm[lo] * (1 - frac) + pcm[hi] * frac;
+    }
+    finalRate = 16000;
+  }
+
+  // Build WAV
+  const dataLen = finalPcm.length * 2;
+  const buffer = new ArrayBuffer(44 + dataLen);
+  const view = new DataView(buffer);
+
+  const writeStr = (off, str) => { for (let i = 0; i < str.length; i++) view.setUint8(off + i, str.charCodeAt(i)); };
+  writeStr(0, 'RIFF');
+  view.setUint32(4, 36 + dataLen, true);
+  writeStr(8, 'WAVE');
+  writeStr(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, finalRate, true);
+  view.setUint32(28, finalRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeStr(36, 'data');
+  view.setUint32(40, dataLen, true);
+
+  for (let i = 0; i < finalPcm.length; i++) {
+    const s = Math.max(-1, Math.min(1, finalPcm[i]));
+    view.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+  }
+
+  audioCtx.close();
+  return new Blob([buffer], { type: 'audio/wav' });
+}
+
+// --- Event wiring ---
+micBtn.addEventListener('mousedown', startRecording);
+micBtn.addEventListener('mouseup', stopRecording);
+micBtn.addEventListener('mouseleave', stopRecording);
+micBtn.addEventListener('touchstart', e => { e.preventDefault(); startRecording(); });
+micBtn.addEventListener('touchend', e => { e.preventDefault(); stopRecording(); });
+
+sendBtn.addEventListener('click', () => { sendText(textInput.value); textInput.value = ''; });
+textInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendText(textInput.value);
+    textInput.value = '';
+  }
+});
+
+// Space-bar push-to-talk (only when text input not focused)
+document.addEventListener('keydown', e => {
+  if (e.code === 'Space' && document.activeElement !== textInput && !isRecording) {
+    e.preventDefault();
+    startRecording();
+  }
+});
+document.addEventListener('keyup', e => {
+  if (e.code === 'Space' && isRecording) {
+    e.preventDefault();
+    stopRecording();
+  }
+});
+</script>
+</body>
+</html>

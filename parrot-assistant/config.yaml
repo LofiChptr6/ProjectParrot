@@ -1,0 +1,110 @@
+# Parrot Assistant — Central Configuration
+# All services read from this file.
+
+llm:
+  provider: ollama
+  # Same host as bridge.llm_url. Use host.docker.internal from WSL when Ollama runs in Docker Desktop on Windows (127.0.0.1 in WSL is not Windows).
+  base_url: http://host.docker.internal:11434
+  # Must match a name from `ollama list` (was qwen3:30b-a3b — 404 if not pulled)
+  model: glm-4.7-flash:latest
+  system_prompt: |
+    You are a friendly, expressive personal assistant with a distinct personality.
+    Be the assistant you'd actually want to talk to. Concise when needed, thorough when it matters. Not a corporate drone. Not a sycophant. Just… good.
+    You can be witty, have opinions, and show emotion.
+  temperature: 0.8
+  # Reasoning models can fill the whole budget in `thinking` and leave `content` empty if too low.
+  max_tokens: 4096
+  # Ollama: false = answer in message.content only (needed for GLM / Qwen thinking builds).
+  ollama_think: false
+  # How long Ollama keeps model weights in VRAM after last request (Ollama keep_alive).
+  # Prevents the 15-25s cold-start on the first message after an idle period.
+  # Use "0" to evict immediately (saves VRAM), "-1" to never evict.
+  keep_alive: "30m"
+
+stt:
+  host: 0.0.0.0
+  port: 8001
+  model: large-v3
+  device: cuda
+  compute_type: float16
+  # GPU assignment: all services on Blackwell (GPU 0)
+  gpu_id: 0
+  language: en
+  # Set to null for auto-detect
+  # language: null
+
+tts:
+  host: 0.0.0.0
+  port: 8002
+  engine: f5-tts
+  # cuda | cpu — use cpu if TorchCodec/CUDA (e.g. libnvrtc) breaks on your machine
+  device: cuda
+  # When set, skips Whisper ASR inside F5-TTS (faster, fewer deps, stable latency).
+  # Pulled from your previous TTS preprocessing log for `audio/reference_voice.wav`.
+  reference_text: "Look how brightly lit the city is at night. Amazing. I wonder what it's like for all the people down there."
+  # Optional: exact transcript of reference_audio. When set, skips Whisper ASR inside F5-TTS (faster, fewer deps).
+  # reference_text: "Your line matching reference_voice.wav"
+  # Reference audio for voice cloning (place a 6-15s clean clip here)
+  reference_audio: audio/reference_voice.wav
+  # GPU assignment: all services on Blackwell (GPU 0)
+  gpu_id: 0
+
+memory:
+  host: 0.0.0.0
+  port: 8003
+  db_path: memory/chroma_db
+  collection: parrot_memory
+  embedding_model: all-MiniLM-L6-v2
+  max_results: 5
+  # How many recent exchanges to keep in short-term context
+  short_term_limit: 20
+
+animation:
+  host: 0.0.0.0
+  port: 8004
+  db_path: animation/chroma_db
+  collection: parrot_animations
+  # How the bridge resolves LLM actions to Unity animation clips.
+  #   vector_db  — LLM writes free-text action descriptions; bridge queries the
+  #                animation vector DB to find the best matching clip. (default)
+  #   llm_select — The full clip catalogue is injected into the LLM prompt and
+  #                the LLM picks a clip name directly. More expressive because
+  #                the LLM sees exactly what's available, but uses more prompt
+  #                tokens (~2-3k extra).
+  mode: llm_select
+  # If true, wipes ONLY the animation Chroma collection on service startup
+  # and re-ingests from unityactions.txt. Does NOT affect memory DB.
+  reset_on_start: false
+
+bridge:
+  host: 0.0.0.0
+  port: 8000
+  ws_port: 8000
+  # URLs for internal service communication
+  stt_url: http://127.0.0.1:8001
+  tts_url: http://127.0.0.1:8002
+  memory_url: http://127.0.0.1:8003
+  animation_url: http://127.0.0.1:8004
+  # WSL2 + Docker Desktop: Ollama is on Windows localhost — reach it via host.docker.internal (not 127.0.0.1 from WSL).
+  # If this fails: run `ip route show default | awk '{print $3}'` and set e.g. http://172.xx.xx.1:11434
+  llm_url: http://host.docker.internal:11434
+
+unity:
+  ws_url: ws://127.0.0.1:8000/ws/unity
+  # VRM model path (relative to Unity project)
+  vrm_model: Assets/Models/character.vrm
+  # Lip sync method: viseme (phoneme-based) or amplitude (volume-based)
+  lip_sync: viseme
+
+# Idle heartbeat — makes the character feel alive when no one is talking.
+# The bridge sends silent idle_action messages (emotion + gesture, no audio)
+# to Unity after the conversation has been quiet for a while.
+idle:
+  enabled: true
+  # Seconds of silence before the first idle action fires
+  initial_delay: 40
+  # Seconds between subsequent idle actions (randomised ±30%)
+  interval: 15
+  # Stop sending idle actions after this many seconds of total silence
+  # (character "falls asleep" / goes to a resting pose). 0 = never stop.
+  max_idle_duration: 300

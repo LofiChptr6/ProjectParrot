@@ -1,0 +1,166 @@
+{
+  "layout_a": [
+    {
+      "phrase": "What would you do with a million dollars?",
+      "llm_sec": 0.5989565859999857,
+      "tts_sec": 5.3236863949996405,
+      "total": 5.922642980999626,
+      "reply_len": 296,
+      "wav_kb": 930
+    },
+    {
+      "phrase": "Tell me a joke about robots.",
+      "llm_sec": 0.2833434189997206,
+      "tts_sec": 1.9841344830001617,
+      "total": 2.2674779019998823,
+      "reply_len": 69,
+      "wav_kb": 215
+    },
+    {
+      "phrase": "What's the meaning of life?",
+      "llm_sec": 0.41781215000037264,
+      "tts_sec": 3.100922343000093,
+      "total": 3.5187344930004656,
+      "reply_len": 192,
+      "wav_kb": 610
+    },
+    {
+      "phrase": "How do airplanes stay in the air?",
+      "llm_sec": 0.6167756810000355,
+      "tts_sec": 3.0462277159999758,
+      "total": 3.6630033970000113,
+      "reply_len": 195,
+      "wav_kb": 620
+    },
+    {
+      "phrase": "Explain quantum entanglement in one sentence.",
+      "llm_sec": 0.40510644899995896,
+      "tts_sec": 2.8953835910001544,
+      "total": 3.3004900400001134,
+      "reply_len": 174,
+      "wav_kb": 553
+    },
+    {
+      "phrase": "What's your favourite colour and why?",
+      "llm_sec": 0.4342125169996507,
+      "tts_sec": 2.882198543999948,
+      "total": 3.3164110609995987,
+      "reply_len": 165,
+      "wav_kb": 524
+    },
+    {
+      "phrase": "Can you write a haiku about coffee?",
+      "llm_sec": 0.29604246200005946,
+      "tts_sec": 2.0459119199999805,
+      "total": 2.34195438200004,
+      "reply_len": 73,
+      "wav_kb": 231
+    },
+    {
+      "phrase": "How does a neural network learn?",
+      "llm_sec": 0.576725310999791,
+      "tts_sec": 5.521814969000388,
+      "total": 6.098540280000179,
+      "reply_len": 329,
+      "wav_kb": 1035
+    },
+    {
+      "phrase": "If you could travel anywhere, where would you go?",
+      "llm_sec": 0.5013345590000426,
+      "tts_sec": 2.9353117900000143,
+      "total": 3.436646349000057,
+      "reply_len": 177,
+      "wav_kb": 562
+    },
+    {
+      "phrase": "Tell me something surprising about the ocean.",
+      "llm_sec": 0.34421053000005486,
+      "tts_sec": 2.38179521200027,
+      "total": 2.726005742000325,
+      "reply_len": 114,
+      "wav_kb": 362
+    }
+  ],
+  "layout_b": [
+    {
+      "phrase": "What would you do with a million dollars?",
+      "llm_sec": 0.36183684999969046,
+      "tts_sec": 1.345623273000001,
+      "total": 1.7074601229996915,
+      "reply_len": 150,
+      "wav_kb": 477
+    },
+    {
+      "phrase": "Tell me a joke about robots.",
+      "llm_sec": 0.2703712570000789,
+      "tts_sec": 1.0626417150001544,
+      "total": 1.3330129720002333,
+      "reply_len": 65,
+      "wav_kb": 203
+    },
+    {
+      "phrase": "What's the meaning of life?",
+      "llm_sec": 0.3654098100000738,
+      "tts_sec": 1.3947523880001427,
+      "total": 1.7601621980002164,
+      "reply_len": 151,
+      "wav_kb": 480
+    },
+    {
+      "phrase": "How do airplanes stay in the air?",
+      "llm_sec": 0.5153369959998599,
+      "tts_sec": 2.4235275169999113,
+      "total": 2.9388645129997713,
+      "reply_len": 247,
+      "wav_kb": 774
+    },
+    {
+      "phrase": "Explain quantum entanglement in one sentence.",
+      "llm_sec": 0.40537640499996996,
+      "tts_sec": 1.4291571389999262,
+      "total": 1.8345335439998962,
+      "reply_len": 174,
+      "wav_kb": 553
+    },
+    {
+      "phrase": "What's your favourite colour and why?",
+      "llm_sec": 0.4811557359998915,
+      "tts_sec": 1.4727096080000592,
+      "total": 1.9538653439999507,
+      "reply_len": 196,
+      "wav_kb": 629
+    },
+    {
+      "phrase": "Can you write a haiku about coffee?",
+      "llm_sec": 0.29178276899983757,
+      "tts_sec": 1.1213613240001905,
+      "total": 1.413144093000028,
+      "reply_len": 76,
+      "wav_kb": 241
+    },
+    {
+      "phrase": "How does a neural network learn?",
+      "llm_sec": 0.3740197730003274,
+      "tts_sec": 1.5785763189996942,
+      "total": 1.9525960920000216,
+      "reply_len": 175,
+      "wav_kb": 556
+    },
+    {
+      "phrase": "If you could travel anywhere, where would you go?",
+      "llm_sec": 0.355191733999618,
+      "tts_sec": 1.2696602149999308,
+      "total": 1.6248519489995488,
+      "reply_len": 122,
+      "wav_kb": 387
+    },
+    {
+      "phrase": "Tell me something surprising about the ocean.",
+      "llm_sec": 0.3369151140000213,
+      "tts_sec": 1.2119449279998662,
+      "total": 1.5488600419998875,
+      "reply_len": 106,
+      "wav_kb": 336
+    }
+  ]
+}

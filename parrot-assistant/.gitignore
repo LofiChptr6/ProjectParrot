@@ -1,0 +1,10 @@
+.venv/
+.pids/
+logs/
+memory/chroma_db/
+animation/chroma_db/
+models/
+__pycache__/
+*.pyc
+*.egg-info/
+memory/relationship.json
