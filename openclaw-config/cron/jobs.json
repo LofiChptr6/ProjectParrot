@@ -1,0 +1,257 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "19812027-7c75-4129-a4ad-b3422522bf84",
+      "name": "Vegas trip",
+      "enabled": false,
+      "deleteAfterRun": true,
+      "createdAtMs": 1774556477753,
+      "updatedAtMs": 1774557027845,
+      "schedule": {
+        "kind": "at",
+        "at": "2026-03-26T20:30:00.000Z"
+      },
+      "sessionTarget": "main",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "systemEvent",
+        "text": "Reminder: Trip to Las Vegas"
+      },
+      "state": {
+        "lastRunAtMs": 1774557000005,
+        "lastRunStatus": "error",
+        "lastStatus": "error",
+        "lastDurationMs": 27840,
+        "lastError": "Outbound not configured for channel: telegram",
+        "lastDeliveryStatus": "not-requested",
+        "consecutiveErrors": 1
+      }
+    },
+    {
+      "id": "a9ddafdb-5908-4cbb-b4d1-1d44dc379be3",
+      "name": "Vegas trip",
+      "enabled": false,
+      "deleteAfterRun": true,
+      "createdAtMs": 1774557235658,
+      "updatedAtMs": 1774557541717,
+      "schedule": {
+        "kind": "at",
+        "at": "2026-03-26T20:38:50.000Z"
+      },
+      "sessionTarget": "isolated",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "Reminder: Trip to Las Vegas"
+      },
+      "delivery": {
+        "mode": "announce",
+        "channel": "telegram",
+        "to": "6744082525"
+      },
+      "state": {
+        "lastRunAtMs": 1774557530004,
+        "lastRunStatus": "error",
+        "lastStatus": "error",
+        "lastDurationMs": 11713,
+        "lastError": "Error: Outbound not configured for channel: telegram",
+        "lastDeliveryStatus": "unknown",
+        "consecutiveErrors": 1
+      }
+    },
+    {
+      "id": "b685a6cf-f900-4aac-a6cb-b2f0d150f110",
+      "name": "Vegas trip",
+      "enabled": false,
+      "deleteAfterRun": true,
+      "createdAtMs": 1774557853892,
+      "updatedAtMs": 1774558785076,
+      "schedule": {
+        "kind": "at",
+        "at": "2026-03-26T20:59:08.000Z"
+      },
+      "sessionTarget": "main",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "systemEvent",
+        "text": "Reminder: Trip to Las Vegas"
+      },
+      "state": {
+        "lastRunAtMs": 1774558748005,
+        "lastRunStatus": "error",
+        "lastStatus": "error",
+        "lastDurationMs": 37071,
+        "lastError": "Outbound not configured for channel: telegram",
+        "lastDeliveryStatus": "not-requested",
+        "consecutiveErrors": 1
+      }
+    },
+    {
+      "id": "7a47a4f8-fbce-48eb-bbed-2cd1bd527cfc",
+      "name": "Vegas trip test",
+      "enabled": false,
+      "deleteAfterRun": true,
+      "createdAtMs": 1774560963715,
+      "updatedAtMs": 1774561169179,
+      "schedule": {
+        "kind": "at",
+        "at": "2026-03-26T21:36:43.000Z"
+      },
+      "sessionTarget": "main",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "systemEvent",
+        "text": "Reminder: Trip to Las Vegas"
+      },
+      "state": {
+        "lastRunAtMs": 1774561056102,
+        "lastRunStatus": "error",
+        "lastStatus": "error",
+        "lastDurationMs": 113077,
+        "lastError": "Outbound not configured for channel: telegram",
+        "lastDeliveryStatus": "not-requested",
+        "consecutiveErrors": 1
+      }
+    },
+    {
+      "id": "1a390083-3923-4dd2-8d6b-2485aad0008f",
+      "name": "Test reminder",
+      "enabled": false,
+      "deleteAfterRun": true,
+      "createdAtMs": 1774561444626,
+      "updatedAtMs": 1774561796553,
+      "schedule": {
+        "kind": "at",
+        "at": "2026-03-26T21:48:59.000Z"
+      },
+      "sessionTarget": "main",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "systemEvent",
+        "text": "Test reminder: Working!"
+      },
+      "state": {
+        "lastRunAtMs": 1774561739004,
+        "lastRunStatus": "error",
+        "lastStatus": "error",
+        "lastDurationMs": 57549,
+        "lastError": "Outbound not configured for channel: telegram",
+        "lastDeliveryStatus": "not-requested",
+        "consecutiveErrors": 1
+      }
+    },
+    {
+      "id": "d8b98b22-8c1c-4ccf-bdc2-c9fd9014f5d9",
+      "name": "Vegas trip reminder",
+      "enabled": false,
+      "deleteAfterRun": true,
+      "createdAtMs": 1774562240986,
+      "updatedAtMs": 1774562899657,
+      "schedule": {
+        "kind": "at",
+        "at": "2026-03-26T22:07:15.000Z"
+      },
+      "sessionTarget": "main",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "systemEvent",
+        "text": "Reminder: Trip to Las Vegas! 🎰✨"
+      },
+      "state": {
+        "lastRunAtMs": 1774562835006,
+        "lastRunStatus": "error",
+        "lastStatus": "error",
+        "lastDurationMs": 64651,
+        "lastError": "Outbound not configured for channel: telegram",
+        "lastDeliveryStatus": "not-requested",
+        "consecutiveErrors": 1
+      }
+    },
+    {
+      "id": "d84ab084-2f30-479a-bc26-b009865850b3",
+      "name": "Final test",
+      "enabled": false,
+      "deleteAfterRun": true,
+      "createdAtMs": 1774562274754,
+      "updatedAtMs": 1774562351919,
+      "schedule": {
+        "kind": "at",
+        "at": "2026-03-26T21:58:19.000Z"
+      },
+      "sessionTarget": "main",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "systemEvent",
+        "text": "Final test: Working?"
+      },
+      "state": {
+        "lastRunAtMs": 1774562299003,
+        "lastRunStatus": "error",
+        "lastStatus": "error",
+        "lastDurationMs": 52916,
+        "lastError": "Outbound not configured for channel: telegram",
+        "lastDeliveryStatus": "not-requested",
+        "consecutiveErrors": 1
+      }
+    },
+    {
+      "id": "55e950bb-4a92-47cd-8dc1-fdd80ba80d5b",
+      "name": "Vegas trip reminder",
+      "enabled": false,
+      "deleteAfterRun": true,
+      "createdAtMs": 1774562681422,
+      "updatedAtMs": 1774563053623,
+      "schedule": {
+        "kind": "at",
+        "at": "2026-03-26T22:09:36.000Z"
+      },
+      "sessionTarget": "isolated",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "Reminder: Trip to Las Vegas! 🎰✨"
+      },
+      "delivery": {
+        "mode": "announce",
+        "channel": "last"
+      },
+      "state": {
+        "lastRunAtMs": 1774562976005,
+        "lastRunStatus": "error",
+        "lastStatus": "error",
+        "lastDurationMs": 77618,
+        "lastError": "Error: Outbound not configured for channel: telegram",
+        "lastDeliveryStatus": "unknown",
+        "consecutiveErrors": 1
+      }
+    },
+    {
+      "id": "aedf6ea7-80c2-4eed-a8fd-8eb26285c777",
+      "name": "Vegas trip test",
+      "enabled": false,
+      "deleteAfterRun": true,
+      "createdAtMs": 1774563333536,
+      "updatedAtMs": 1774563595021,
+      "schedule": {
+        "kind": "at",
+        "at": "2026-03-26T22:17:28.000Z"
+      },
+      "sessionTarget": "main",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "systemEvent",
+        "text": "Reminder: Trip to Las Vegas! 🎰✨"
+      },
+      "state": {
+        "lastRunAtMs": 1774563448007,
+        "lastRunStatus": "error",
+        "lastStatus": "error",
+        "lastDurationMs": 147014,
+        "lastError": "Outbound not configured for channel: telegram",
+        "lastDeliveryStatus": "not-requested",
+        "consecutiveErrors": 1
+      }
+    }
+  ]
+}

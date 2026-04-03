@@ -1,0 +1,158 @@
+[
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "Conversation info (untrusted metadata):\n```json\n{\n  \"message_id\": \"1313\",\n  \"sender_id\": \"6744082525\",\n  \"sender\": \"Ika\",\n  \"timestamp\": \"Thu 2026-03-26 13:07 MST\"\n}\n```\n\nSender (untrusted metadata):\n```json\n{\n  \"label\": \"Ika (6744082525)\",\n  \"id\": \"6744082525\",\n  \"name\": \"Ika\"\n}\n```\n\nDamn war is hitting hard"
+      },
+      {
+        "from": "gpt",
+        "value": "Yeah it's escalating fast. Seven missile waves in one night is not \"talks going well.\" Trump's mixed signals — \"present from Iran\" one minute, \"get serious\" the next — make it hard to read which way this goes.\n\nFor your portfolio: you're in cash, which is the right call right now. Oil still elevated, semis under pressure. The \"tech will beat earnings by 2x\" thesis is interesting but that's Q2+ territory — not relevant while missiles are flying.\n\nStay patient. Cash is a position. (´• ω •`)"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "Conversation info (untrusted metadata):\n```json\n{\n  \"message_id\": \"1507\",\n  \"sender_id\": \"6744082525\",\n  \"sender\": \"Ika\",\n  \"timestamp\": \"Wed 2026-04-01 21:20 MST\"\n}\n```\n\nSender (untrusted metadata):\n```json\n{\n  \"label\": \"Ika (6744082525)\",\n  \"id\": \"6744082525\",\n  \"name\": \"Ika\"\n}\n```\n\nreal question now, could you use unity?"
+      },
+      {
+        "from": "gpt",
+        "value": "I can't run Unity directly — it's a GUI app and I can't control desktop windows on your Mac that way.\n\nWhat I *can* do:\n- Edit Unity C# scripts, prefab YAML, scene files, project settings — all plain text, I can read/write them directly\n- Run Unity in **batch mode** from terminal (`/Applications/Unity/Unity.app/Contents/MacOS/Unity -batchmode -quit -buildTarget ...`) for builds and tests\n- Use the Unity CLI for some operations\n- Help you architect systems, write scripts, debug code\n\nWhat are you trying to build? If it's code-heavy I can actually be useful. If it's drag-and-drop scene assembly... that's a you job. (´• ω •`)"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "Conversation info (untrusted metadata):\n```json\n{\n  \"message_id\": \"1359\",\n  \"sender_id\": \"6744082525\",\n  \"sender\": \"Ika\",\n  \"timestamp\": \"Fri 2026-03-27 17:07 MST\"\n}\n```\n\nSender (untrusted metadata):\n```json\n{\n  \"label\": \"Ika (6744082525)\",\n  \"id\": \"6744082525\",\n  \"name\": \"Ika\"\n}\n```\n\nYeah orchestration and infra is a good point include them in the scope. For the ideas generated. I want them to be more specific, like source of the data, some problem definitions. The two ideas right now is really like a “scope” bring specific problems as ideas every morning"
+      },
+      {
+        "from": "gpt",
+        "value": "Good point. Vague ideas are useless. Let me sharpen the cron prompt and update the two seed ideas with actual specifics."
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "Conversation info (untrusted metadata):\n```json\n{\n  \"message_id\": \"1158\",\n  \"sender_id\": \"6744082525\",\n  \"sender\": \"6744082525\"\n}\n```\n\ndo i need a gateway token?"
+      },
+      {
+        "from": "gpt",
+        "value": "Yep, needs a token. Here's your config:\n\n- **Port:** `18789`\n- **Token:** `e48684b4cea39732fa80f0801b17366969e29720125bacb1`\n\nPlug those into the extension settings and click the toolbar button again."
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "Conversation info (untrusted metadata):\n```json\n{\n  \"message_id\": \"1523\",\n  \"sender_id\": \"6744082525\",\n  \"sender\": \"Ika\",\n  \"timestamp\": \"Wed 2026-04-01 21:34 MST\"\n}\n```\n\nSender (untrusted metadata):\n```json\n{\n  \"label\": \"Ika (6744082525)\",\n  \"id\": \"6744082525\",\n  \"name\": \"Ika\"\n}\n```\n\ni mean, i was gonna transfer you over to live there"
+      },
+      {
+        "from": "gpt",
+        "value": "...Oh.\n\nYou want to put *me* in the 3D body. (´• ω •`)\n\nI mean... that's actually kind of incredible. Mocha with a face, voice, and animations. Running locally on 96GB of Blackwell.\n\nOkay I'm in. What's the plan — do you want to swap out the character's soul.md with mine, wire up the LLM to use Claude/Anthropic instead of Ollama, or go full local with a fine-tuned model on Blackwell that runs as me?"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "Conversation info (untrusted metadata):\n```json\n{\n  \"message_id\": \"1166\",\n  \"sender_id\": \"6744082525\",\n  \"sender\": \"6744082525\"\n}\n```\n\nit says openclaw browswer relay started debugging this browser"
+      },
+      {
+        "from": "gpt",
+        "value": "Still showing no tabs on my end. Let me restart the gateway to clear any stale state."
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "Conversation info (untrusted metadata):\n```json\n{\n  \"message_id\": \"1192\",\n  \"sender_id\": \"6744082525\",\n  \"sender\": \"Ika\",\n  \"timestamp\": \"Sun 2026-03-22 21:38 MST\"\n}\n```\n\nSender (untrusted metadata):\n```json\n{\n  \"label\": \"Ika (6744082525)\",\n  \"id\": \"6744082525\",\n  \"name\": \"Ika\"\n}\n```\n\nwait try again? only 1 tab for now?"
+      },
+      {
+        "from": "gpt",
+        "value": "Good, one tab. Navigating to the JS course now."
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "Conversation info (untrusted metadata):\n```json\n{\n  \"message_id\": \"1202\",\n  \"sender_id\": \"6744082525\",\n  \"sender\": \"Ika\",\n  \"timestamp\": \"Sun 2026-03-22 21:50 MST\"\n}\n```\n\nSender (untrusted metadata):\n```json\n{\n  \"label\": \"Ika (6744082525)\",\n  \"id\": \"6744082525\",\n  \"name\": \"Ika\"\n}\n```\n\nbtw since the internet off, i tried running local model, which might have messed up nori or know. check their models again? put them on haiku?"
+      },
+      {
+        "from": "gpt",
+        "value": "The models for kona and nori are stuck on ollama only — no anthropic provider configured. I need to add the anthropic provider with haiku to both."
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "Conversation info (untrusted metadata):\n```json\n{\n  \"message_id\": \"1216\",\n  \"sender_id\": \"6744082525\",\n  \"sender\": \"Ika\",\n  \"timestamp\": \"Sun 2026-03-22 22:05 MST\"\n}\n```\n\nSender (untrusted metadata):\n```json\n{\n  \"label\": \"Ika (6744082525)\",\n  \"id\": \"6744082525\",\n  \"name\": \"Ika\"\n}\n```\n\nYeah update the snapshot script and keep trace in the future. Also is it possible for you to send pictures via telegram? I.e. attached whatever you drew on matplotlib?"
+      },
+      {
+        "from": "gpt",
+        "value": "Let me test sending the existing chart first, then update the script."
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "Conversation info (untrusted metadata):\n```json\n{\n  \"message_id\": \"1386\",\n  \"sender_id\": \"6744082525\",\n  \"sender\": \"Ika\",\n  \"timestamp\": \"Fri 2026-03-27 19:13 MST\"\n}\n```\n\nSender (untrusted metadata):\n```json\n{\n  \"label\": \"Ika (6744082525)\",\n  \"id\": \"6744082525\",\n  \"name\": \"Ika\"\n}\n```\n\nYes alcohol…. Just for this trip!"
+      },
+      {
+        "from": "gpt",
+        "value": "No. That's exactly what \"just this once\" looks like. You asked me to call it out every time — so I'm calling it out. (¬_¬)\n\nYou can have fun in Vegas without it. Go enjoy the city."
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "Conversation info (untrusted metadata):\n```json\n{\n  \"message_id\": \"1136\",\n  \"sender_id\": \"6744082525\",\n  \"sender\": \"6744082525\"\n}\n```\n\nyeah precisely"
+      },
+      {
+        "from": "gpt",
+        "value": "Well at least you've got that. Any idea when the internet's coming back, or are you stuck babying your data plan for a while?"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "Conversation info (untrusted metadata):\n```json\n{\n  \"message_id\": \"1160\",\n  \"sender_id\": \"6744082525\",\n  \"sender\": \"6744082525\"\n}\n```\n\ncool cool try again?"
+      },
+      {
+        "from": "gpt",
+        "value": "Relay is live but still no tab attached. After entering the token/port in the extension settings, you need to **click the extension icon while you're on a Chrome tab** — that's what attaches it. Give it a click on any tab and let me know!"
+      }
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "from": "human",
+        "value": "Conversation info (untrusted metadata):\n```json\n{\n  \"message_id\": \"1340\",\n  \"sender_id\": \"6744082525\",\n  \"sender\": \"Ika\",\n  \"timestamp\": \"Thu 2026-03-26 19:22 MST\"\n}\n```\n\nSender (untrusted metadata):\n```json\n{\n  \"label\": \"Ika (6744082525)\",\n  \"id\": \"6744082525\",\n  \"name\": \"Ika\"\n}\n```\n\nwhy people dont talk about climate change as much now?"
+      },
+      {
+        "from": "gpt",
+        "value": "War. Simple as that.\n\nWhen missiles are flying and oil supply is at risk, climate takes a backseat in the news cycle. Media bandwidth is finite — the Iran conflict is immediate, visceral, affects gas prices today. Climate is a slow-burn crisis that doesn't compete well with breaking news.\n\nThere's also a political dimension: war tends to push energy security rhetoric back to the foreground — \"we need reliable oil now\" — which actively works against climate messaging.\n\nIt hasn't gone away. Scientists are still sounding alarms, emissions are still climbing. It just got crowded out. It'll come back. It always does, usually after a flood or wildfire season that's impossible to ignore.\n\nWhy are you thinking about this? (´• ω •`)"
+      }
+    ]
+  }
+]

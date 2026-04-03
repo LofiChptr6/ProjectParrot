@@ -1,0 +1,65 @@
+{
+  "models": {
+    "providers": {
+      "ollama": {
+        "baseUrl": "http://ollama:11434",
+        "apiKey": "ollama-local",
+        "api": "ollama",
+        "models": [
+          {
+            "id": "glm-4.7-flash:latest",
+            "name": "glm-4.7-flash:latest",
+            "reasoning": true,
+            "input": ["text"],
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": { "primary": "ollama/glm-4.7-flash:latest" }
+    }
+  },
+  "tools": { "profile": "coding", "deny": ["docker"] },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto",
+    "restart": true,
+    "ownerDisplay": "raw"
+  },
+  "gateway": {
+    "auth": {
+      "mode": "token",
+      "token": "REPLACE_WITH_RANDOM_HEX"
+    }
+  },
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "accounts": {
+        "your_bot": {
+          "enabled": true,
+          "botToken": "REPLACE_WITH_TELEGRAM_BOT_TOKEN",
+          "dmPolicy": "open",
+          "allowFrom": ["*"],
+          "groupPolicy": "allowlist",
+          "streaming": "off"
+        }
+      },
+      "dmPolicy": "open",
+      "allowFrom": ["*"]
+    }
+  },
+  "bindings": [
+    {
+      "agentId": "shiro",
+      "match": { "channel": "telegram", "accountId": "your_bot" }
+    }
+  ],
+  "meta": {
+    "lastTouchedVersion": "2026.3.24",
+    "lastTouchedAt": "2026-01-01T00:00:00.000Z"
+  }
+}

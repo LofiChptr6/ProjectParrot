@@ -1,0 +1,66 @@
+# mocha-finetune/config.yaml
+# Central config — edit here to change models, hyperparams, or judge list
+
+models:
+  sft_base: "Qwen/Qwen2.5-32B-Instruct"
+  dpo_base: "Qwen/Qwen2.5-32B-Instruct"
+  qlora_base: "meta-llama/Meta-Llama-3.1-70B-Instruct"
+  ollama_rejection_model: "qwen2.5:32b"
+  ollama_base_url: "http://host.docker.internal:11434"
+
+# LLM-as-judge models — add/remove entries to use multiple judges
+judge_models:
+  - provider: "anthropic"
+    model: "claude-haiku-4-5"
+    api_key_env: "ANTHROPIC_API_KEY"
+  # - provider: "openai"
+  #   model: "gpt-4o-mini"
+  #   api_key_env: "OPENAI_API_KEY"
+  # - provider: "ollama"
+  #   model: "qwen2.5:32b"
+  #   base_url: "http://host.docker.internal:11434"
+
+training:
+  sft:
+    lora_r: 16
+    lora_alpha: 32
+    lora_dropout: 0.05
+    learning_rate: 0.0002
+    batch_size: 2
+    grad_accumulation: 4
+    max_seq_length: 2048
+    epochs: 3
+    warmup_ratio: 0.03
+    output_dir: "outputs/sft"
+  dpo:
+    lora_r: 16
+    lora_alpha: 32
+    learning_rate: 0.00005
+    batch_size: 1
+    grad_accumulation: 8
+    max_seq_length: 2048
+    epochs: 1
+    beta: 0.1
+    output_dir: "outputs/dpo"
+  qlora_70b:
+    lora_r: 8
+    lora_alpha: 16
+    lora_dropout: 0.05
+    learning_rate: 0.0001
+    batch_size: 1
+    grad_accumulation: 16
+    max_seq_length: 2048
+    epochs: 2
+    load_in_4bit: true
+    output_dir: "outputs/qlora-70b"
+
+hardware:
+  gpu_id: 0          # RTX PRO 6000 Blackwell (96GB)
+  dtype: "bfloat16"
+  cuda_version: "12.8"
+
+data:
+  raw_path: "data/raw/mocha_raw.json"
+  eval_split: 0.1
+  min_response_length: 20
+  max_response_length: 1000

@@ -1,4 +1,16 @@
 services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+    # If you have NVIDIA GPU support in Docker, this enables it.
+    # If this fails on your setup, delete the next line and Ollama will run CPU-only.
+    gpus: all
+
   openclaw:
     image: ghcr.io/openclaw/openclaw:latest
     container_name: openclaw
@@ -7,16 +19,32 @@ services:
       - .env
     environment:
       - TZ=${TZ:-Etc/UTC}
+      # GitHub PAT auth for git inside container (HTTPS).
+      # Set GITHUB_TOKEN in .env (gitignored).
+      - GIT_ASKPASS=/home/node/bin/git-askpass
+      - GIT_TERMINAL_PROMPT=0
     ports:
       - "3000:3000"
     volumes:
-      - ./.openclaw:/root/.openclaw
-      - ./openclaw-workspace:/root/workspace
+      - ./openclaw-config:/home/node/.openclaw
+      - ./openclaw-workspace:/home/node/workspace
+      # Mount this repository directly so agent changes map here.
+      - ./:/home/node/workspace/ProjectParrot
+      - ./scripts/git-askpass.sh:/home/node/bin/git-askpass:ro
+      # Allow the agent to access your D: drive (WSL mount)
+      - /mnt/d:/mnt/d:rw
     extra_hosts:
       - "host.docker.internal:host-gateway"
     mem_limit: 4g
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
+
+volumes:
+  ollama:

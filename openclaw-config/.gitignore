@@ -1,0 +1,17 @@
+# Nested checkouts without a valid HEAD break `git add`; clone separately if needed.
+workspace/
+workspace-shiro/
+
+# Runtime / secrets (do not commit)
+openclaw.json
+credentials/
+memory/
+logs/
+media/
+agents/**/sessions/
+cron/runs/
+*.bak
+telegram/*.txt
+telegram/update-offset-*.json
+identity/
+devices/
