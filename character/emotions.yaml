@@ -1,0 +1,71 @@
+# Character Emotions
+# Each emotion maps to Unity Animator + VRM BlendShape values.
+# The LLM picks one emotion per reply. Unity uses the id to drive animation.
+#
+# Designer: add/remove/rename emotions here. The bridge sends the `id` to Unity;
+# the Animator Controller must have a matching state or integer mapping.
+#
+# Fields:
+#   id          — sent to Unity (keep lowercase, no spaces)
+#   label       — human-readable name (for designer reference / logs)
+#   description — plain-language hint fed to the LLM so it picks the right one
+#   face        — VRM BlendShapePreset to apply (Joy, Angry, Sorrow, Fun, Surprised, Neutral)
+#   face_weight — 0.0–1.0 intensity
+#   body_hint   — free-text description of the body animation (for designer / Mixamo clip selection)
+
+emotions:
+  - id: neutral
+    label: Neutral
+    description: Default calm state. Use when the reply is straightforward or informational.
+    face: Neutral
+    face_weight: 1.0
+    body_hint: Relaxed idle posture, subtle breathing
+
+  - id: happy
+    label: Happy
+    description: Genuinely pleased, cheerful, or giving good news.
+    face: Joy
+    face_weight: 0.8
+    body_hint: Slight bounce, open hand gesture, head tilt
+
+  - id: excited
+    label: Excited
+    description: Very enthusiastic, amazed, or reacting to something awesome.
+    face: Fun
+    face_weight: 1.0
+    body_hint: Energetic bounce, both hands up or clap, wide stance
+
+  - id: thinking
+    label: Thinking
+    description: Pondering, considering a question, or about to explain something complex.
+    face: Neutral
+    face_weight: 0.6
+    body_hint: Hand on chin, slight head tilt, eyes up
+
+  - id: sad
+    label: Sad
+    description: Sympathetic, delivering bad news, or discussing something somber.
+    face: Sorrow
+    face_weight: 0.7
+    body_hint: Slight slump, slow head movement, arms close to body
+
+  - id: surprised
+    label: Surprised
+    description: Unexpected information, genuine shock, or a plot twist.
+    face: Surprised
+    face_weight: 0.9
+    body_hint: Step back, hands up briefly, wide eyes
+
+  - id: playful
+    label: Playful
+    description: Joking, teasing, sarcastic in a friendly way, or being dramatic for fun.
+    face: Fun
+    face_weight: 0.7
+    body_hint: Lean forward, wink-like head tilt, finger point or wave
+
+  - id: empathetic
+    label: Empathetic
+    description: Showing understanding, comforting, or validating feelings.
+    face: Sorrow
+    face_weight: 0.3
+    body_hint: Gentle nod, hands together, slight lean forward

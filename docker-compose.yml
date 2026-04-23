@@ -1,0 +1,87 @@
+services:
+  vllm:
+    image: vllm/vllm-openai:latest
+    container_name: vllm
+    restart: unless-stopped
+    ports:
+      - "8800:8000"
+    volumes:
+      - huggingface_cache:/root/.cache/huggingface
+    environment:
+      # Pin to GPU 0 (RTX Pro 6000 Blackwell, 96 GB).
+      - CUDA_VISIBLE_DEVICES=0
+      # HuggingFace token for gated / private models
+      - HF_TOKEN=${HF_TOKEN:-}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+    # NOTE: --num-scheduler-steps / --speculative-model / --num-speculative-tokens
+    # were removed in newer vllm images (v0.8+). Speculative decoding can be
+    # reintroduced via --speculative-config '{"method":"...","model":"..."}'
+    # when we need the throughput back.
+    command:
+      - "--model"
+      - "Qwen/Qwen3-32B"
+      - "--quantization"
+      - "fp8"
+      # Qwen3-32B native max is 40960 (max_position_embeddings). Going above
+      # that requires --rope-scaling yarn, which costs quality at short ctx.
+      # 40960 = 25% over the old 32768 with zero quality cost.
+      - "--max-model-len"
+      - "40960"
+      - "--gpu-memory-utilization"
+      - "0.70"
+      - "--dtype"
+      - "half"
+      - "--enable-prefix-caching"
+      - "--max-num-seqs"
+      - "4"
+      - "--enable-chunked-prefill"
+      - "--max-num-batched-tokens"
+      - "4096"
+      - "--enable-auto-tool-choice"
+      - "--tool-call-parser"
+      - "hermes"
+      - "--port"
+      - "8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      # Model download + load can take several minutes on first run
+      start_period: 300s
+
+  gesture:
+    build:
+      context: .
+      dockerfile: gesture/Dockerfile
+    container_name: gesture
+    restart: unless-stopped
+    ports:
+      - "8005:8005"
+    volumes:
+      - huggingface_cache:/app/.cache/huggingface
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - HF_TOKEN=${HF_TOKEN:-}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8005/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+volumes:
+  huggingface_cache:

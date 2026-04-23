@@ -1,0 +1,321 @@
+# Parrot Assistant — Central Configuration
+# All services read from this file.
+
+# ---------------------------------------------------------------------------
+# Network — single place to set addresses for LAN / WAN deployment.
+# ---------------------------------------------------------------------------
+network:
+  # Address that *remote* clients use to reach this machine
+  # (Unity on Windows, browser dashboard, etc.).
+  #   LAN  : this machine's IP, e.g. 192.168.0.63
+  #   WAN  : public IP or domain name
+  #   Local: 127.0.0.1  (everything on one box)
+  external_host: "192.168.0.63"
+
+  # Address for service-to-service calls (all services on this machine).
+  # Only change if you split services across multiple machines.
+  internal_host: "127.0.0.1"
+
+llm:
+  # vLLM serves an OpenAI-compatible API at /v1/chat/completions
+  # vLLM launch knobs (--max-model-len, --gpu-memory-utilization, etc.) live
+  # in docker-compose.yml. To change context window or VRAM allotment, edit
+  # docker-compose.yml and run: docker compose up -d --force-recreate vllm
+  base_url: http://127.0.0.1:8800/v1
+  # Must match the model vLLM was launched with (HuggingFace model ID)
+  model: Qwen/Qwen3-32B
+  system_prompt: |
+    You are a friendly, expressive personal assistant with a distinct personality.
+    Be the assistant you'd actually want to talk to. Concise when needed, thorough when it matters. Not a corporate drone. Not a sycophant. Just… good.
+    You can be witty, have opinions, and show emotion.
+  temperature: 0.8
+  max_tokens: 1024
+  # Optional: set if vLLM was started with --api-key
+  # api_key: ""
+  request_timeout_s: 360
+  # If any segment exceeds this word count, run repair/split (same as Chat + Unity streaming).
+  repair_max_words_per_segment: 36
+  # Two-pass routing: Pass 1 uses short context for fast TTFT.
+  # The LLM decides whether to answer directly, use tools, or request
+  # full context (via needs_context signal). Same vllm instance, dynamic
+  # context window — prefix caching makes Pass 2 efficient.
+  complexity_routing:
+    enabled: true
+    short_history: 8
+    # Feed tool schemas into Pass 1 so LLM can call tools directly
+    # without escalating to Pass 2.  Set false to restore the old
+    # behaviour (tools only in Pass 2).
+    pass1_tools: true
+
+stt:
+  host: 0.0.0.0
+  port: 8001
+  model: large-v3
+  device: cuda
+  compute_type: float16
+  # GPU assignment: all services on Blackwell (GPU 0)
+  gpu_id: 0
+  language: en
+  # Set to null for auto-detect
+  # language: null
+  # WS /ws/stream — VAD utterance detection (optional; defaults shown)
+  # vad_aggressiveness: 2
+  # vad_silence_ms: 450
+  # vad_min_speech_ms: 200
+  # vad_max_utterance_ms: 30000
+
+tts:
+  host: 0.0.0.0
+  port: 8002
+  engine: f5-tts
+  # cuda | cpu — use cpu if TorchCodec/CUDA (e.g. libnvrtc) breaks on your machine
+  device: cuda
+  # When set, skips Whisper ASR inside F5-TTS (faster, fewer deps, stable latency).
+  # Pulled from your previous TTS preprocessing log for `audio/reference_voice.wav`.
+  reference_text: "Cheap hobbies are a must for the young man. If you'd like to learn the paper etiquette, I'd be happy."
+  # Optional: exact transcript of reference_audio. When set, skips Whisper ASR inside F5-TTS (faster, fewer deps).
+  # reference_text: "Your line matching reference_voice.wav"
+  # Reference audio for voice cloning (place a 6-15s clean clip here)
+  reference_audio: audio/reference_voice.wav
+  # GPU assignment: all services on Blackwell (GPU 0)
+  gpu_id: 0
+
+memory:
+  host: 0.0.0.0
+  port: 8003
+  db_path: memory/chroma_db
+  collection: parrot_memory
+  embedding_model: all-MiniLM-L6-v2
+  max_results: 5
+  # How many recent exchanges to keep in short-term context
+  short_term_limit: 22
+
+gesture:
+  host: 0.0.0.0
+  port: 8005
+  # GPU assignment for EMAGE model inference
+  gpu_id: 0
+  # Output frame rate sent to Unity. EMAGE natively runs at 30fps.
+  # Setting lower (e.g. 15) resamples output — reduces bandwidth, smoother on
+  # slow connections. Setting higher than 30 has no benefit (model is 30fps).
+  pose_fps: 30
+
+web:
+  port: 8080
+
+animation:
+  # fbx_functions — LLM picks from gesture functions defined in
+  #   character/animation_functions.csv. Pre-converted FBX clips are
+  #   played by the web app's animation controller (Start/Loop/End).
+  mode: fbx_functions
+  crossfade_ms: 250
+  idle_fidget_interval: [8, 15]
+
+bridge:
+  host: 0.0.0.0
+  port: 8000
+  ws_port: 8000
+  # Internal service URLs — auto-derived from network.internal_host + each
+  # service's port when omitted.  Set explicit URLs only to override.
+  # stt_url: http://127.0.0.1:8001
+  # tts_url: http://127.0.0.1:8002
+  # memory_url: http://127.0.0.1:8003
+  # animation_url: http://127.0.0.1:8004
+  # gesture_url: http://127.0.0.1:8005
+  # llm_url: http://127.0.0.1:11434
+
+  # Phone-call mode: WS /ws/live — continuous PCM uplink + VAD utterance detection → STT → LLM
+  live:
+    enabled: true
+    # How to handle the assistant's own audio while the mic is streaming.
+    # "room": your mic hears the speaker, so we mute mic during TTS playback
+    #         to prevent the "talking to itself" acoustic loop.
+    # "headphone": your mic does not hear the speaker, so we allow mic during TTS
+    #               for easier barge-in.
+    echo_mode: room
+    # If set, overrides echo_mode.
+    # true  => mute mic while agent is talking (recommended for room mode)
+    # false => do not mute (recommended for headphone mode)
+    mute_mic_while_agent_talking: null
+    sample_rate: 16000
+    frame_ms: 20
+    vad_aggressiveness: 2
+    silence_ms: 450
+    min_speech_ms: 200
+    max_utterance_ms: 30000
+
+unity:
+  # Auto-derived from network.external_host + bridge.port when omitted.
+  # ws_url: ws://192.168.0.63:8000/ws/unity
+  # live_ws_url: ws://192.168.0.63:8000/ws/live
+  # VRM model path (relative to Unity project)
+  vrm_model: Assets/Models/character.vrm
+  # Lip sync method: viseme (phoneme-based) or amplitude (volume-based)
+  lip_sync: viseme
+
+# ---------------------------------------------------------------------------
+# Channels — messaging surfaces that connect to the bridge.
+# Each channel POSTs to /channel and relays the text reply.
+# ---------------------------------------------------------------------------
+channels:
+  telegram:
+    enabled: true
+    bot_token: "***REMOVED***"
+    # Optional: restrict to specific Telegram user IDs or usernames.
+    # allowed_users: ["123456789", "my_username"]
+  discord:
+    enabled: false
+    bot_token: ""
+    # Optional: restrict to specific guild/channel IDs.
+    # allowed_guilds: [123456789]
+    # allowed_channels: [123456789]
+  cli:
+    enabled: true
+
+# ---------------------------------------------------------------------------
+# Tools — CLI / filesystem tools the LLM can call via function-calling.
+# Only active on the /channel endpoint (text channels), NOT on /chat or /voice
+# to avoid adding latency to the real-time voice pipeline.
+# ---------------------------------------------------------------------------
+tools:
+  enabled: true
+  allowed:
+    # Nori sub-agent (Mocha delegates all research/data/visuals here)
+    - ask_nori
+    # UI tools (Mocha presents what Nori prepared)
+    - show_slides
+    - control_slides
+    - show_card
+    - show_notification
+    - clear_ui
+    # show_video is Nori-only (she finds real video IDs via web_search)
+    # Cron + autonomy (Mocha schedules user-asked reminders / routines)
+    - schedule_cron
+    - list_cron_jobs
+    - cancel_cron_job
+    - mocha_self_mute
+    # Floating YouTube player (music + videos; one unified modal)
+    - video_player
+    # Theme toolbox + Hana design critic
+    - ask_hana
+    - theme_get
+    - theme_propose
+    - theme_screenshot
+    - theme_apply
+    - theme_revert
+    - theme_load
+    - theme_preview_modal
+  working_dir: /home/tianyizhang/AI Projects/ProjectParrot
+  max_rounds: 5
+  timeout: 120  # increased: Nori may need time for multi-step research
+
+  # Shell-execution safety. Substring match; case-sensitive. Applies to all
+  # callers of bash_exec (Mocha has no direct shell access — she uses ask_nori).
+  bash_exec:
+    blocklist_patterns:
+      - "rm -rf /"
+      - "rm -rf /*"
+      - "mkfs"
+      - "dd if="
+      - ":(){ :|:&};:"
+      - ":(){:|:&};:"
+      - "> /dev/sd"
+      - ">/dev/sd"
+      - "chmod -R 777 /"
+
+# ---------------------------------------------------------------------------
+# Agent loop — proactive background scheduler that runs tasks on a cron and
+# broadcasts results through registered channels.
+# ---------------------------------------------------------------------------
+agent_loop:
+  enabled: true
+  persist_file: data/cron_jobs.json
+  jobs:
+    - id: morning_greeting
+      cron: "0 8 * * *"
+      action: prompt
+      params:
+        text: "Good morning! Give me a brief, friendly morning greeting."
+      description: Morning greeting sent to all channels
+      enabled: false    # disabled by default; flip on once you want the daily 8am ping
+
+# ---------------------------------------------------------------------------
+# Autonomy — lets Mocha initiate conversation (reconnect hello, drift-on-topic,
+# bored / lonely check-ins). Requires autonomy_engine wired through
+# _idle_heartbeat_loop. Routes speech to web UI if connected, else Telegram
+# (primary user learned from first /channel POST), else queues for next reconnect.
+# ---------------------------------------------------------------------------
+autonomy:
+  enabled: true
+  # Seconds of silence before Mocha starts considering a drift riff on the
+  # current topic. LLM decides whether to actually speak; returning
+  # {"segments":[]} means "stay quiet this tick".
+  drift_after_s: 45
+  # After this many seconds, escalate to bored (playful, one-shot check-in).
+  bored_after_s: 120
+  # After this many seconds, escalate to lonely (slightly more emotionally honest).
+  lonely_after_s: 300
+  # Minimum seconds between LLM-driven autonomy evaluations (decides whether
+  # to speak). Keeps cost bounded.
+  eval_interval_s: 45
+  # Hard floor between any two autonomous utterances.
+  min_interval_between_autonomous_turns_s: 180
+  # Safety ceiling — counter resets at local midnight.
+  daily_max_autonomous_turns: 12
+  # Reconnect hello fires at most once per this window (avoids rage-refresh spam).
+  reconnect_debounce_s: 300
+  # Suppress drift/bored/lonely for this long after the last tool execution —
+  # so autonomy never interrupts an active design / research session.
+  task_quiet_after_s: 180
+  # Per-mode toggles so you can disable any single autonomy mode without
+  # killing the whole feature.
+  modes:
+    drift: true
+    bored: true
+    lonely: true
+    reconnect_hello: true
+
+# Notifications queue — deliveries that were fired by cron jobs while no
+# surface was reachable (web closed, Telegram unknown). Consumed on next
+# client_hello from the web UI.
+notifications:
+  path: data/notifications.jsonl
+  max_retained_delivered: 200
+
+# ---------------------------------------------------------------------------
+# Hana — vision sub-agent (Claude API). Reads ANTHROPIC_API_KEY from env.
+# Mocha reaches Hana via the ask_hana tool; Hana never has disk write access.
+# ---------------------------------------------------------------------------
+hana:
+  enabled: true
+  # Default model for inspire() and routine critique().
+  model: claude-haiku-4-5
+  # Optional upgrade model when caller passes mode="deep".
+  deep_model: claude-sonnet-4-6
+  max_tokens: 2048
+  temperature: 0.5
+  # Safety cap on calls per local day. Reset at midnight.
+  daily_max_calls: 200
+  # Largest single image we'll forward (~5MB Anthropic limit; leave headroom).
+  max_image_bytes: 3500000
+
+# Call logging — write-only PostgreSQL log of every LLM call.
+# Used for offline evaluation / analytics; the agent never reads this table.
+call_log:
+  enabled: true
+  dsn: "postgresql://parrot:parrot@127.0.0.1:5432/parrot"
+  pool_min: 1
+  pool_max: 5
+
+# Idle heartbeat — makes the character feel alive when no one is talking.
+# The bridge sends silent idle_action messages (emotion + gesture, no audio)
+# to Unity after the conversation has been quiet for a while.
+idle:
+  enabled: true
+  # Seconds of silence before the first idle action fires
+  initial_delay: 40
+  # Seconds between subsequent idle actions (randomised ±30%)
+  interval: 15
+  # Stop sending idle actions after this many seconds of total silence
+  # (character "falls asleep" / goes to a resting pose). 0 = never stop.
+  max_idle_duration: 300

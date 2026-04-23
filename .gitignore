@@ -1,0 +1,54 @@
+.env
+.env.*
+!.env.example
+
+# Animation source files (purchased assets — do not commit)
+animation_clips/
+# Converted animation JSONs (generated from FBX, rebuild with scripts/convert_fbx_clips.mjs)
+web/static/animations/
+web/static/clips/
+# Node.js deps for conversion script
+scripts/node_modules/
+scripts/package.json
+scripts/package-lock.json
+
+# Python
+.venv*/
+venv/
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Runtime
+.pids/
+logs/
+models/
+
+# Data stores (ChromaDB)
+memory/chroma_db/
+animation/chroma_db/
+
+# Runtime autonomy state
+data/cron_jobs.json
+data/notifications.jsonl
+data/primary_user.json
+data/recordings/
+
+# User-generated themes (approved prototypes); variants.json is tracked as the registry.
+web/static/css/themes/*.css
+!web/static/css/themes/active.css
+web/static/css/themes/*.png
+
+# Vendor (cloned repos — not committed, pulled at build time)
+vendor/
+
+# Gesture service venv and model cache
+.venv-gesture/
+.cache/
+
+# OS / editor
+.DS_Store
+.vscode/
+
+# Claude Code local state (plans, memory, session data)
+.claude/

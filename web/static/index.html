@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mocha</title>
+<link rel="stylesheet" href="/static/css/style.css">
+<link rel="stylesheet" href="/static/css/panel-manager.css">
+<link rel="stylesheet" href="/static/css/themes/active.css" id="active-theme-link">
+<script>window.__PARROT_BUILD__ = 'hana-v1';</script>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+  }
+}
+</script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+
+<!-- ══ Theme decor slot (populated by theme_propose/theme_apply) ══ -->
+<div id="theme-decor" aria-hidden="true"></div>
+
+<!-- ══ Video player (populated by video_player tool) ══
+     Full-size: floats top-right, user-draggable + resizable via panel-manager.
+     Minimized: pill at bottom-right, click to expand. Persistent — closes
+     only on video_player(action=close) or the X button. -->
+<div id="video-player" class="video-player hidden" data-state="hidden">
+    <div class="video-player-header pres-header">
+        <span class="video-player-title" id="videoPlayerTitle">Now playing</span>
+        <div class="video-player-actions">
+            <button class="video-player-btn" id="videoPlayerMinBtn" title="Minimize to corner">&#128317;</button>
+            <button class="video-player-btn" id="videoPlayerCloseBtn" title="Stop and close">&times;</button>
+        </div>
+    </div>
+    <div class="video-player-iframe-wrap" id="videoPlayerIframeWrap"></div>
+    <div class="video-player-thumb-controls" id="videoPlayerThumbControls">
+        <span class="video-player-thumb-title" id="videoPlayerThumbTitle">Now playing</span>
+        <button class="video-player-btn" id="videoPlayerExpandBtn" title="Expand">&#9974;</button>
+    </div>
+</div>
+
+<!-- ══ Main layout ══ -->
+<div class="main-layout">
+    <!-- 3D canvas (fills left) -->
+    <div class="canvas-area" id="canvasArea">
+        <canvas id="canvas3d"></canvas>
+        <div class="drop-overlay" id="dropOverlay">Drop .vrm model here</div>
+
+        <!-- Mocha's presentation panel (slides/charts) -->
+        <div class="presentation-panel" id="presentationPanel">
+            <div class="pres-header">
+                <span class="pres-title" id="presTitle"></span>
+                <div class="pres-nav">
+                    <button class="pres-nav-btn" id="presPrev" title="Previous">&larr;</button>
+                    <span class="pres-counter" id="presCounter">1 / 1</span>
+                    <button class="pres-nav-btn" id="presNext" title="Next">&rarr;</button>
+                    <button class="pres-nav-btn pres-close-btn" id="presClose" title="Close">&times;</button>
+                </div>
+            </div>
+            <div class="pres-slide" id="presSlide"></div>
+        </div>
+
+        <!-- Mocha's info cards -->
+        <div class="card-container" id="cardContainer"></div>
+    </div>
+
+    <!-- Toast notifications (top-right) -->
+    <div class="notif-container" id="notifContainer"></div>
+
+    <!-- Right-side chat panel (session only) -->
+    <aside class="chat-sidebar">
+        <button class="chat-collapse-btn" id="btnChatCollapse" title="Hide Chat">&times;</button>
+        <div class="chat-log" id="chatLog"></div>
+        <div class="thinking-log" id="thinkingPanel"></div>
+        <div class="chat-input">
+            <input type="text" id="textInput" placeholder="Type a message...">
+            <button class="btn btn-send" id="btnSend">Send</button>
+            <button class="btn btn-mic" id="btnMic" title="Toggle microphone">&#127908;</button>
+        </div>
+    </aside>
+</div>
+
+<!-- ══ Top-right status bar ══ -->
+<div class="status-bar">
+    <div class="status-lights">
+        <div class="light" id="light-uplink"><span class="light-dot"></span><span class="light-label">MIC</span></div>
+        <div class="light" id="light-stt"><span class="light-dot"></span><span class="light-label">STT</span></div>
+        <div class="light" id="light-llm"><span class="light-dot"></span><span class="light-label">LLM</span></div>
+        <div class="light" id="light-nori"><span class="light-dot"></span><span class="light-label">NORI</span></div>
+        <div class="light" id="light-tts"><span class="light-dot"></span><span class="light-label">TTS</span></div>
+        <div class="light" id="light-gesture"><span class="light-dot"></span><span class="light-label">GESTURE</span></div>
+    </div>
+    <span class="status-dot" id="statusDot"></span>
+    <button class="gear-btn" id="btnChatToggle" title="Show Chat">&#128488;</button>
+    <button class="gear-btn" id="btnGlobalChat" title="Global Chat">&#128172;</button>
+    <button class="gear-btn" id="btnGear" title="Settings">&#9881;</button>
+</div>
+
+<!-- ══ Global chat popup ══ -->
+<div class="gchat-popup" id="gchatPopup">
+    <div class="gchat-header" id="gchatHeader">
+        <span class="gchat-title">Global Chat</span>
+        <div class="gchat-header-actions">
+            <button class="gchat-header-btn" id="gchatMinimize" title="Minimize">&#8722;</button>
+            <button class="gchat-header-btn" id="gchatClose" title="Close">&times;</button>
+        </div>
+    </div>
+    <div class="gchat-messages" id="gchatMessages">
+        <div class="gchat-empty">Loading chat history...</div>
+    </div>
+    <div class="gchat-input-bar">
+        <input type="text" id="gchatInput" placeholder="Message all platforms...">
+        <button class="btn btn-send" id="gchatSend">Send</button>
+    </div>
+</div>
+
+<!-- ══ Settings modal (hidden by default) ══ -->
+<div class="modal-backdrop" id="modalBackdrop">
+    <div class="modal">
+        <div class="modal-header">
+            <h2>Settings</h2>
+            <button class="modal-close" id="btnCloseModal">&times;</button>
+        </div>
+
+        <nav class="modal-tabs">
+            <button class="modal-tab active" data-tab="pipeline">Pipeline</button>
+            <button class="modal-tab" data-tab="activity">Activity</button>
+            <button class="modal-tab" data-tab="config">Config</button>
+        </nav>
+
+        <!-- Pipeline tab -->
+        <div class="modal-content active" id="modal-pipeline">
+            <div class="thread-cards">
+                <div class="thread-card" id="thread-uplink">
+                    <div class="thread-header"><span class="thread-dot" style="background:#a78bfa"></span> MIC UPLINK</div>
+                    <div class="thread-status">Idle</div>
+                    <div class="thread-time"></div>
+                    <div class="thread-preview"></div>
+                </div>
+                <div class="thread-card" id="thread-stt">
+                    <div class="thread-header"><span class="thread-dot" style="background:#3b82f6"></span> STT</div>
+                    <div class="thread-status">Idle</div>
+                    <div class="thread-time"></div>
+                    <div class="thread-preview"></div>
+                </div>
+                <div class="thread-card" id="thread-llm">
+                    <div class="thread-header"><span class="thread-dot" style="background:#f59e0b"></span> LLM</div>
+                    <div class="thread-status">Idle</div>
+                    <div class="thread-time"></div>
+                    <div class="thread-preview"></div>
+                </div>
+                <div class="thread-card" id="thread-nori">
+                    <div class="thread-header"><span class="thread-dot" style="background:#e94560"></span> NORI</div>
+                    <div class="thread-status">Idle</div>
+                    <div class="thread-time"></div>
+                    <div class="thread-preview"></div>
+                </div>
+                <div class="thread-card" id="thread-tts">
+                    <div class="thread-header"><span class="thread-dot" style="background:#10b981"></span> TTS</div>
+                    <div class="thread-status">Idle</div>
+                    <div class="thread-time"></div>
+                    <div class="thread-preview"></div>
+                </div>
+            </div>
+            <div class="gantt-area">
+                <h3 class="section-title">Recent Jobs</h3>
+                <div class="gantt-chart" id="ganttChart"></div>
+            </div>
+        </div>
+
+        <!-- Activity tab (tool calls & communication) -->
+        <div class="modal-content" id="modal-activity">
+            <button class="activity-clear-btn" id="activityClear">Clear</button>
+            <div class="activity-log" id="activityLog">
+                <div class="activity-empty">No tool activity yet. Ask Mocha something that triggers a tool call.</div>
+            </div>
+        </div>
+
+        <!-- Config tab -->
+        <div class="modal-content" id="modal-config">
+            <div class="config-grid">
+                <div class="config-section">
+                    <h3 class="section-title">VAD / Endpointing</h3>
+                    <div class="config-card">
+                        <label>Final Silence <span class="config-value" id="val-vad-final">900</span>ms</label>
+                        <input type="range" class="config-slider" id="slider-vad-final" min="300" max="2000" value="900" step="50">
+                    </div>
+                    <div class="config-card">
+                        <label>Interim Silence <span class="config-value" id="val-vad-interim">350</span>ms</label>
+                        <input type="range" class="config-slider" id="slider-vad-interim" min="100" max="1000" value="350" step="25">
+                    </div>
+                </div>
+                <div class="config-section">
+                    <h3 class="section-title">LLM</h3>
+                    <div class="config-card">
+                        <label>Temperature <span class="config-value" id="val-llm-temp">0.80</span></label>
+                        <input type="range" class="config-slider" id="slider-llm-temp" min="0" max="1.5" value="0.8" step="0.05">
+                    </div>
+                </div>
+                <div class="config-section">
+                    <h3 class="section-title">TTS</h3>
+                    <div class="config-card">
+                        <label>Reference Voice</label>
+                        <div class="voice-upload" id="voiceUpload">
+                            <p>Drop .wav file or click to upload</p>
+                            <input type="file" id="voiceFile" accept=".wav,.ogg" style="display:none">
+                        </div>
+                    </div>
+                    <button class="btn btn-sm" id="btnRestartTTS">Restart TTS</button>
+                </div>
+                <div class="config-section">
+                    <h3 class="section-title">VRM Model</h3>
+                    <div class="config-card">
+                        <button class="btn btn-sm" id="btnLoadVRM" onclick="document.getElementById('vrmFile').click()">Load VRM</button>
+                        <button class="btn btn-sm" id="btnClearVRM" style="display:none">Clear Model</button>
+                        <input type="file" id="vrmFile" accept=".vrm" style="display:none">
+                    </div>
+                </div>
+                <div class="config-section">
+                    <h3 class="section-title">Services</h3>
+                    <div class="config-card toggle-card">
+                        <label>Shiro Coaching Agent</label>
+                        <label class="toggle"><input type="checkbox" id="toggleShiro"><span class="toggle-slider"></span></label>
+                    </div>
+                </div>
+                <div class="config-section">
+                    <h3 class="section-title danger">Danger Zone</h3>
+                    <button class="btn btn-danger" id="btnClearMemory">Clear Memory</button>
+                </div>
+            </div>
+        </div>
+
+    </div>
+</div>
+
+
+<!-- Axis calibration debug panel (Ctrl+B to toggle) -->
+<div id="calibPanel" style="
+    position:fixed; top:10px; left:10px; z-index:9999;
+    background:rgba(0,0,0,0.9); color:#eee; padding:14px 18px;
+    border-radius:8px; font:12px monospace; width:520px;
+    max-height:90vh; overflow-y:auto; display:none;
+">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+        <b style="font-size:14px;">Axis Calibration (Ctrl+B)</b>
+        <button onclick="document.getElementById('calibPanel').style.display='none'"
+                style="background:none;border:none;color:#eee;cursor:pointer;font-size:16px;">&times;</button>
+    </div>
+    <div style="margin-bottom:8px;border-bottom:1px solid #444;padding-bottom:8px;">
+        <b style="font-size:11px;color:#0cf;">Camera Position</b>
+        <span style="font-size:9px;color:#999;margin-left:6px;">Mocha's position and framing</span>
+        <div id="camControls" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;"></div>
+        <div style="margin-top:4px;display:flex;gap:6px;align-items:center;">
+            <button id="btnCamCopy" style="padding:2px 8px;cursor:pointer;font-size:10px;">Copy Camera</button>
+            <button id="btnCamReset" style="padding:2px 8px;cursor:pointer;font-size:10px;">Reset Camera</button>
+            <label style="font-size:10px;color:#999;margin-left:8px;">
+                <input type="checkbox" id="chkOrbitLock" checked style="vertical-align:middle;">
+                Lock camera in session
+            </label>
+        </div>
+    </div>
+    <div style="margin-bottom:8px;border-bottom:1px solid #444;padding-bottom:8px;">
+        <b style="font-size:11px;color:#aaa;">Test Animations</b>
+        <div id="testAnims" style="display:flex;flex-wrap:wrap;gap:3px;margin-top:4px;"></div>
+    </div>
+    <div style="margin-bottom:8px;border-bottom:1px solid #444;padding-bottom:6px;">
+        <b style="font-size:11px;color:#ff0;">ALL BONES</b>
+        <span style="font-size:9px;color:#999;margin-left:6px;">Sets every joint at once</span>
+        <div id="globalRow" style="display:flex;align-items:center;gap:6px;margin-top:4px;"></div>
+    </div>
+    <p style="font-size:10px;color:#999;margin:0 0 8px;">
+        Per-bone override (only if a joint needs different values).<br>
+        FBX bones along +X, VRM along +Y.
+    </p>
+    <div id="calibSliders"></div>
+    <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">
+        <button id="btnSkeleton" style="padding:4px 10px;cursor:pointer;background:#333;color:#0f8;border:1px solid #0f8;">☠ Skeleton Mode</button>
+        <button id="btnCalibCopy" style="padding:4px 10px;cursor:pointer;">Copy Config</button>
+        <button id="btnCalibReset" style="padding:4px 10px;cursor:pointer;">Reset All</button>
+    </div>
+</div>
+
+<!-- Scripts -->
+<script src="/static/js/panel-manager.js"></script>
+<script src="/static/js/ui-orchestrator.js"></script>
+<script src="/static/js/presentation.js"></script>
+<script src="/static/js/theme-capture.js"></script>
+<script src="/static/js/app.js"></script>
+<script type="module" src="/static/js/vrm-renderer.js"></script>
+<script type="module" src="/static/js/animation-controller.js"></script>
+
+<script>
+setTimeout(() => {
+    const panel = document.getElementById('calibPanel');
+    const container = document.getElementById('calibSliders');
+    const cal = window._sectionCal;
+    if (!cal) return;
+
+    const retarget = window._retargetFrame;
+    const axisColors = { x: '#f44', y: '#4f4', z: '#48f' };
+
+    // Stepper: label <[val]>
+    function makeStepper(sec, axis) {
+        const wrap = document.createElement('span');
+        wrap.style.cssText = 'display:inline-flex; align-items:center; gap:1px;';
+        const lbl = document.createElement('span');
+        lbl.style.cssText = `font-size:10px; color:${axisColors[axis]}; width:12px; font-weight:bold;`;
+        lbl.textContent = axis.toUpperCase();
+        const btnL = document.createElement('button');
+        btnL.textContent = '<';
+        btnL.style.cssText = 'padding:0 4px; font-size:11px; cursor:pointer;';
+        const val = document.createElement('span');
+        val.style.cssText = 'font-size:11px; width:34px; text-align:center; color:#ff0; font-weight:bold;';
+        val.textContent = cal[sec][axis];
+        const btnR = document.createElement('button');
+        btnR.textContent = '>';
+        btnR.style.cssText = 'padding:0 4px; font-size:11px; cursor:pointer;';
+        function step(d) {
+            let v = cal[sec][axis] + d * 90;
+            if (v > 180) v = -180; if (v < -180) v = 180;
+            cal[sec][axis] = v; val.textContent = v;
+        }
+        btnL.addEventListener('click', () => step(-1));
+        btnR.addEventListener('click', () => step(1));
+        wrap.appendChild(lbl); wrap.appendChild(btnL); wrap.appendChild(val); wrap.appendChild(btnR);
+        return wrap;
+    }
+
+    // 3 section rows
+    const secColors = { core: '#8f8', arm: '#88f', leg: '#ff8' };
+    const secLabels = { core: 'Core (Hips→Head)', arm: 'Arms + Hands', leg: 'Legs + Feet' };
+    for (const sec of ['core', 'arm', 'leg']) {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex; align-items:center; gap:8px; margin:4px 0;';
+        const name = document.createElement('span');
+        name.style.cssText = `font-size:11px; color:${secColors[sec]}; width:120px; font-weight:bold;`;
+        name.textContent = secLabels[sec];
+        row.appendChild(name);
+        row.appendChild(makeStepper(sec, 'x'));
+        row.appendChild(makeStepper(sec, 'y'));
+        row.appendChild(makeStepper(sec, 'z'));
+        container.appendChild(row);
+    }
+
+    // Test animation buttons
+    const testAnims = [
+        ['Breathe','KA_Idle01_breathing'], ['Look L/R','KA_Idle02_LookLeftAndRight'],
+        ['Stretch','KA_Idle05_Stretch'], ['Wave','KA_Idle16_WaveHands'],
+        ['Laugh','KA_Idle28_Laugh'], ['Speak','KA_Speak01_Normal_Loop'],
+        ['Explain','KA_Speak02_Explaining_Loop'], ['Shy','KA_Idle18_Shy'],
+        ['Dance','KA_Idle13_Dance01'], ['Jump','KA_Idle06_JumpAround'],
+        ['Point','KA_Idle75_Pointing'], ['Angry','KA_Idle27_Angry'],
+        ['Thumbs Up','KA_Idle65_ThumbsUp'], ['Surprised','KA_Idle68_Surprise'],
+    ];
+    let _testLoop = null;
+    const animContainer = document.getElementById('testAnims');
+    for (const [label, clipName] of testAnims) {
+        const btn = document.createElement('button');
+        btn.textContent = label;
+        btn.style.cssText = 'padding:2px 6px; font-size:10px; cursor:pointer; background:#222; color:#ddd; border:1px solid #555;';
+        btn.addEventListener('click', async () => {
+            animContainer.querySelectorAll('button').forEach(b => b.style.background = '#222');
+            btn.style.background = '#060';
+            if (window._setTestMode) window._setTestMode(true);
+            try {
+                const resp = await fetch('/static/clips/' + clipName + '.json?v=' + Date.now());
+                if (!resp.ok) return;
+                const clip = await resp.json();
+                if (_testLoop) clearInterval(_testLoop);
+                let t = 0;
+                _testLoop = setInterval(() => {
+                    t += 1/60; if (t >= clip.duration) t = 0;
+                    const f = Math.min(Math.floor(t * clip.fps), clip.frameCount - 1);
+                    const frame = clip.frames[f];
+                    if (frame && retarget && window._applyBones) {
+                        window._applyBones(retarget(frame));
+                    }
+                }, 1000/60);
+            } catch(e) { console.error(e); }
+        });
+        animContainer.appendChild(btn);
+    }
+
+    document.getElementById('btnSkeleton').addEventListener('click', () => {
+        if (window._toggleSkeleton) window._toggleSkeleton();
+    });
+    document.getElementById('btnCalibCopy').addEventListener('click', () => {
+        navigator.clipboard.writeText(JSON.stringify(cal, null, 2));
+        alert('Copied!');
+    });
+    document.getElementById('btnCalibReset').addEventListener('click', () => {
+        for (const s of ['core','arm','leg']) { cal[s].x=0; cal[s].y=0; cal[s].z=0; }
+    });
+
+    // ── Camera position controls ──
+    const camBox = document.getElementById('camControls');
+    const orbitLock = document.getElementById('chkOrbitLock');
+    const camSliders = {};
+    const _u = (fn) => { fn(); const c = window._getControls(); if (c) c.update(); };
+    const camDefs = [
+        { key: 'camX', label: 'Cam X', min: -5, max: 5, step: 0.05, color: '#f44',
+          get: () => window._getCamera()?.position.x,
+          set: v  => { const c = window._getCamera(); if (c) c.position.x = v; } },
+        { key: 'camY', label: 'Cam Y', min: -2, max: 5, step: 0.05, color: '#4f4',
+          get: () => window._getCamera()?.position.y,
+          set: v  => { const c = window._getCamera(); if (c) c.position.y = v; } },
+        { key: 'camZ', label: 'Cam Z', min: 0.5, max: 10, step: 0.1, color: '#48f',
+          get: () => window._getCamera()?.position.z,
+          set: v  => { const c = window._getCamera(); if (c) c.position.z = v; } },
+        { key: 'tgtX', label: 'Tgt X', min: -5, max: 5, step: 0.05, color: '#f88',
+          get: () => window._getControls()?.target.x,
+          set: v  => _u(() => { const c = window._getControls(); if (c) c.target.x = v; }) },
+        { key: 'tgtY', label: 'Tgt Y', min: -2, max: 5, step: 0.05, color: '#8f8',
+          get: () => window._getControls()?.target.y,
+          set: v  => _u(() => { const c = window._getControls(); if (c) c.target.y = v; }) },
+        { key: 'tgtZ', label: 'Tgt Z', min: -5, max: 5, step: 0.05, color: '#88f',
+          get: () => window._getControls()?.target.z,
+          set: v  => _u(() => { const c = window._getControls(); if (c) c.target.z = v; }) },
+        { key: 'fov',  label: 'FOV',   min: 10, max: 60, step: 1, color: '#f8f',
+          get: () => window._getCamera()?.fov,
+          set: v  => { const c = window._getCamera(); if (c) { c.fov = v; c.updateProjectionMatrix(); } } },
+    ];
+    for (const d of camDefs) {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;align-items:center;gap:4px;';
+        const lbl = document.createElement('span');
+        lbl.style.cssText = `font-size:10px;color:${d.color};width:32px;font-weight:bold;`;
+        lbl.textContent = d.label;
+        const slider = document.createElement('input');
+        slider.type = 'range'; slider.min = d.min; slider.max = d.max; slider.step = d.step;
+        slider.style.cssText = 'width:120px;height:3px;';
+        const val = document.createElement('span');
+        val.style.cssText = 'font-size:10px;color:#ff0;width:40px;text-align:right;';
+        // Init value after vrm-renderer loads
+        setTimeout(() => {
+            const v = d.get();
+            if (v != null) { slider.value = v; val.textContent = Number(v).toFixed(2); }
+        }, 2000);
+        slider.addEventListener('input', () => {
+            const v = parseFloat(slider.value);
+            d.set(v); val.textContent = v.toFixed(2);
+        });
+        camSliders[d.key] = { slider, val, def: d };
+        row.appendChild(lbl); row.appendChild(slider); row.appendChild(val);
+        camBox.appendChild(row);
+    }
+
+    // Copy camera config
+    document.getElementById('btnCamCopy').addEventListener('click', () => {
+        const cfg = {};
+        for (const [k, s] of Object.entries(camSliders)) cfg[k] = parseFloat(s.slider.value);
+        navigator.clipboard.writeText(JSON.stringify(cfg, null, 2));
+        alert('Camera config copied!');
+    });
+
+    // Reset camera
+    document.getElementById('btnCamReset').addEventListener('click', () => {
+        const defaults = { camX: 0, camY: 1.25, camZ: 3.0, tgtX: 0, tgtY: 1.0, tgtZ: 0, fov: 25 };
+        for (const [k, v] of Object.entries(defaults)) {
+            if (camSliders[k]) {
+                camSliders[k].slider.value = v;
+                camSliders[k].val.textContent = v.toFixed(2);
+                camSliders[k].def.set(v);
+            }
+        }
+    });
+
+    // Orbit lock checkbox — controls whether users can orbit in session
+    orbitLock.addEventListener('change', () => {
+        const ctrl = window._getControls();
+        if (ctrl) ctrl.enabled = !orbitLock.checked;
+    });
+
+    // Toggle panel: unlock orbit while panel is open, re-lock on close
+    document.addEventListener('keydown', e => {
+        if (e.ctrlKey && e.key === 'b') {
+            e.preventDefault();
+            const opening = panel.style.display === 'none';
+            panel.style.display = opening ? 'block' : 'none';
+            const ctrl = window._getControls();
+            if (ctrl) {
+                if (opening) {
+                    ctrl.enabled = true;  // unlock while calibrating
+                    // sync sliders to current camera
+                    for (const [k, s] of Object.entries(camSliders)) {
+                        const v = s.def.get();
+                        if (v != null) { s.slider.value = v; s.val.textContent = Number(v).toFixed(2); }
+                    }
+                } else if (orbitLock.checked) {
+                    ctrl.enabled = false; // re-lock
+                }
+            }
+        }
+    });
+}, 1500);
+</script>
+
+</body>
+</html>

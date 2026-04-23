@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "active": "lofi-vibe",
+  "themes": [
+    {
+      "name": "default",
+      "file": null,
+      "builtin": true,
+      "description": "Original Mocha dark — slate bg with rose accent.",
+      "palette": {
+        "bg": "#0a0c10",
+        "surface": "#12151c",
+        "card": "#1a1e28",
+        "border": "#252a36",
+        "accent": "#e94560",
+        "accent_dim": "#c73652",
+        "text": "#d4d8e4",
+        "muted": "#6b7280"
+      },
+      "created_at": null
+    },
+    {
+      "name": "lofi-vibe",
+      "file": "lofi-vibe.css",
+      "builtin": false,
+      "description": "Warm amber glows and soft textures for a chill atmosphere",
+      "palette": {
+        "bg": "#0f0e0d",
+        "surface": "#1a1815",
+        "card": "#242218",
+        "border": "#3a3530",
+        "accent": "#d4a574",
+        "accent-dim": "#8b7355",
+        "text": "#e8e6e1",
+        "muted": "#6b6560"
+      },
+      "created_at": "2026-04-18T06:41:29.760224+00:00",
+      "updated_at": "2026-04-18T06:41:29.760227+00:00"
+    }
+  ]
+}

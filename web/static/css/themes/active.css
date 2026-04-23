@@ -1,0 +1,28 @@
+/* Theme: lofi-vibe
+ * Warm amber glows and soft textures for a chill atmosphere
+ * Generated: 2026-04-18T06:41:29.760049+00:00
+ * Load order: appended AFTER style.css + panel-manager.css.
+ */
+
+:root {
+  --bg: #0f0e0d;
+  --surface: #1a1815;
+  --card: #242218;
+  --border: #3a3530;
+  --accent: #d4a574;
+  --accent-dim: #8b7355;
+  --text: #e8e6e1;
+  --muted: #6b6560;
+}
+
+body {
+  background-image: url('https://images.unsplash.com/photo-1590010304834-5115710d756a?auto=format&fit=crop&w=1950&q=80');
+  background-size: cover;
+  background-position: center;
+  background-attachment: fixed;
+}
+
+body::before {
+  content: ''; position: fixed; inset: 0;
+  background: rgba(15,14,13,0.65); pointer-events: none; z-index: -1;
+}

@@ -1,0 +1,76 @@
+function,description,category,looping,animation,start_animation,loop_animation,end_animation,max_repeats
+speak_normal,Speak with neutral everyday body language,speak,TRUE,,KA_Speak01_Normal_Start,KA_Speak01_Normal_Loop,KA_Speak01_Normal_End,
+speak_explaining,Speak with explanatory hand gestures,speak,TRUE,,KA_Speak02_Explaining_Start,KA_Speak02_Explaining_Loop,KA_Speak02_Explaining_End,
+speak_excited,Speak with enthusiastic animated energy,speak,TRUE,,KA_Speak03_Excited_Start,KA_Speak03_Excited_Loop,KA_Speak03_Excited_End,
+speak_calm,Speak with relaxed gentle body language,speak,TRUE,,KA_Speak04_Calm_Start,KA_Speak04_Calm_Loop,KA_Speak04_Calm_End,
+speak_scolding,Speak while pointing finger disapprovingly,speak,TRUE,,KA_Speak05_PointingFingerScolding_Start,KA_Speak05_PointingFingerScolding_Loop,KA_Speak05_PointingFingerScolding_End,
+speak_pointing,Speak while pointing finger to emphasize a point,speak,TRUE,,KA_Speak06_PointingFingerCalmly_Start,KA_Speak06_PointingFingerCalmly_Loop,KA_Speak06_PointingFingerCalmly_End,
+speak_chatty,Speak with lively talkative gestures,speak,TRUE,,KA_Speak07_Chatty_Start,KA_Speak07_Chatty_Loop,KA_Speak07_Chatty_End,
+speak_pouting,Speak with arms crossed and a pouty attitude,speak,TRUE,,KA_Speak08_ArmsCrossedPouting_Start,KA_Speak08_ArmsCrossedPouting_Loop,KA_Speak08_ArmsCrossedPouting_End,
+speak_arms_crossed,Speak calmly with arms crossed,speak,TRUE,,KA_Speak09_ArmsCrossedCalm_Start,KA_Speak09_ArmsCrossedCalm_Loop,KA_Speak09_ArmsCrossedCalm_End,
+speak_shy,Speak timidly with shy body language,speak,TRUE,,KA_Speak10_Shy_Start,KA_Speak10_Shy_Loop,KA_Speak10_Shy_End,
+idle_breathe,Subtle idle breathing animation,idle,FALSE,KA_Idle01_breathing,,,,
+idle_look_around,Look left and right curiously,idle,FALSE,KA_Idle02_LookLeftAndRight,,,,
+idle_look_at_hands,Examine own hands absent-mindedly,idle,FALSE,KA_Idle03_LookAtHands,,,,
+idle_look_at_feet,Glance down at own feet,idle,FALSE,KA_Idle04_LookAtFeet,,,,
+idle_stretch,Do a casual stretch,idle,FALSE,KA_Idle05_Stretch,,,,
+idle_stretch,Do a casual stretch,idle,FALSE,KA_Idle30_Stretch2,,,,
+idle_waiting,Stand around waiting patiently,idle,FALSE,KA_Idle09_Waiting,,,,
+idle_look_back,Turn to look behind,idle,FALSE,KA_Idle11_LookingBack,,,,
+idle_lean_forward,Lean forward curiously,idle,FALSE,KA_Idle12_LeaningForward,,,,
+idle_lean_forward,Lean forward curiously,idle,FALSE,KA_Idle72_LeanForward,,,,
+idle_fidget,Small fidgety movement while standing,idle,FALSE,KA_Idle40_CrossLegs,,,,
+idle_lean_against,Lean casually against something,idle,FALSE,KA_Idle32_LeanAgainst,,,,
+wave,Wave hands to greet or say goodbye,emote,FALSE,KA_Idle16_WaveHands,,,,2
+wave,Wave hands to greet or say goodbye,emote,FALSE,KA_Idle45_WaveHandSlightly,,,,2
+greet_bow,Bow politely as a greeting,emote,FALSE,KA_Idle44_GreetingBow,,,,1
+curtsy,Do a cute curtsy,emote,FALSE,KA_Idle52_Curtsy,,,,1
+high_five,Enthusiastically go for a high five,emote,FALSE,KA_Idle21_HighFive1_1,,,,1
+high_five,Enthusiastically go for a high five,emote,FALSE,KA_Idle22_HighFive1_2,,,,1
+thumbs_up,Give an encouraging thumbs up,emote,FALSE,KA_Idle65_ThumbsUp,,,,1
+finger_snap,Snap fingers with attitude,emote,FALSE,KA_Idle35_FingerSnap,,,,1
+point,Point at something to draw attention,emote,FALSE,KA_Idle75_Pointing,,,,1
+nod_idea,Perk up as if having a great idea,emote,FALSE,KA_Idle08_ComeUpWithAnIdea,,,,1
+laugh,Laugh heartily,emote,FALSE,KA_Idle28_Laugh,,,,2
+cry,Cry sadly,emote,FALSE,KA_Idle38_Cry,,,,2
+angry,Show visible anger,emote,FALSE,KA_Idle27_Angry,,,,2
+surprised,React with surprise,emote,FALSE,KA_Idle29_Surprised,,,,2
+surprised,React with surprise,emote,FALSE,KA_Idle68_Surprise,,,,2
+surprised,React with surprise,emote,FALSE,KA_Idle69_Surprise2,,,,2
+shy,Act bashful and shy,emote,FALSE,KA_Idle18_Shy,,,,2
+shy,Act bashful and shy,emote,FALSE,KA_Idle41_CuteShyPose,,,,2
+shy_refuse,Shyly refuse or decline something,emote,FALSE,KA_Idle19_ShyRefusal,,,,1
+tsundere,Act tsundere — annoyed but secretly caring,emote,FALSE,KA_Idle37_Tsundere,,,,2
+pout,Cross arms and pout stubbornly,emote,FALSE,KA_Idle43_HandOnHip,,,,2
+cheer,Cheer enthusiastically,emote,FALSE,KA_Idle74_Cheer,,,,2
+cheer,Cheer enthusiastically,emote,FALSE,KA_Idle25_Cheers,,,,2
+yay,Celebrate with a happy yay,emote,FALSE,KA_Idle36_Yay,,,,1
+jump_for_joy,Jump up and down with happiness,emote,FALSE,KA_Idle66_JumpForJoy,,,,1
+jump_around,Bounce around energetically,emote,FALSE,KA_Idle06_JumpAround,,,,1
+shout,Shout loudly to get attention,emote,FALSE,KA_Idle26_Shout,,,,2
+taunt,Playfully taunt or tease,emote,FALSE,KA_Idle42_Taunt,,,,1
+scare,Try to spook or scare someone,emote,FALSE,KA_Idle47_Scaring,,,,1
+cute_pose,Strike an adorable pose,emote,FALSE,KA_Idle39_CuteArmUp,,,,1
+cute_pose,Strike an adorable pose,emote,FALSE,KA_Idle71_CatPose,,,,1
+cute_pose,Strike an adorable pose,emote,FALSE,KA_Idle73_IdolPose,,,,1
+motivated_pose,Strike a confident motivated pose,emote,FALSE,KA_Idle76_MotivatedPose,,,,1
+triple_pose,Do a series of cute poses,emote,FALSE,KA_Idle20_TriplePose,,,,1
+stumble,Trip and fall clumsily,action,FALSE,KA_Idle17_StumbleAndFall,,,,1
+backflip,Do an impressive backflip,action,FALSE,KA_Idle55_Backflip,,,,1
+handstand,Do a handstand to show off,action,FALSE,KA_Idle56_Handstand,,,,1
+spinning_jump,Do a spinning jump in the air,action,FALSE,KA_Idle07_SpinningJump,,,,1
+tie_shoelaces,Bend down to tie shoelaces,action,FALSE,KA_Idle15_TieShoelaces,,,,1
+change_clothes,Magically change outfit,action,FALSE,KA_Idle70_ChangeClothes,,,,1
+standing_chat,Chat casually while standing,action,FALSE,KA_Idle50_StandingTalk1_1,,,,
+standing_chat,Chat casually while standing,action,FALSE,KA_Idle51_StandingTalk1_2,,,,
+dance,Dance happily,dance,FALSE,KA_Idle13_Dance01,,,,
+dance,Dance happily,dance,FALSE,KA_Idle14_Dance02,,,,
+dance,Dance happily,dance,FALSE,KA_Idle23_Dance03,,,,
+dance,Dance happily,dance,FALSE,KA_Idle24_Dance04,,,,
+dance,Dance happily,dance,FALSE,KA_Idle57_Dance05,,,,
+dance,Dance happily,dance,FALSE,KA_Idle58_Dance06,,,,
+dance_loop,Dance with repeating loop — good for extended dancing,dance,TRUE,,KA_Idle63_Dance05_Start,KA_Idle63_Dance05_Loop,KA_Idle63_Dance05_End,
+dance_loop,Dance with repeating loop — good for extended dancing,dance,TRUE,,KA_Idle64_Dance06_Start,KA_Idle64_Dance06_Loop,KA_Idle64_Dance06_End,
+sing,Sing with a microphone,action,TRUE,,KA_Idle80_Sing_Microphone_Start,KA_Idle80_Sing_Microphone_Loop1,KA_Idle80_Sing_Microphone_End,
+sing_no_mic,Sing without a microphone,action,TRUE,,KA_Idle81_Sing_NoMicrophone_Start,KA_Idle81_Sing_NoMicrophone_Loop1,KA_Idle81_Sing_NoMicrophone_End,
+seiza,Sit in formal seiza position on the floor,action,TRUE,,KA_Idle53_Seiza_Start,KA_Idle53_Seiza_Loop1,KA_Idle53_Seiza_End,
