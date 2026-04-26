@@ -23,6 +23,24 @@
     const MIN_W = 300;
     const MIN_H = 200;
 
+    // Phone / portrait detection — used to default the chat sidebar to
+    // collapsed on phone (the bottom-sheet covers Mocha + iOS keyboard makes
+    // it worse). matchMedia stays live, so orientation flips are handled too.
+    function _isPhone() {
+        return window.matchMedia(
+            '(orientation: portrait) and (max-width: 900px), (max-width: 600px)'
+        ).matches;
+    }
+
+    // Read either mouse or touch coords from an event in one place.
+    function _ptr(e) {
+        if (e.touches && e.touches[0])
+            return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+        if (e.changedTouches && e.changedTouches[0])
+            return { x: e.changedTouches[0].clientX, y: e.changedTouches[0].clientY };
+        return { x: e.clientX, y: e.clientY };
+    }
+
     // ========================================================================
     //  Chat sidebar toggle
     // ========================================================================
@@ -102,23 +120,34 @@
     function _attachDrag(p) {
         let startX, startY, startLeft, startTop, isDragging = false;
 
-        p.headerEl.addEventListener('mousedown', (e) => {
+        // Single drag-start handler — used by both mousedown and touchstart so
+        // the desktop and phone code paths stay aligned.
+        const _onStart = (e) => {
             if (e.target.closest('.pres-nav-btn')) return; // don't drag on nav buttons
             e.preventDefault();
+            const pt = _ptr(e);
             isDragging = true;
             p.el.classList.add('panel-dragging');
             const rect = p.el.getBoundingClientRect();
-            startX = e.clientX; startY = e.clientY;
+            startX = pt.x; startY = pt.y;
             startLeft = rect.left; startTop = rect.top;
-        });
+        };
 
-        // Double-click to reset
+        p.headerEl.addEventListener('mousedown', _onStart);
+        // passive:false so we can preventDefault and stop the page from
+        // pan-scrolling under the finger.
+        p.headerEl.addEventListener('touchstart', _onStart, { passive: false });
+
+        // Double-click to reset (mouse only — touch users get a long-press
+        // alternative below or just hit the X button).
         p.headerEl.addEventListener('dblclick', () => resetRect(p.key));
 
-        document.addEventListener('mousemove', (e) => {
+        const _onMove = (e) => {
             if (!isDragging) return;
-            const dx = e.clientX - startX;
-            const dy = e.clientY - startY;
+            if (e.touches) e.preventDefault();  // block page scroll while dragging
+            const pt = _ptr(e);
+            const dx = pt.x - startX;
+            const dy = pt.y - startY;
             let newLeft = startLeft + dx;
             let newTop = startTop + dy;
             // Constrain to viewport
@@ -128,16 +157,22 @@
             p.el.style.top = newTop + 'px';
             p.el.style.right = 'auto';
             p.el.style.bottom = 'auto';
-        });
+        };
 
-        document.addEventListener('mouseup', () => {
+        const _onEnd = () => {
             if (!isDragging) return;
             isDragging = false;
             p.el.classList.remove('panel-dragging');
             p.pinned = true;  // user manually positioned
             _saveCurrentRect(p);
             _emit('panel-moved', p.key);
-        });
+        };
+
+        document.addEventListener('mousemove', _onMove);
+        document.addEventListener('mouseup', _onEnd);
+        document.addEventListener('touchmove', _onMove, { passive: false });
+        document.addEventListener('touchend', _onEnd);
+        document.addEventListener('touchcancel', _onEnd);
     }
 
     function _attachGrippers(p) {
@@ -160,35 +195,41 @@
 
             let startX, startY, startRect;
 
-            grip.addEventListener('mousedown', (e) => {
+            const _onGripStart = (e) => {
+                const pt = _ptr(e);
                 // Corner grippers extend 8px inside the panel and sit above
                 // the header (z-index 12), so they overlap the close/prev/next
                 // nav buttons in the top-right. If a button sits under the
-                // pointer, defer to it — install a one-shot mouseup that fires
-                // a click on the button if the user didn't drag away.
-                const below = document.elementsFromPoint(e.clientX, e.clientY);
+                // pointer, defer to it — install a one-shot up handler that
+                // fires a click on the button if the user didn't drag away.
+                const below = document.elementsFromPoint(pt.x, pt.y);
                 const btn = below
                     .find(el => el !== grip && el.closest?.('.pres-nav-btn, .video-player-btn, button'))
                     ?.closest('.pres-nav-btn, .video-player-btn, button');
                 if (btn) {
-                    const downX = e.clientX, downY = e.clientY;
+                    const downX = pt.x, downY = pt.y;
                     const onUp = (e2) => {
                         document.removeEventListener('mouseup', onUp, true);
-                        const dx = e2.clientX - downX, dy = e2.clientY - downY;
+                        document.removeEventListener('touchend', onUp, true);
+                        const upPt = _ptr(e2);
+                        const dx = upPt.x - downX, dy = upPt.y - downY;
                         if (dx * dx + dy * dy < 25) btn.click();  // <5px = click
                     };
                     document.addEventListener('mouseup', onUp, true);
+                    document.addEventListener('touchend', onUp, true);
                     return;  // don't initiate a resize drag
                 }
 
                 e.preventDefault(); e.stopPropagation();
                 p.el.classList.add('panel-dragging');
-                startX = e.clientX; startY = e.clientY;
+                startX = pt.x; startY = pt.y;
                 startRect = p.el.getBoundingClientRect();
 
                 const onMove = (e2) => {
-                    const dx = e2.clientX - startX;
-                    const dy = e2.clientY - startY;
+                    if (e2.touches) e2.preventDefault();
+                    const mp = _ptr(e2);
+                    const dx = mp.x - startX;
+                    const dy = mp.y - startY;
                     let { left, top, width, height } = startRect;
 
                     if (dir.includes('e')) width = Math.max(MIN_W, width + dx);
@@ -207,6 +248,9 @@
                 const onUp = () => {
                     document.removeEventListener('mousemove', onMove);
                     document.removeEventListener('mouseup', onUp);
+                    document.removeEventListener('touchmove', onMove);
+                    document.removeEventListener('touchend', onUp);
+                    document.removeEventListener('touchcancel', onUp);
                     p.el.classList.remove('panel-dragging');
                     _saveCurrentRect(p);
                     _emit('panel-moved', p.key);
@@ -214,7 +258,13 @@
 
                 document.addEventListener('mousemove', onMove);
                 document.addEventListener('mouseup', onUp);
-            });
+                document.addEventListener('touchmove', onMove, { passive: false });
+                document.addEventListener('touchend', onUp);
+                document.addEventListener('touchcancel', onUp);
+            };
+
+            grip.addEventListener('mousedown', _onGripStart);
+            grip.addEventListener('touchstart', _onGripStart, { passive: false });
         }
     }
 
@@ -549,9 +599,15 @@
         const collapseBtn = document.getElementById('btnChatCollapse');
         if (collapseBtn) collapseBtn.addEventListener('click', () => toggleChatSidebar(false));
 
-        // Restore saved chat state
+        // Restore saved chat state — but on phone, default to collapsed.
+        // Explicit user preference (saved=true|false) always wins; if unset
+        // (savedChat===null|undefined), phones start collapsed and desktops
+        // start visible.
         const savedChat = _load('chat.visible');
-        if (savedChat === false) toggleChatSidebar(false);
+        const initialChatVisible = (savedChat === true || savedChat === false)
+            ? savedChat
+            : !_isPhone();
+        if (!initialChatVisible) toggleChatSidebar(false);
 
         // Thinking log collapse toggle
         const thinkToggle = document.getElementById('btnThinkingToggle');

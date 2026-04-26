@@ -154,6 +154,14 @@ def _internal_prompt_for_state(state: str, topic: str, findings_preview: str = "
         else:
             base += " No pending findings. Welcome them back in one or two sentences, end with a hook."
         return base
+    if state == "first_hello":
+        return (
+            "[autonomy-mode: first_hello] Someone just opened your window for the "
+            "very first time — you've never met. No prior conversation, no name yet. "
+            "Greet them in one short, warm sentence (your voice, not assistant-coded), "
+            "and ask what to call them. Don't introduce yourself with a long bio. "
+            "Don't say 'Hello!' — just sound like a person who noticed someone walked in."
+        )
     return "[autonomy] say something short and natural."
 
 
@@ -403,7 +411,8 @@ async def decide_tick() -> None:
 #  Reconnect hello — called from /ws/live on client_hello
 # ---------------------------------------------------------------------------
 
-async def handle_client_hello() -> None:
+async def handle_client_hello(user_id: str | None = None,
+                              is_new_user: bool = False) -> None:
     cfg = _cfg()
     if not cfg["enabled"] or not cfg["modes"].get("reconnect_hello", True):
         return
@@ -412,13 +421,29 @@ async def handle_client_hello() -> None:
     from bridge import notifications
 
     now = time.monotonic()
-    # Debounce rage-refreshes.
-    if (now - _mocha_state.get("last_hello_at", 0.0)) < cfg["reconnect_debounce_s"]:
-        log.info("autonomy: hello debounced")
+
+    # Muted? Skip both reconnect and first_hello.
+    if now < _mocha_state.get("muted_until_monotonic", 0.0):
         return
 
-    # Muted?
-    if now < _mocha_state.get("muted_until_monotonic", 0.0):
+    # Brand-new user (anon, never named) → fire a warm first-meeting greeting
+    # immediately, bypassing the reconnect debounce. Otherwise the standard
+    # rage-refresh cooldown applies.
+    if is_new_user:
+        log.info("autonomy: first_hello for new user uid=%s", (user_id or "?")[:8])
+        segments = await _compose_utterance("first_hello", "", elapsed_s=0.0)
+        if not segments:
+            return
+        delivered = await _deliver(segments, "first_hello")
+        if delivered:
+            _mocha_state["last_hello_at"] = now
+            _mark_spoke()
+            _mocha_state["mood"] = "curious"
+        return
+
+    # Returning-user reconnect path — debounce rage-refreshes.
+    if (now - _mocha_state.get("last_hello_at", 0.0)) < cfg["reconnect_debounce_s"]:
+        log.info("autonomy: hello debounced")
         return
 
     pending = await notifications.list_undelivered()

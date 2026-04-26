@@ -222,6 +222,10 @@ tools:
     # Mocha's diary (per-day activity memory)
     - recall_diary
     - show_diary
+    # Weather modal (iPhone-Weather-style with animated bg)
+    - show_weather
+    # Save the user's preferred name once they introduce themselves
+    - set_display_name
   working_dir: /home/tianyizhang/AI Projects/ProjectParrot
   max_rounds: 5
   timeout: 120  # increased: Nori may need time for multi-step research

@@ -118,6 +118,57 @@
                 <div class="diary-dogear" aria-hidden="true"></div>
             </div>
         </div>
+
+        <!-- ── Weather modal (iPhone Weather-style with animated bg) ─────── -->
+        <div class="weather-modal hidden" id="weatherModal" aria-hidden="true">
+            <div class="weather-bg" id="weatherBg" data-condition="sunny">
+                <div class="wx-fx wx-fx-sun"></div>
+                <div class="wx-fx wx-fx-clouds"></div>
+                <div class="wx-fx wx-fx-rain"></div>
+                <div class="wx-fx wx-fx-snow"></div>
+                <div class="wx-fx wx-fx-fog"></div>
+                <div class="wx-fx wx-fx-lightning"></div>
+            </div>
+            <div class="weather-panel">
+                <button class="weather-close" id="weatherClose" aria-label="Close">&times;</button>
+
+                <header class="weather-header">
+                    <div class="weather-location" id="weatherLocation">—</div>
+                    <div class="weather-temp" id="weatherTemp">—°</div>
+                    <div class="weather-condition" id="weatherCondition">—</div>
+                    <div class="weather-feels" id="weatherFeels">Feels like —°</div>
+                </header>
+
+                <div class="weather-card">
+                    <div class="weather-card-title">HOURLY FORECAST</div>
+                    <div class="weather-hourly" id="weatherHourly"></div>
+                </div>
+
+                <div class="weather-card">
+                    <div class="weather-card-title">7-DAY FORECAST</div>
+                    <div class="weather-forecast" id="weatherForecast"></div>
+                </div>
+
+                <div class="weather-meta">
+                    <div class="weather-meta-cell">
+                        <div class="weather-meta-label">SUNRISE</div>
+                        <div class="weather-meta-value" id="weatherSunrise">—</div>
+                    </div>
+                    <div class="weather-meta-cell">
+                        <div class="weather-meta-label">SUNSET</div>
+                        <div class="weather-meta-value" id="weatherSunset">—</div>
+                    </div>
+                    <div class="weather-meta-cell">
+                        <div class="weather-meta-label">HUMIDITY</div>
+                        <div class="weather-meta-value" id="weatherHumidity">—</div>
+                    </div>
+                    <div class="weather-meta-cell">
+                        <div class="weather-meta-label">WIND</div>
+                        <div class="weather-meta-value" id="weatherWind">—</div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- Toast notifications (top-right) -->
@@ -323,8 +374,19 @@
                     </div>
                 </div>
                 <div class="config-section">
-                    <h3 class="section-title danger">Danger Zone</h3>
-                    <button class="btn btn-danger" id="btnClearMemory">Clear Memory</button>
+                    <h3 class="section-title">Clear recent memory</h3>
+                    <p class="config-hint" style="margin:0 0 10px;">
+                        Wipes Mocha's short-term context so she forgets what was just said.
+                        "All" also clears long-term facts and the diary. The audit log is never touched.
+                    </p>
+                    <div class="clear-mem-row">
+                        <button class="btn btn-sm" data-clear-window="1h">1h</button>
+                        <button class="btn btn-sm" data-clear-window="3h">3h</button>
+                        <button class="btn btn-sm" data-clear-window="1d">1 day</button>
+                        <button class="btn btn-sm" data-clear-window="1w">1 week</button>
+                        <button class="btn btn-danger btn-sm" data-clear-window="all">All</button>
+                    </div>
+                    <div class="clear-mem-status" id="clearMemStatus"></div>
                 </div>
             </div>
         </div>
@@ -517,6 +579,7 @@
 <script src="/static/js/presentation.js"></script>
 <script src="/static/js/theme-capture.js"></script>
 <script src="/static/js/diary.js"></script>
+<script src="/static/js/weather.js"></script>
 <script src="/static/js/app.js"></script>
 <script type="module" src="/static/js/vrm-renderer.js"></script>
 <script type="module" src="/static/js/animation-controller.js"></script>

@@ -28,7 +28,7 @@
     // Actions that are interactive / user-initiated and shouldn't be held
     // back for speech-sync. show_diary is one — user said "open my diary",
     // they want the modal now, not after an 8s safety timeout.
-    const _IMMEDIATE_ACTIONS = new Set(['show_diary']);
+    const _IMMEDIATE_ACTIONS = new Set(['show_diary', 'show_weather']);
 
     function intercept(msg) {
         // Bypass the queue entirely for interactive commands.
@@ -130,6 +130,16 @@
             }
             console.log('[UIOrchestrator] dispatching show_diary', msg);
             window.Diary.open(msg.date || null);
+            return;
+        }
+        // Same dedicated-handler pattern for the weather modal.
+        if (msg && msg.action === 'show_weather') {
+            if (!window.Weather) {
+                console.error('[UIOrchestrator] show_weather received but window.Weather is undefined — weather.js may not have loaded');
+                return;
+            }
+            console.log('[UIOrchestrator] dispatching show_weather', msg);
+            window.Weather.open(msg.payload || {});
             return;
         }
         if (window._presentation) {

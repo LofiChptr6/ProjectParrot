@@ -611,4 +611,30 @@ while you speak.
 {action_block}
 """
 
+    # ── Per-user name awareness ────────────────────────────────────────────
+    # If we know the user's name, drop it in. If we don't (fresh anon, no
+    # display_name set), inject a single nudge so Mocha asks once and
+    # remembers via the set_display_name tool. Done at the very end so it
+    # doesn't bust the prefix cache for users whose name we already know.
+    if user_id:
+        try:
+            from auth.db import get_user_by_id
+            row = get_user_by_id(user_id)
+            display_name = (row or {}).get("display_name") if row else None
+            if display_name and display_name.strip():
+                prompt += (
+                    f"\n\n### About this person\n"
+                    f"Their name is **{display_name.strip()}**. Use it naturally.\n"
+                )
+            else:
+                prompt += (
+                    "\n\n### About this person\n"
+                    "You don't know their name yet — this might be your first conversation. "
+                    "Ask once, naturally, early in the chat. The moment they tell you, "
+                    "call the `set_display_name` tool with `name=...` so you'll remember "
+                    "next time.\n"
+                )
+        except Exception:
+            pass
+
     return prompt

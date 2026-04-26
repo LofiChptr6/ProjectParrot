@@ -287,6 +287,28 @@ async def delete_page(date: str, user_id: Optional[str] = None) -> bool:
     return await asyncio.to_thread(_delete_page_sync, date, user_id)
 
 
+def _delete_all_pages_sync(user_id: Optional[str] = None) -> int:
+    """Delete every diary page for a user (JSON files + Chroma entries).
+
+    Returns the number of dates deleted. Used by the "Clear Memory: All" path.
+    """
+    dates = _list_dates_sync(user_id)
+    n = 0
+    for d in dates:
+        try:
+            if _delete_page_sync(d, user_id):
+                n += 1
+        except Exception as exc:
+            log.warning("delete_all: failed on %s: %s", d, exc)
+    log.info("diary: delete_all_pages user_id=%s removed=%d", user_id, n)
+    return n
+
+
+async def delete_all_pages(user_id: Optional[str] = None) -> int:
+    """Async wrapper around _delete_all_pages_sync."""
+    return await asyncio.to_thread(_delete_all_pages_sync, user_id)
+
+
 async def list_dates(user_id: Optional[str] = None) -> list[str]:
     return await asyncio.to_thread(_list_dates_sync, user_id)
 

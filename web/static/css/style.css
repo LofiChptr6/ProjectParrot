@@ -1707,3 +1707,289 @@ body.mocha-away::before {
 }
 body.mocha-away .mocha-away-pill { display: block; }
 .mocha-away-pill:hover { background: rgba(40, 40, 52, 0.95); }
+
+/* ── Clear Memory window picker ─────────────────────────────────────── */
+.clear-mem-row {
+    display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px;
+}
+.clear-mem-row .btn { min-width: 60px; }
+.clear-mem-status {
+    margin-top: 10px; font-size: 12px; color: var(--muted);
+    min-height: 16px;
+}
+
+/* ── Weather modal — iPhone-style with animated bg ────────────────────── */
+/*
+ * Markup: #weatherModal > #weatherBg + .weather-panel.
+ *   #weatherBg has [data-condition="sunny|cloudy|rain|snow|fog|thunderstorm"]
+ *   driving which .wx-fx-* layer is visible.
+ *   .weather-panel sits above with translucent dark cards.
+ */
+.weather-modal {
+    position: fixed; inset: 0; z-index: 150;
+    display: flex; align-items: stretch; justify-content: center;
+    background: rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(2px);
+    overflow: hidden;
+    animation: wx-fade-in 220ms ease-out;
+}
+.weather-modal.hidden { display: none; }
+@keyframes wx-fade-in { from { opacity: 0; } to { opacity: 1; } }
+
+/* Background layer + condition-specific FX */
+.weather-bg {
+    position: absolute; inset: 0; z-index: 0;
+    background: linear-gradient(180deg, #1d3a6e 0%, #0c1a2e 100%);
+    overflow: hidden;
+    transition: background 600ms ease;
+}
+.weather-bg[data-condition="sunny"] {
+    background: linear-gradient(180deg, #5fbafa 0%, #1f5d9c 70%, #0c2a4a 100%);
+}
+.weather-bg[data-condition="cloudy"] {
+    background: linear-gradient(180deg, #6b7d99 0%, #2c3a52 100%);
+}
+.weather-bg[data-condition="rain"] {
+    background: linear-gradient(180deg, #3b4a5c 0%, #15202c 100%);
+}
+.weather-bg[data-condition="snow"] {
+    background: linear-gradient(180deg, #b9c8d8 0%, #5a6b80 100%);
+}
+.weather-bg[data-condition="fog"] {
+    background: linear-gradient(180deg, #7c8693 0%, #3d4654 100%);
+}
+.weather-bg[data-condition="thunderstorm"] {
+    background: linear-gradient(180deg, #2a2f3e 0%, #0a0c14 100%);
+}
+
+.wx-fx { position: absolute; inset: 0; pointer-events: none; opacity: 0; }
+.weather-bg[data-condition="sunny"] .wx-fx-sun,
+.weather-bg[data-condition="cloudy"] .wx-fx-clouds,
+.weather-bg[data-condition="rain"] .wx-fx-rain,
+.weather-bg[data-condition="snow"] .wx-fx-snow,
+.weather-bg[data-condition="fog"] .wx-fx-fog,
+.weather-bg[data-condition="thunderstorm"] .wx-fx-rain,
+.weather-bg[data-condition="thunderstorm"] .wx-fx-lightning {
+    opacity: 1;
+}
+
+/* Sun: warm radial glow upper-right + slow pulsing halo */
+.wx-fx-sun {
+    background: radial-gradient(circle at 75% 18%,
+        rgba(255, 220, 130, 0.85) 0%,
+        rgba(255, 200, 100, 0.4) 18%,
+        transparent 38%);
+}
+.wx-fx-sun::before {
+    content: ''; position: absolute; top: 8%; right: 18%;
+    width: 140px; height: 140px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(255, 240, 180, 0.55), transparent 70%);
+    animation: wx-sun-pulse 4.5s ease-in-out infinite;
+}
+@keyframes wx-sun-pulse {
+    0%, 100% { transform: scale(1); opacity: 0.8; }
+    50%      { transform: scale(1.15); opacity: 1; }
+}
+
+/* Clouds: drifting silhouettes (3 layers, different speeds + sizes) */
+.wx-fx-clouds::before, .wx-fx-clouds::after {
+    content: ''; position: absolute; left: -40%; right: -40%;
+    height: 90px; border-radius: 50%;
+    background: radial-gradient(ellipse, rgba(255,255,255,0.18) 0%, transparent 60%),
+                radial-gradient(ellipse at 30% 60%, rgba(255,255,255,0.22) 0%, transparent 50%),
+                radial-gradient(ellipse at 70% 50%, rgba(255,255,255,0.15) 0%, transparent 55%);
+    background-size: 280px 90px;
+    background-repeat: repeat-x;
+    animation: wx-cloud-drift 38s linear infinite;
+}
+.wx-fx-clouds::before { top: 10%; }
+.wx-fx-clouds::after  { top: 32%; height: 60px; opacity: 0.6;
+    animation-duration: 64s; animation-direction: reverse; }
+@keyframes wx-cloud-drift {
+    from { transform: translateX(0); }
+    to   { transform: translateX(280px); }
+}
+
+/* Rain: vertical streaks via repeating linear gradient + bg-position scroll */
+.wx-fx-rain {
+    background-image: repeating-linear-gradient(
+        100deg,
+        transparent 0 8px,
+        rgba(180, 200, 230, 0.55) 8px 9px,
+        transparent 9px 16px);
+    background-size: 100% 30px;
+    animation: wx-rain-fall 0.6s linear infinite;
+}
+@keyframes wx-rain-fall {
+    from { background-position: 0 0; }
+    to   { background-position: 0 30px; }
+}
+
+/* Snow: similar but bigger, slower, white circles */
+.wx-fx-snow {
+    background-image:
+        radial-gradient(circle at 10% 10%, white 1.4px, transparent 2px),
+        radial-gradient(circle at 30% 40%, white 1.2px, transparent 1.8px),
+        radial-gradient(circle at 60% 20%, white 1.6px, transparent 2.2px),
+        radial-gradient(circle at 80% 60%, white 1.2px, transparent 1.8px),
+        radial-gradient(circle at 45% 80%, white 1.4px, transparent 2px),
+        radial-gradient(circle at 90% 30%, white 1.2px, transparent 1.8px);
+    background-size: 200px 200px;
+    animation: wx-snow-fall 9s linear infinite;
+    opacity: 0.85;
+}
+@keyframes wx-snow-fall {
+    from { background-position: 0 -200px; }
+    to   { background-position: 60px 200px; }
+}
+
+/* Fog: drifting horizontal bands of soft light, low contrast */
+.wx-fx-fog {
+    background: linear-gradient(180deg,
+        transparent 0%,
+        rgba(220, 220, 230, 0.18) 30%,
+        rgba(220, 220, 230, 0.28) 50%,
+        rgba(220, 220, 230, 0.18) 70%,
+        transparent 100%);
+    filter: blur(2px);
+    animation: wx-fog-drift 18s ease-in-out infinite;
+}
+@keyframes wx-fog-drift {
+    0%, 100% { transform: translateX(-3%); opacity: 0.7; }
+    50%      { transform: translateX(3%);  opacity: 1.0; }
+}
+
+/* Thunderstorm: occasional white flash */
+.wx-fx-lightning {
+    background: white;
+    mix-blend-mode: screen;
+    animation: wx-lightning 6s linear infinite;
+}
+@keyframes wx-lightning {
+    0%, 92%, 100% { opacity: 0; }
+    93%           { opacity: 0.7; }
+    94%           { opacity: 0.05; }
+    95%           { opacity: 0.85; }
+    96%           { opacity: 0; }
+}
+
+/* Panel layout */
+.weather-panel {
+    position: relative; z-index: 1;
+    width: min(560px, 100%);
+    margin: auto 0;
+    max-height: 100dvh;
+    padding: 28px 24px 32px;
+    color: #fff;
+    overflow-y: auto;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+.weather-close {
+    position: absolute; top: 14px; right: 18px;
+    background: rgba(255, 255, 255, 0.15);
+    color: #fff; border: none; cursor: pointer;
+    width: 32px; height: 32px; border-radius: 50%;
+    font-size: 22px; line-height: 1;
+    -webkit-appearance: none; appearance: none;
+    backdrop-filter: blur(8px);
+    transition: background 150ms ease;
+}
+.weather-close:hover { background: rgba(255, 255, 255, 0.28); }
+
+.weather-header { text-align: center; padding: 24px 0 18px; }
+.weather-location {
+    font-size: 28px; font-weight: 400; letter-spacing: -0.01em;
+    margin-bottom: 4px;
+}
+.weather-temp {
+    font-size: 88px; font-weight: 200; letter-spacing: -0.04em;
+    line-height: 1; margin: 4px 0;
+}
+.weather-condition {
+    font-size: 18px; font-weight: 400; opacity: 0.92;
+    margin-bottom: 4px;
+}
+.weather-feels { font-size: 14px; opacity: 0.78; }
+
+.weather-card {
+    background: rgba(255, 255, 255, 0.14);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 14px;
+    padding: 14px 14px 16px;
+    margin-top: 14px;
+    backdrop-filter: blur(10px);
+}
+.weather-card-title {
+    font-size: 11px; font-weight: 600; letter-spacing: 0.08em;
+    opacity: 0.7;
+    padding-bottom: 10px; border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+    margin-bottom: 12px;
+}
+
+/* Hourly strip — horizontal scroll */
+.weather-hourly {
+    display: flex; gap: 4px; overflow-x: auto;
+    padding: 4px 2px 2px;
+    scrollbar-width: none;
+}
+.weather-hourly::-webkit-scrollbar { display: none; }
+.wx-hour {
+    flex: 0 0 auto; width: 48px;
+    text-align: center; padding: 6px 0;
+}
+.wx-hour-time { font-size: 12px; opacity: 0.78; }
+.wx-hour-icon { font-size: 22px; margin: 6px 0 4px; }
+.wx-hour-temp { font-size: 16px; font-weight: 500; }
+
+/* 7-day forecast list */
+.weather-forecast { display: flex; flex-direction: column; gap: 4px; }
+.wx-day {
+    display: grid;
+    grid-template-columns: 70px 36px 32px 1fr 32px;
+    align-items: center; gap: 10px;
+    padding: 8px 4px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.wx-day:last-child { border-bottom: none; }
+.wx-day-name { font-size: 15px; }
+.wx-day-icon { font-size: 20px; text-align: center; }
+.wx-day-low  { font-size: 14px; opacity: 0.65; text-align: right; }
+.wx-day-high { font-size: 14px; text-align: right; }
+.wx-day-bar {
+    height: 4px; border-radius: 2px;
+    background: rgba(255, 255, 255, 0.18);
+    overflow: hidden;
+}
+.wx-day-bar span {
+    display: block; height: 100%;
+    background: linear-gradient(90deg, #6cd1ff, #f9d35f, #ff8c5a);
+    width: 70%;  /* static for v1 — could be data-driven later */
+}
+
+/* Sunrise/sunset/humidity/wind 2x2 grid */
+.weather-meta {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 10px; margin-top: 14px;
+}
+.weather-meta-cell {
+    background: rgba(255, 255, 255, 0.14);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 12px;
+    padding: 12px 14px;
+    backdrop-filter: blur(10px);
+}
+.weather-meta-label {
+    font-size: 11px; letter-spacing: 0.08em; opacity: 0.7;
+    margin-bottom: 4px;
+}
+.weather-meta-value { font-size: 22px; font-weight: 400; }
+
+.wx-empty { font-size: 13px; opacity: 0.6; padding: 8px 0; }
+
+/* Phone tweaks */
+@media (max-width: 600px), (orientation: portrait) and (max-width: 900px) {
+    .weather-panel { padding: 20px 16px 24px; }
+    .weather-temp { font-size: 72px; }
+    .weather-location { font-size: 22px; }
+    .wx-day { grid-template-columns: 60px 30px 28px 1fr 28px; gap: 8px; }
+}

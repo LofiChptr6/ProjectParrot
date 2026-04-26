@@ -683,11 +683,24 @@ async def _idle_heartbeat_loop():
         await asyncio.sleep(max(wait, 5))
 
 
-async def _handle_autonomy_hello():
-    """Invoke the autonomy engine's reconnect-hello composer (fail-silent)."""
+async def _handle_autonomy_hello(user_id: str | None = None):
+    """Invoke the autonomy engine's reconnect-hello composer (fail-silent).
+
+    For brand-new anon users (account_type='anon' AND display_name IS NULL)
+    we flag `is_new_user=True` so autonomy fires a 'first_hello' utterance
+    that bypasses the reconnect debounce and asks the user's name.
+    """
+    is_new_user = False
+    if user_id:
+        try:
+            row = await asyncio.to_thread(_auth_get_user_by_id, user_id)
+            is_new_user = bool(row) and (row.get("account_type") == "anon") \
+                          and not (row.get("display_name") or "").strip()
+        except Exception:
+            pass
     try:
         from autonomy.engine import handle_client_hello
-        await handle_client_hello()
+        await handle_client_hello(user_id=user_id, is_new_user=is_new_user)
     except Exception as exc:
         log.warning("autonomy hello failed: %s", exc)
 
@@ -2562,17 +2575,42 @@ async def admin_theme_reload_stylesheets():
 
 
 @app.post("/admin/clear-memory")
-async def admin_clear_memory():
-    """Wipe the mem0 memory collection for the primary user (irreversible)."""
+async def admin_clear_memory(request: Request):
+    """Wipe Mocha's recent context for the caller.
+
+    Query param: ?window=1h|3h|1d|1w|all (default 1h).
+
+    All windows wipe the in-process short-term ring buffers — that's what
+    Mocha's prompt actually reads from, so this is the right semantic for
+    "she forgets what we just talked about" at any window.
+
+    `all` additionally wipes the long-term mem0 facts and the user's diary.
+    The PG llm_call_log is never touched (it's a write-only audit trail).
+    """
+    window = (request.query_params.get("window") or "1h").lower()
+    if window not in ("1h", "3h", "1d", "1w", "all"):
+        raise HTTPException(status_code=400, detail="window must be one of 1h, 3h, 1d, 1w, all")
+
+    uid = _extract_user_id(request) or _ANON_USER_ID
+
     try:
-        from memory import mem0_store
-        await mem0_store.clear()
-        log.info("Memory cleared via admin endpoint")
-        # Notify all monitor clients
-        await _broadcast_monitor({"type": "memory_cleared"})
-        return JSONResponse({"status": "cleared"})
+        # 1) Always: drop in-process short-term context.
+        _user_histories[uid].clear()
+        _user_chat_logs[uid].clear()
+        log.info("clear-memory window=%s uid=%s (short-term wiped)", window, uid[:8])
+
+        # 2) "all" → also wipe long-term layers for this user.
+        if window == "all":
+            from memory import mem0_store, diary_store
+            await mem0_store.clear(uid)
+            await diary_store.delete_all_pages(uid)
+            log.info("clear-memory window=all uid=%s (mem0 + diary wiped)", uid[:8])
+
+        # Notify monitor clients so the UI can show a status pill.
+        await _broadcast_monitor({"type": "memory_cleared", "window": window})
+        return JSONResponse({"status": "cleared", "window": window, "user_id": uid})
     except Exception as exc:
-        log.error("Failed to clear memory: %s", exc)
+        log.error("Failed to clear memory (window=%s): %s", window, exc)
         raise HTTPException(status_code=500, detail=str(exc))
 
 
@@ -3566,7 +3604,7 @@ async def live_ws(ws: WebSocket):
                         # Another session is already active; this one starts
                         # passive. Frontend will hide the 3D model + mute.
                         await _send_presence(_ws_user_id, sid, active=False)
-                    asyncio.create_task(_handle_autonomy_hello())
+                    asyncio.create_task(_handle_autonomy_hello(user_id=_ws_user_id))
 
                 elif mtype == "user_context":
                     # Browser-reported tz/locale/coords. Debounced write to

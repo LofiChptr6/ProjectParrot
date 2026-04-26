@@ -2479,22 +2479,52 @@ function setupAdminButtons() {
     if (btnTTSProc) btnTTSProc.addEventListener('click',  () => _restartService('tts', svcStatusEl));
     if (btnBoth)    btnBoth.addEventListener('click',     () => _restartService('all', svcStatusEl));
 
-    // Clear memory
-    const btnClearMemory = document.getElementById('btnClearMemory');
-    if (btnClearMemory) {
-        btnClearMemory.addEventListener('click', async () => {
-            if (!confirm('Clear all memory? This cannot be undone.')) return;
-            btnClearMemory.disabled = true;
+    // Clear memory — windowed (1h / 3h / 1d / 1w / all). Always wipes
+    // Mocha's short-term ring buffer; "all" also wipes mem0 facts + diary.
+    // Local UI (chat panels, thinking log) clears on success.
+    document.querySelectorAll('[data-clear-window]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const window_ = btn.dataset.clearWindow;
+            if (window_ === 'all' && !confirm(
+                'Wipe ALL memory for this account?\n\n' +
+                'This clears short-term context, long-term facts, and the diary. ' +
+                'The audit log is unaffected. Cannot be undone.'
+            )) return;
+
+            const status = document.getElementById('clearMemStatus');
+            const allBtns = document.querySelectorAll('[data-clear-window]');
+            allBtns.forEach(b => b.disabled = true);
             try {
-                await fetch(_bridgeHttpUrl('/admin/clear-memory'), { method: 'POST' });
-                if (debugBar) debugBar.textContent = 'Memory cleared';
+                const url = _bridgeHttpUrl('/admin/clear-memory') + '?window=' + encodeURIComponent(window_);
+                const r = await fetch(url, {
+                    method: 'POST',
+                    headers: { ...authHeaders() },
+                });
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+
+                // Clear visible chat surfaces locally so it feels real instantly.
+                const chatLog = document.getElementById('chatLog');
+                if (chatLog) chatLog.innerHTML = '';
+                const gchatMsgs = document.getElementById('gchatMessages');
+                if (gchatMsgs) gchatMsgs.innerHTML = '';
+                const thinking = document.getElementById('thinkingPanel');
+                if (thinking) thinking.innerHTML = '';
+
+                const label = window_ === 'all' ? 'all memory wiped' : `memory cleared (${window_})`;
+                if (status) {
+                    status.textContent = label;
+                    setTimeout(() => { if (status) status.textContent = ''; }, 4000);
+                }
+                if (debugBar) debugBar.textContent = label;
             } catch (e) {
                 console.error('Memory clear failed:', e);
-                if (debugBar) debugBar.textContent = 'Memory clear failed';
+                if (status) status.textContent = 'clear failed: ' + (e.message || e);
+                if (debugBar) debugBar.textContent = 'memory clear failed';
+            } finally {
+                allBtns.forEach(b => b.disabled = false);
             }
-            btnClearMemory.disabled = false;
         });
-    }
+    });
 
     // Shiro toggle
     const btnShiroToggle = document.getElementById('btnShiroToggle');
