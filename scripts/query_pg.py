@@ -13,7 +13,7 @@ import asyncio
 
 import asyncpg
 
-DSN = "postgresql://parrot:parrot@127.0.0.1:5432/parrot"
+DSN = "postgresql://mocha:5369@127.0.0.1:5432/mocha"
 
 RECENT_CONVERSATIONS = """
 SELECT id, created_at, triggered_by, source,

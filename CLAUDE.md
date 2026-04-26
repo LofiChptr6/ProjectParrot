@@ -9,7 +9,7 @@ ProjectParrot is a real-time conversational AI system with three agents:
 
 Every LLM call is logged to PostgreSQL for offline analysis.
 
-- **DSN**: `postgresql://parrot:parrot@127.0.0.1:5432/parrot`
+- **DSN**: `postgresql://mocha:5369@127.0.0.1:5432/mocha`
 - **Table**: `llm_call_log`
 
 ### Table Schema
@@ -125,30 +125,28 @@ LIMIT 5;
 | Shiro agent | `shiro/agent.py` |
 | Shiro analyzer | `shiro/analyzer.py` |
 | Shiro PG reader | `shiro/pg_reader.py` |
-| Gesture service | `gesture/service.py` |
-| SMPL-X → VRM retarget | `gesture/retarget.py` |
+| Animation functions | `character/animation_functions.csv` |
+| VRM animation controller | `web/static/js/animation-controller.js` |
 | Central config | `config.yaml` |
 
-## Gesture Service (AI Motion Generation)
+## Animation / Body Language
 
-The gesture service uses EMAGE (CVPR 2024) to generate upper-body motion from speech audio.
+The character's body language is driven by a clip-based animation system. The LLM
+picks a gesture by name (e.g. `speak_pointing`, `wave`, `dance_loop`); the web
+app's animation controller plays the corresponding pre-converted FBX clip via
+per-bone quaternion retargeting to VRM.
 
-- **Port:** 8005
-- **Model:** Pre-trained EMAGE from `H-Liu1997/emage_audio` (HuggingFace)
-- **Input:** WAV audio (from TTS)
-- **Output:** 13 upper-body bone quaternions at 30fps (Spine, Chest, UpperChest, Neck, Shoulders, Head, Arms, Hands)
-- **Integration:** Bridge calls gesture service after TTS, sends binary motion data to Unity alongside clip fallback
-- **Unity:** `ParrotBridge.cs` applies bone rotations via `Transform.localRotation` when `motion_b64` is present, falls back to clip-based `ApplyGesture()` otherwise
-
-### Motion data wire format
-
-Base64-encoded binary: `T frames × 13 bones × 4 floats (qx,qy,qz,qw)`, float32 little-endian.
-Bone order: Spine, Chest, UpperChest, Neck, LeftShoulder, RightShoulder, Head, LeftUpperArm, RightUpperArm, LeftLowerArm, RightLowerArm, LeftHand, RightHand.
-
-### Vendor dependency
-
-EMAGE model code lives in `vendor/PantoMatrix/` (git-ignored, cloned at build time).
-Clone: `git clone https://github.com/PantoMatrix/PantoMatrix.git vendor/PantoMatrix`
+- **Clip roster:** `character/animation_functions.csv` — 76 functions, each
+  flagged looping or oneshot, with Start/Loop/End phase clips for stateful
+  gestures (dance_loop, sing, seiza, etc.).
+- **Controller:** `web/static/js/animation-controller.js` — state machine
+  (IDLE → STARTING → LOOPING → ENDING → IDLE for loopable; IDLE → PLAYING_ONCE
+  → IDLE for oneshot). 250 ms crossfade between clips. Random idle fidget every
+  8–15 s.
+- **Default idle:** `idle_breathe` (looped).
+- **Lip-sync:** handled by `stt/viseme_map.py` — phoneme timestamps from the
+  STT `/align` endpoint map to 5-channel viseme weights (aa, ih, ou, ee, oh)
+  and drive VRM mouth blendshapes client-side.
 
 ## Conventions
 

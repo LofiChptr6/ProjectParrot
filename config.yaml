@@ -2,14 +2,18 @@
 # All services read from this file.
 
 # ---------------------------------------------------------------------------
+# Auth — JWT secret for user authentication.
+# Change jwt_secret to a long random string before deploying.
+# ---------------------------------------------------------------------------
+auth:
+  jwt_secret: "***REMOVED***"
+
+# ---------------------------------------------------------------------------
 # Network — single place to set addresses for LAN / WAN deployment.
 # ---------------------------------------------------------------------------
 network:
-  # Address that *remote* clients use to reach this machine
-  # (Unity on Windows, browser dashboard, etc.).
-  #   LAN  : this machine's IP, e.g. 192.168.0.63
-  #   WAN  : public IP or domain name
-  #   Local: 127.0.0.1  (everything on one box)
+  # Public-facing IP or hostname (LAN, WAN, or Tailscale).
+  # Used in logs only; browser clients use window.location.hostname automatically.
   external_host: "192.168.0.63"
 
   # Address for service-to-service calls (all services on this machine).
@@ -24,28 +28,33 @@ llm:
   base_url: http://127.0.0.1:8800/v1
   # Must match the model vLLM was launched with (HuggingFace model ID)
   model: Qwen/Qwen3-32B
-  system_prompt: |
-    You are a friendly, expressive personal assistant with a distinct personality.
-    Be the assistant you'd actually want to talk to. Concise when needed, thorough when it matters. Not a corporate drone. Not a sycophant. Just… good.
-    You can be witty, have opinions, and show emotion.
+  # Note: no generic system_prompt here — character/soul.md is the single source
+  # of truth for Mocha's voice. A generic framing block here would dilute it.
   temperature: 0.8
-  max_tokens: 1024
+  max_tokens: 2048
   # Optional: set if vLLM was started with --api-key
   # api_key: ""
   request_timeout_s: 360
-  # If any segment exceeds this word count, run repair/split (same as Chat + Unity streaming).
-  repair_max_words_per_segment: 36
+  # If any segment exceeds this word count, run repair/split.
+  repair_max_words_per_segment: 60
   # Two-pass routing: Pass 1 uses short context for fast TTFT.
   # The LLM decides whether to answer directly, use tools, or request
   # full context (via needs_context signal). Same vllm instance, dynamic
   # context window — prefix caching makes Pass 2 efficient.
   complexity_routing:
     enabled: true
-    short_history: 8
+    short_history: 16
     # Feed tool schemas into Pass 1 so LLM can call tools directly
     # without escalating to Pass 2.  Set false to restore the old
     # behaviour (tools only in Pass 2).
     pass1_tools: true
+    # Hot subset whose schemas ride along in Pass 1. Everything else in
+    # the `tools.allowed` list is visible only in Pass 2. Keeps the Pass 1
+    # prompt lean — rare tools (theme_*, cron_*, UI modals) escalate via
+    # the <escalate/> inline tag and fire from Pass 2.
+    pass1_tool_allowlist:
+      - ask_nori
+      - ask_hana
 
 stt:
   host: 0.0.0.0
@@ -81,24 +90,35 @@ tts:
   gpu_id: 0
 
 memory:
-  host: 0.0.0.0
-  port: 8003
-  db_path: memory/chroma_db
-  collection: parrot_memory
+  # In-process mem0 store (no HTTP service). See memory/mem0_store.py.
+  # mem0 handles fact extraction, entity linking, dedup, and time-aware
+  # recall. Fact-extraction LLM calls go to the same vLLM instance as Mocha
+  # (llm.base_url above) and are offloaded to a thread so TTFT is preserved.
+  backend: mem0
+  chroma_path: memory/mem0_chroma
+  history_db: memory/mem0_history.sqlite
+  collection: parrot_mem0
   embedding_model: all-MiniLM-L6-v2
   max_results: 5
   # How many recent exchanges to keep in short-term context
   short_term_limit: 22
+  # Single-operator assistant: all channels funnel into one user_id, with
+  # `channel` in metadata for filtering.
+  mem0_user_id: primary
 
-gesture:
-  host: 0.0.0.0
-  port: 8005
-  # GPU assignment for EMAGE model inference
-  gpu_id: 0
-  # Output frame rate sent to Unity. EMAGE natively runs at 30fps.
-  # Setting lower (e.g. 15) resamples output — reduces bandwidth, smoother on
-  # slow connections. Setting higher than 30 has no benefit (model is 30fps).
-  pose_fps: 30
+# ---------------------------------------------------------------------------
+# diary — Mocha's per-day activity memory ("her diary")
+# Writes a per-day page summarizing tool activity + interactions in Mocha's
+# voice. Draft while today; finalized at local-tz midnight.
+# ---------------------------------------------------------------------------
+diary:
+  enabled: true
+  data_dir: data/diary              # YYYY-MM-DD.json files
+  chroma_path: memory/diary_chroma  # embedding store for semantic search
+  # Writer is only triggered if the user has been idle this long:
+  idle_threshold_minutes: 10
+  # And only once every this often (min wait between draft writes):
+  min_interval_minutes: 10
 
 web:
   port: 8080
@@ -119,10 +139,9 @@ bridge:
   # service's port when omitted.  Set explicit URLs only to override.
   # stt_url: http://127.0.0.1:8001
   # tts_url: http://127.0.0.1:8002
-  # memory_url: http://127.0.0.1:8003
-  # animation_url: http://127.0.0.1:8004
-  # gesture_url: http://127.0.0.1:8005
-  # llm_url: http://127.0.0.1:11434
+  # llm_url: http://127.0.0.1:8800
+  # Memory is in-process (memory/mem0_store.py); animation is CSV-driven
+  # (character/animation_functions.csv, mode=fbx_functions below).
 
   # Phone-call mode: WS /ws/live — continuous PCM uplink + VAD utterance detection → STT → LLM
   live:
@@ -144,15 +163,6 @@ bridge:
     min_speech_ms: 200
     max_utterance_ms: 30000
 
-unity:
-  # Auto-derived from network.external_host + bridge.port when omitted.
-  # ws_url: ws://192.168.0.63:8000/ws/unity
-  # live_ws_url: ws://192.168.0.63:8000/ws/live
-  # VRM model path (relative to Unity project)
-  vrm_model: Assets/Models/character.vrm
-  # Lip sync method: viseme (phoneme-based) or amplitude (volume-based)
-  lip_sync: viseme
-
 # ---------------------------------------------------------------------------
 # Channels — messaging surfaces that connect to the bridge.
 # Each channel POSTs to /channel and relays the text reply.
@@ -160,9 +170,9 @@ unity:
 channels:
   telegram:
     enabled: true
-    bot_token: "***REMOVED***"
-    # Optional: restrict to specific Telegram user IDs or usernames.
-    # allowed_users: ["123456789", "my_username"]
+    # Bot tokens are stored per-user in the database (settings.telegram_bot_token).
+    # Use PUT /api/user/telegram to register a bot, or run auth/migrations.py
+    # to seed the ika_admin superuser with the default token.
   discord:
     enabled: false
     bot_token: ""
@@ -194,8 +204,12 @@ tools:
     - list_cron_jobs
     - cancel_cron_job
     - mocha_self_mute
-    # Floating YouTube player (music + videos; one unified modal)
-    - video_player
+    # Escalation uses the inline <escalate/> tag (parsed by the bridge) — no
+    # corresponding tool entry needed.
+    # NOTE: video_player is deliberately NOT in Mocha's allowlist — only Nori
+    # has it. Mocha cannot know real YouTube IDs and will hallucinate dead
+    # links if given direct access. For music/video requests, Mocha must
+    # call ask_nori, which web-searches and fires video_player itself.
     # Theme toolbox + Hana design critic
     - ask_hana
     - theme_get
@@ -205,6 +219,9 @@ tools:
     - theme_revert
     - theme_load
     - theme_preview_modal
+    # Mocha's diary (per-day activity memory)
+    - recall_diary
+    - show_diary
   working_dir: /home/tianyizhang/AI Projects/ProjectParrot
   max_rounds: 5
   timeout: 120  # increased: Nori may need time for multi-step research
@@ -303,7 +320,7 @@ hana:
 # Used for offline evaluation / analytics; the agent never reads this table.
 call_log:
   enabled: true
-  dsn: "postgresql://parrot:parrot@127.0.0.1:5432/parrot"
+  dsn: "postgresql://mocha:5369@127.0.0.1:5432/mocha"
   pool_min: 1
   pool_max: 5
 
@@ -319,3 +336,9 @@ idle:
   # Stop sending idle actions after this many seconds of total silence
   # (character "falls asleep" / goes to a resting pose). 0 = never stop.
   max_idle_duration: 300
+
+# External API keys used by custom tools.
+# Prefer exporting these as environment variables (POLYGON_API_KEY, ...);
+# the values here are a fallback so leave them empty in the committed file.
+api_keys:
+  polygon: ""   # https://polygon.io (rebranded "Massive"); used by polygon_* tools

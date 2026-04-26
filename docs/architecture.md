@@ -51,11 +51,11 @@
  8000   Bridge             HTTP/WS    Central hub — routes everything
  8001   STT (Whisper)      HTTP/WS    Speech-to-text + forced alignment
  8002   TTS (F5-TTS)       HTTP       Text-to-speech (zero-shot clone)
- 8003   Memory (ChromaDB)  HTTP       Semantic memory store/query
- 8004   Animation VecDB    HTTP       Action text -> clip name lookup
- 8005   Gesture (EMAGE)    HTTP       Audio -> upper-body bone quaternions
  8800   vLLM               HTTP       LLM inference (OpenAI-compatible)
  5432   PostgreSQL         TCP        Write-only call log analytics
+
+ Memory:    in-process (mem0 + local Chroma) inside bridge
+ Animation: in-process (fbx_functions CSV) inside bridge
 ```
 
 ---
@@ -818,7 +818,7 @@
        |
        v
   +----+---+
-  | PG     |    DSN: postgresql://parrot:parrot@127.0.0.1:5432/parrot
+  | PG     |    DSN: postgresql://mocha:5369@127.0.0.1:5432/mocha
   | :5432  |    Table: llm_call_log
   +--------+
 
