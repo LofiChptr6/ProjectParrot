@@ -2106,3 +2106,220 @@ body.mocha-away .mocha-away-pill { display: block; }
     .weather-location { font-size: 22px; }
     .wx-day { grid-template-columns: 60px 30px 28px 1fr 28px; gap: 8px; }
 }
+
+/* ── Settings → Avatar tab ─────────────────────────────────────────────── */
+.avatar-section {
+    margin-bottom: 28px;
+}
+.avatar-section:last-child { margin-bottom: 0; }
+.avatar-section .section-title {
+    margin-bottom: 4px;
+}
+
+/* VRM library — small grid of cards. */
+.avatar-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 10px;
+    margin-bottom: 10px;
+}
+.avatar-card {
+    position: relative;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 10px 12px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.15s, transform 0.15s;
+    min-height: 96px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+.avatar-card:hover {
+    border-color: var(--muted);
+    transform: translateY(-1px);
+}
+.avatar-card.active {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent), 0 4px 12px rgba(233, 69, 96, 0.18);
+}
+.avatar-card-icon {
+    font-size: 28px;
+    margin-bottom: 6px;
+    line-height: 1;
+}
+.avatar-card-name {
+    font-size: 12px;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+}
+.avatar-card-badge {
+    display: inline-block;
+    margin-top: 4px;
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: var(--accent);
+    color: #fff;
+    letter-spacing: 0.04em;
+}
+.avatar-card-del {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1;
+    cursor: pointer;
+    -webkit-appearance: none; appearance: none;
+}
+.avatar-card-del:hover { background: var(--accent); color: #fff; }
+
+/* Voice list — horizontal rows with audio preview. */
+.avatar-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 10px;
+}
+.avatar-list-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: border-color 0.15s;
+}
+.avatar-list-row:hover { border-color: var(--muted); }
+.avatar-list-row.active {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent);
+}
+.avatar-list-name {
+    flex: 1;
+    font-size: 13px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.avatar-list-audio {
+    flex: 0 0 auto;
+    height: 28px;
+    max-width: 220px;
+}
+.avatar-list-del {
+    flex: 0 0 auto;
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--muted);
+    font-size: 14px;
+    cursor: pointer;
+    -webkit-appearance: none; appearance: none;
+}
+.avatar-list-del:hover { background: var(--accent); color: #fff; }
+
+/* Drop zone — shared between VRM and voice sections. */
+.avatar-dropzone {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 60px;
+    padding: 14px;
+    border: 1.5px dashed var(--border);
+    border-radius: 10px;
+    color: var(--muted);
+    font-size: 13px;
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s, background 0.15s;
+    text-align: center;
+}
+.avatar-dropzone:hover {
+    border-color: var(--muted);
+    color: var(--text);
+}
+.avatar-dropzone.drag-over {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: rgba(233, 69, 96, 0.06);
+}
+
+/* Soul / Behaviors editors. */
+.avatar-editor {
+    width: 100%;
+    min-height: 280px;
+    padding: 12px;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13px;
+    line-height: 1.5;
+    resize: vertical;
+    -webkit-appearance: none; appearance: none;
+}
+.avatar-editor:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.avatar-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    flex-wrap: wrap;
+}
+.avatar-actions .btn {
+    /* Keep label-as-button (used for the file-drop input wrapper) inline-flex */
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.avatar-saved-pill {
+    display: inline-block;
+    margin-left: 4px;
+    font-size: 11px;
+    color: var(--green);
+    opacity: 0;
+    transition: opacity 200ms ease;
+}
+
+.avatar-empty {
+    padding: 14px;
+    color: var(--muted);
+    font-size: 13px;
+    text-align: center;
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+}
+
+/* Phone tweaks for the Avatar tab — tighter spacing, single-column lists. */
+@media (orientation: portrait) and (max-width: 900px), (max-width: 600px) {
+    .avatar-grid {
+        grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+        gap: 8px;
+    }
+    .avatar-card { min-height: 84px; padding: 10px 6px; }
+    .avatar-card-icon { font-size: 22px; }
+    .avatar-list-audio { max-width: 140px; height: 24px; }
+    .avatar-editor { min-height: 200px; font-size: 12px; }
+    .avatar-section { margin-bottom: 22px; }
+}
+

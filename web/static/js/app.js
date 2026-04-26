@@ -2065,6 +2065,9 @@ function setupTabs() {
                 const badge = document.getElementById('accountBadge');
                 if (badge) badge.style.display = 'none';
             }
+            if (btn.dataset.tab === 'avatar' && window.Avatar) {
+                window.Avatar.refresh();
+            }
         });
     });
 
@@ -2079,6 +2082,9 @@ function setupTabs() {
         }
         if (activeTab?.dataset.tab === 'account') {
             refreshAccountState();
+        }
+        if (activeTab?.dataset.tab === 'avatar' && window.Avatar) {
+            window.Avatar.refresh();
         }
     });
     document.getElementById('btnCloseModal')?.addEventListener('click', () => {

@@ -54,6 +54,10 @@
         <div id="bgLayer"></div>
         <canvas id="canvas3d"></canvas>
         <div class="drop-overlay" id="dropOverlay">Loading…</div>
+        <!-- VRM drag-and-drop on the canvas was removed — uploads now live in
+             Settings → Avatar so users don't accidentally drop the wrong file
+             on Mocha while interacting. The overlay above only shows the
+             initial "Loading…" state and is hidden once the model is in. -->
 
         <!-- Single-active-Mocha presence — visible only when body.mocha-away.
              Click anywhere on the page (or this pill) to claim Mocha back. -->
@@ -252,7 +256,8 @@
         </div>
 
         <nav class="modal-tabs">
-            <button class="modal-tab active" data-tab="pipeline">Pipeline</button>
+            <button class="modal-tab active" data-tab="avatar">Avatar</button>
+            <button class="modal-tab" data-tab="pipeline">Pipeline</button>
             <button class="modal-tab" data-tab="activity">Activity</button>
             <button class="modal-tab" data-tab="crons">Crons</button>
             <button class="modal-tab" data-tab="config">Config</button>
@@ -260,8 +265,75 @@
             <button class="modal-tab" data-tab="account">Account<span class="account-badge" id="accountBadge" style="display:none">!</span></button>
         </nav>
 
+        <!-- ── Avatar tab — per-user library of VRMs + voices, soul + behaviors editors ── -->
+        <div class="modal-content active" id="modal-avatar">
+            <!-- VRMs -->
+            <div class="avatar-section">
+                <h3 class="section-title">VRM Models</h3>
+                <p class="config-hint" style="margin:0 0 10px;">
+                    Your character library. Click any model to make it active —
+                    it swaps in real-time. Drop a <code>.vrm</code> below to add more.
+                </p>
+                <div class="avatar-grid" id="avatarVrmGrid"></div>
+                <div class="avatar-dropzone" id="avatarVrmDrop">
+                    <input type="file" id="avatarVrmFile" accept=".vrm" style="display:none">
+                    <span>Drop .vrm here or click to upload</span>
+                </div>
+            </div>
+
+            <!-- Voices -->
+            <div class="avatar-section">
+                <h3 class="section-title">Reference Voices</h3>
+                <p class="config-hint" style="margin:0 0 10px;">
+                    6–15 second clean clips work best. Each user has their own active voice;
+                    no service restart needed when you switch.
+                </p>
+                <div class="avatar-list" id="avatarVoiceList"></div>
+                <div class="avatar-dropzone" id="avatarVoiceDrop">
+                    <input type="file" id="avatarVoiceFile" accept=".wav,.mp3,.ogg,.m4a" style="display:none">
+                    <span>Drop .wav/.mp3 here or click to upload</span>
+                </div>
+            </div>
+
+            <!-- Soul -->
+            <div class="avatar-section">
+                <h3 class="section-title">Soul (personality)</h3>
+                <p class="config-hint" style="margin:0 0 8px;">
+                    Mocha's character description. Re-read on every reply — no restart.
+                </p>
+                <textarea class="avatar-editor" id="avatarSoulEditor" spellcheck="false"></textarea>
+                <div class="avatar-actions">
+                    <button class="btn btn-sm" id="avatarSoulSave">Save</button>
+                    <button class="btn btn-sm" id="avatarSoulReset" title="Replace with the global default">Reset to default</button>
+                    <label class="btn btn-sm" title="Drop or pick a .md file to replace">
+                        Drop .md
+                        <input type="file" id="avatarSoulFile" accept=".md,.markdown,.txt" style="display:none">
+                    </label>
+                    <span class="avatar-saved-pill" id="avatarSoulSaved"></span>
+                </div>
+            </div>
+
+            <!-- Behaviors -->
+            <div class="avatar-section">
+                <h3 class="section-title">Behaviors</h3>
+                <p class="config-hint" style="margin:0 0 8px;">
+                    Situational rules + animations Mocha applies live. YAML format.
+                </p>
+                <textarea class="avatar-editor" id="avatarBehaviorsEditor" spellcheck="false"></textarea>
+                <div class="avatar-actions">
+                    <button class="btn btn-sm" id="avatarBehaviorsSave">Save</button>
+                    <button class="btn btn-sm" id="avatarBehaviorsReset" title="Replace with the global default">Reset to default</button>
+                    <label class="btn btn-sm" title="Drop or pick a .yaml file to replace">
+                        Drop .yaml
+                        <input type="file" id="avatarBehaviorsFile" accept=".yaml,.yml,.txt" style="display:none">
+                    </label>
+                    <span class="avatar-saved-pill" id="avatarBehaviorsSaved"></span>
+                </div>
+            </div>
+        </div>
+
         <!-- Pipeline tab -->
-        <div class="modal-content active" id="modal-pipeline">
+        <div class="modal-content" id="modal-pipeline">
             <div class="thread-cards">
                 <div class="thread-card" id="thread-uplink">
                     <div class="thread-header"><span class="thread-dot" style="background:#a78bfa"></span> MIC UPLINK</div>
@@ -354,25 +426,8 @@
                         <input type="range" class="config-slider" id="slider-llm-temp" min="0" max="1.5" value="0.8" step="0.05">
                     </div>
                 </div>
-                <div class="config-section">
-                    <h3 class="section-title">TTS</h3>
-                    <div class="config-card">
-                        <label>Reference Voice</label>
-                        <div class="voice-upload" id="voiceUpload">
-                            <p>Drop .wav file or click to upload</p>
-                            <input type="file" id="voiceFile" accept=".wav,.ogg" style="display:none">
-                        </div>
-                    </div>
-                    <button class="btn btn-sm" id="btnRestartTTS">Restart TTS</button>
-                </div>
-                <div class="config-section">
-                    <h3 class="section-title">VRM Model</h3>
-                    <div class="config-card">
-                        <button class="btn btn-sm" id="btnLoadVRM" onclick="document.getElementById('vrmFile').click()">Load VRM</button>
-                        <button class="btn btn-sm" id="btnClearVRM" style="display:none">Clear Model</button>
-                        <input type="file" id="vrmFile" accept=".vrm" style="display:none">
-                    </div>
-                </div>
+                <!-- Reference Voice + VRM controls moved to Settings → Avatar tab. -->
+
                 <div class="config-section">
                     <h3 class="section-title">Services</h3>
                     <div class="config-card toggle-card">
@@ -596,6 +651,7 @@
 <script src="/static/js/theme-capture.js"></script>
 <script src="/static/js/diary.js"></script>
 <script src="/static/js/weather.js"></script>
+<script src="/static/js/avatar.js"></script>
 <script src="/static/js/app.js"></script>
 <script type="module" src="/static/js/vrm-renderer.js"></script>
 <script type="module" src="/static/js/animation-controller.js"></script>

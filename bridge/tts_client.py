@@ -30,7 +30,9 @@ log = logging.getLogger(__name__)
 class TTSEngine(Protocol):
     """Engine protocol — implement this to add a new TTS backend."""
 
-    async def synthesize(self, text: str) -> AsyncIterator[bytes]:  # pragma: no cover
+    async def synthesize(self, text: str, *,
+                         ref_audio_path: str | None = None,
+                         ) -> AsyncIterator[bytes]:  # pragma: no cover
         ...
 
     async def close(self) -> None:  # pragma: no cover
@@ -42,19 +44,27 @@ class F5Engine:
 
     Yields the whole WAV as a single chunk. Preserves the existing service
     contract so we can migrate to streaming engines without touching the bridge.
+
+    `ref_audio_path` (optional) overrides the global reference voice on a
+    per-call basis. The TTS service falls back to its config default when None.
     """
 
     def __init__(self, tts_url: str, timeout_s: float = 30.0) -> None:
         self._tts_url = tts_url.rstrip("/")
         self._http = httpx.AsyncClient(timeout=timeout_s)
 
-    async def synthesize(self, text: str) -> AsyncIterator[bytes]:
+    async def synthesize(self, text: str, *,
+                         ref_audio_path: str | None = None,
+                         ) -> AsyncIterator[bytes]:
         if not text.strip():
             return
+        payload: dict = {"text": text}
+        if ref_audio_path:
+            payload["ref_audio_path"] = ref_audio_path
         try:
             resp = await self._http.post(
                 f"{self._tts_url}/synthesize",
-                json={"text": text},
+                json=payload,
             )
         except Exception as e:
             log.warning("F5 TTS request failed: %s", e)
@@ -82,7 +92,9 @@ class ChatterboxEngine:
         self._reference_audio = reference_audio
         self._device = device
 
-    async def synthesize(self, text: str) -> AsyncIterator[bytes]:
+    async def synthesize(self, text: str, *,
+                         ref_audio_path: str | None = None,
+                         ) -> AsyncIterator[bytes]:
         raise NotImplementedError(
             "ChatterboxEngine not yet wired. "
             "See plan: Phase 1 follow-up."

@@ -310,17 +310,35 @@ async function loadVRMFile(file) {
 // ============================================================================
 
 async function autoLoadDefault() {
-    try {
-        const resp = await fetch('/api/default-model');
-        if (resp.ok) {
-            const blob = await resp.blob();
-            const file = new File([blob], 'Mocha.vrm');
-            await loadVRMFile(file);
-        }
-    } catch (e) {
-        console.log('No default VRM model available');
+    // Try the per-user active VRM first (covers logged-in users with a custom
+    // model), fall back to the global default if that endpoint isn't available
+    // or returns an error.
+    const headers = (typeof authHeaders === 'function') ? authHeaders() : {};
+    for (const url of ['/api/user/vrm', '/api/default-model']) {
+        try {
+            const resp = await fetch(url, { headers });
+            if (resp.ok) {
+                const blob = await resp.blob();
+                const file = new File([blob], 'character.vrm');
+                await loadVRMFile(file);
+                return;
+            }
+        } catch (e) { /* try next */ }
     }
+    console.log('No default VRM model available');
 }
+
+/** Load a VRM by URL. Used by the Avatar tab when the user activates a
+ *  different model in their library. */
+async function loadVRMFromUrl(url) {
+    const headers = (typeof authHeaders === 'function') ? authHeaders() : {};
+    const resp = await fetch(url, { headers });
+    if (!resp.ok) throw new Error('Failed to fetch VRM: ' + resp.status);
+    const blob = await resp.blob();
+    const file = new File([blob], 'character.vrm');
+    await loadVRMFile(file);
+}
+window.loadVRMFromUrl = loadVRMFromUrl;
 
 // Track whether motion playback is active
 window._isPlayingMotion = false;
@@ -628,39 +646,14 @@ async function loadVRMFromFile(file) {
 }
 
 // ============================================================================
-//  Drag-and-drop on canvas area
+//  (Drag-and-drop on canvas removed — VRM uploads now live in
+//   Settings → Avatar tab, see web/static/js/avatar.js. The canvas
+//   #dropOverlay element only shows the initial "Loading…" message and is
+//   hidden once the model is in. Keeping the no-op stub here so any callers
+//   that still invoke initDragAndDrop() don't throw.)
 // ============================================================================
 
-function initDragAndDrop() {
-    const area = document.getElementById('canvasArea');
-    const overlay = document.getElementById('dropOverlay');
-
-    // Save the default ("Loading…") text so we can restore it after dragleave.
-    const _defaultOverlayText = overlay.textContent;
-
-    area.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        overlay.classList.add('drag-over');
-        overlay.textContent = 'Drop .vrm model here';
-    });
-
-    area.addEventListener('dragleave', (e) => {
-        if (!area.contains(e.relatedTarget)) {
-            overlay.classList.remove('drag-over');
-            overlay.textContent = _defaultOverlayText;
-        }
-    });
-
-    area.addEventListener('drop', async (e) => {
-        e.preventDefault();
-        overlay.classList.remove('drag-over');
-        overlay.textContent = _defaultOverlayText;
-        const f = e.dataTransfer.files[0];
-        if (f && f.name.toLowerCase().endsWith('.vrm')) {
-            await loadVRMFile(f);
-        }
-    });
-}
+function initDragAndDrop() { /* intentionally empty */ }
 
 // ============================================================================
 //  File input helper (called from onclick in HTML)

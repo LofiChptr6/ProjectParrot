@@ -48,6 +48,12 @@ tts_model = None
 class SynthRequest(BaseModel):
     text: str
     speed: float = 1.0
+    # Optional per-call reference voice. Absolute path OR a path relative to
+    # the project root. When omitted/missing, falls back to the global
+    # config.yaml `tts.reference_audio`. Used by the bridge to pass each
+    # user's active voice from data/users/{uid}/voices/. Adds zero latency
+    # — F5-TTS already reads the ref file fresh on every infer() call.
+    ref_audio_path: str | None = None
 
 
 @app.on_event("startup")
@@ -81,6 +87,35 @@ def _get_reference_audio() -> str:
     return str(ref_path)
 
 
+def _resolve_per_call_ref(raw: str | None) -> str | None:
+    """Resolve a per-call ref_audio_path against the project root.
+
+    Returns the absolute path string if the file exists, else None so the
+    caller falls back to the global default. Defends against path traversal:
+    the resolved path must be inside ROOT.
+    """
+    if not raw:
+        return None
+    try:
+        p = Path(raw)
+        if not p.is_absolute():
+            p = ROOT / p
+        p = p.resolve()
+        # Must live under the project root and exist as a real file.
+        try:
+            p.relative_to(ROOT.resolve())
+        except ValueError:
+            log.warning("ref_audio_path outside ROOT, ignoring: %s", raw)
+            return None
+        if not p.is_file():
+            log.warning("ref_audio_path missing, falling back: %s", p)
+            return None
+        return str(p)
+    except Exception as exc:
+        log.warning("ref_audio_path resolve failed (%s): %s", raw, exc)
+        return None
+
+
 @app.get("/health")
 async def health():
     ref_exists = (ROOT / config["reference_audio"]).exists()
@@ -93,8 +128,17 @@ async def health():
 
 @app.post("/synthesize")
 async def synthesize(req: SynthRequest):
-    ref_audio = _get_reference_audio()
-    ref_text = (config.get("reference_text") or "").strip()
+    # Per-call voice wins; fall back to the global config default.
+    custom_ref = _resolve_per_call_ref(req.ref_audio_path)
+    ref_audio = custom_ref or _get_reference_audio()
+    # ref_text is only correct for the GLOBAL voice. If the caller supplies a
+    # custom voice, leave ref_text empty so F5-TTS runs Whisper ASR on it
+    # (cached internally per file by f5_tts.infer.utils_infer._ref_text_cache,
+    # so only the first call with a new voice pays the ASR cost).
+    if custom_ref:
+        ref_text = ""
+    else:
+        ref_text = (config.get("reference_text") or "").strip()
 
     try:
         wav, sr, _ = tts_model.infer(

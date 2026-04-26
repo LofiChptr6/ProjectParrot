@@ -1166,7 +1166,7 @@ async def _run_inline_turn(
                             job_id, chunk_idx, unmapped,
                         )
                     full_text_parts.append(chunk_text)
-                    audio_bytes = await _synthesize(chunk_text)
+                    audio_bytes = await _synthesize(chunk_text, user_id=user_id)
                     viseme = (
                         await _generate_visemes(audio_bytes, chunk_text)
                         if audio_bytes else None
@@ -1443,11 +1443,15 @@ async def _generate_visemes(audio_bytes: bytes | None, text: str = "") -> dict |
         return None
 
 
-async def _synthesize(text: str) -> Optional[bytes]:
+async def _synthesize(text: str, user_id: str | None = None) -> Optional[bytes]:
+    payload: dict = {"text": text}
+    voice_path = _user_active_voice_path(user_id)
+    if voice_path:
+        payload["ref_audio_path"] = voice_path
     try:
         resp = await http.post(
             f"{config['tts_url']}/synthesize",
-            json={"text": text},
+            json=payload,
         )
         if resp.status_code == 200:
             return resp.content
@@ -1965,8 +1969,9 @@ async def api_stock_chart(symbol: str = "SPY", period: str = "1mo", interval: st
 # ---------------------------------------------------------------------------
 
 @app.post("/api/tts")
-async def api_tts(req: TtsRequest):
-    audio = await _synthesize(req.text)
+async def api_tts(req: TtsRequest, request: Request, token: str = ""):
+    user_id = _extract_user_id(request) or (jwt_decode(token).user_id if token else None)
+    audio = await _synthesize(req.text, user_id=user_id)
     if audio is None:
         return JSONResponse({"error": "TTS synthesis failed"}, status_code=502)
     return StreamingResponse(io.BytesIO(audio), media_type="audio/wav")
@@ -1978,6 +1983,9 @@ async def api_tts(req: TtsRequest):
 
 _USERS_DATA_DIR = ROOT / "data" / "users"
 _DEFAULT_CHAR_DIR = ROOT / "character"
+_DEFAULT_VOICE_PATH = ROOT / "audio" / "reference_voice.wav"
+_MAX_VOICE_MB = 5
+_VOICE_EXTS = (".wav", ".mp3", ".ogg", ".m4a")
 
 _MAX_VRM_MB = 50
 _MAX_BG_MB = 10
@@ -1987,6 +1995,149 @@ def _user_dir(user_id: str) -> Path:
     d = _USERS_DATA_DIR / user_id
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+# ---------------------------------------------------------------------------
+#  Per-user asset library (VRMs + reference voices)
+# ---------------------------------------------------------------------------
+#
+# Layout:
+#   data/users/{uid}/
+#     vrms/<name>.vrm          ← multi-file VRM library
+#     voices/<name>.wav        ← multi-file voice library
+#     active.json              ← {"vrm": <name>, "voice": <name>}
+#
+# Lazy migration: first time a user touches the library, we move the legacy
+# single-file character.vrm into vrms/Mocha.vrm and seed voices/default.wav
+# from the global audio/reference_voice.wav. Costs nothing for users who
+# never visit the Avatar tab.
+
+import json as _lib_json
+
+
+def _safe_name(name: str) -> str:
+    """Sanitize a filename — strip path components, collapse spaces, cap len."""
+    base = Path(name).name  # drop any directory parts
+    base = base.replace("\x00", "").strip()
+    if not base or base in (".", ".."):
+        return ""
+    return base[:128]
+
+
+def _user_lib_dir(user_id: str, kind: str) -> Path:
+    """kind = 'vrms' | 'voices'."""
+    if kind not in ("vrms", "voices"):
+        raise ValueError(f"unknown library kind: {kind}")
+    d = _user_dir(user_id) / kind
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _user_active_path(user_id: str) -> Path:
+    return _user_dir(user_id) / "active.json"
+
+
+def _read_active(user_id: str) -> dict:
+    p = _user_active_path(user_id)
+    if not p.exists():
+        return {}
+    try:
+        return _lib_json.loads(p.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return {}
+
+
+def _write_active(user_id: str, active: dict) -> None:
+    _user_active_path(user_id).write_text(
+        _lib_json.dumps(active, indent=2), encoding="utf-8"
+    )
+
+
+def _ensure_user_library(user_id: str) -> None:
+    """Lazy-migrate a user from the old single-file layout to the library
+    layout. Idempotent — safe to call on every library read."""
+    ud = _user_dir(user_id)
+    vrms_dir = ud / "vrms"
+    voices_dir = ud / "voices"
+    active = _read_active(user_id)
+    changed = False
+
+    # ── VRMs ─────────────────────────────────────────────────────────────
+    if not vrms_dir.exists():
+        vrms_dir.mkdir(parents=True, exist_ok=True)
+        legacy = ud / "character.vrm"
+        target = vrms_dir / "Mocha.vrm"
+        try:
+            if legacy.exists():
+                legacy.rename(target)
+            else:
+                global_vrm = _DEFAULT_CHAR_DIR / "Mocha.vrm"
+                if global_vrm.exists():
+                    import shutil as _sh
+                    _sh.copy(global_vrm, target)
+        except Exception as exc:
+            log.warning("VRM library seed failed for %s: %s", user_id[:8], exc)
+        if "vrm" not in active and target.exists():
+            active["vrm"] = "Mocha.vrm"
+            changed = True
+
+    # ── Voices ───────────────────────────────────────────────────────────
+    if not voices_dir.exists():
+        voices_dir.mkdir(parents=True, exist_ok=True)
+        target = voices_dir / "default.wav"
+        try:
+            if _DEFAULT_VOICE_PATH.exists():
+                import shutil as _sh
+                _sh.copy(_DEFAULT_VOICE_PATH, target)
+        except Exception as exc:
+            log.warning("voice library seed failed for %s: %s", user_id[:8], exc)
+        if "voice" not in active and target.exists():
+            active["voice"] = "default.wav"
+            changed = True
+
+    if changed:
+        _write_active(user_id, active)
+
+
+def _list_assets(user_id: str, kind: str) -> list[dict]:
+    """Return [{name, size, uploaded_at}] sorted by name."""
+    d = _user_lib_dir(user_id, kind)
+    out = []
+    for p in sorted(d.iterdir()):
+        if not p.is_file():
+            continue
+        try:
+            st = p.stat()
+            out.append({
+                "name": p.name,
+                "size": st.st_size,
+                "uploaded_at": st.st_mtime,
+            })
+        except Exception:
+            pass
+    return out
+
+
+def _user_active_voice_path(user_id: str | None) -> str | None:
+    """Return absolute path to the user's active voice file, or None.
+
+    Used by the bridge when calling TTS /synthesize so the per-user voice
+    follows the user. Falls back to None (TTS uses global default) for
+    anonymous / non-web channels and when the user has no active voice set.
+    """
+    if not user_id:
+        return None
+    try:
+        _ensure_user_library(user_id)
+        active = _read_active(user_id)
+        name = active.get("voice")
+        if not name:
+            return None
+        p = _user_lib_dir(user_id, "voices") / name
+        return str(p) if p.is_file() else None
+    except Exception as exc:
+        log.debug("active voice lookup failed for %s: %s", (user_id or "?")[:8], exc)
+        return None
 
 
 @app.get("/api/user/character")
@@ -2026,15 +2177,176 @@ async def user_update_behaviors(request: Request, token: str = ""):
 
 @app.post("/api/user/upload/vrm")
 async def user_upload_vrm(request: Request, file: UploadFile = File(...), token: str = ""):
+    """Upload a VRM into the user's library. Saved to data/users/{uid}/vrms/.
+
+    The first uploaded VRM auto-becomes active if no active selection exists.
+    Filename is derived from the upload (sanitized); duplicate names overwrite.
+    """
     user_id = _extract_user_id(request) or (jwt_decode(token).user_id if token else None)
     if not user_id:
         raise HTTPException(status_code=401, detail="Authentication required")
     data = await file.read()
     if len(data) > _MAX_VRM_MB * 1024 * 1024:
         raise HTTPException(status_code=413, detail=f"VRM file exceeds {_MAX_VRM_MB}MB limit")
-    dest = _user_dir(user_id) / "character.vrm"
+
+    raw_name = _safe_name(file.filename or "uploaded.vrm")
+    if not raw_name:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    if not raw_name.lower().endswith(".vrm"):
+        raw_name += ".vrm"
+
+    _ensure_user_library(user_id)
+    dest = _user_lib_dir(user_id, "vrms") / raw_name
     dest.write_bytes(data)
-    return JSONResponse({"status": "ok", "size": len(data)})
+
+    # Auto-activate if no active VRM yet (first upload).
+    active = _read_active(user_id)
+    if not active.get("vrm"):
+        active["vrm"] = raw_name
+        _write_active(user_id, active)
+
+    return JSONResponse({"status": "ok", "name": raw_name, "size": len(data)})
+
+
+@app.post("/api/user/upload/voice")
+async def user_upload_voice(request: Request, file: UploadFile = File(...), token: str = ""):
+    """Upload a reference voice clip into the user's library.
+
+    Saved to data/users/{uid}/voices/. Auto-activates on first upload if no
+    active voice exists. Per-user voice is passed to TTS via ref_audio_path
+    so no service restart is needed.
+    """
+    user_id = _extract_user_id(request) or (jwt_decode(token).user_id if token else None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    data = await file.read()
+    if len(data) > _MAX_VOICE_MB * 1024 * 1024:
+        raise HTTPException(status_code=413, detail=f"Voice file exceeds {_MAX_VOICE_MB}MB limit")
+
+    raw_name = _safe_name(file.filename or "voice.wav")
+    if not raw_name:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    ext = Path(raw_name).suffix.lower()
+    if ext not in _VOICE_EXTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Voice file must be one of: {', '.join(_VOICE_EXTS)}",
+        )
+
+    _ensure_user_library(user_id)
+    dest = _user_lib_dir(user_id, "voices") / raw_name
+    dest.write_bytes(data)
+
+    active = _read_active(user_id)
+    if not active.get("voice"):
+        active["voice"] = raw_name
+        _write_active(user_id, active)
+
+    return JSONResponse({"status": "ok", "name": raw_name, "size": len(data)})
+
+
+@app.get("/api/user/library")
+async def user_library(request: Request, token: str = ""):
+    """Return the user's full library state — VRM list, voice list, actives."""
+    user_id = _extract_user_id(request) or (jwt_decode(token).user_id if token else None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    _ensure_user_library(user_id)
+    active = _read_active(user_id)
+    return JSONResponse({
+        "vrms": _list_assets(user_id, "vrms"),
+        "voices": _list_assets(user_id, "voices"),
+        "active_vrm": active.get("vrm"),
+        "active_voice": active.get("voice"),
+    })
+
+
+@app.post("/api/user/active")
+async def user_set_active(request: Request, token: str = ""):
+    """Switch the active asset for a kind. Body: {kind, name}."""
+    user_id = _extract_user_id(request) or (jwt_decode(token).user_id if token else None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    body = await request.json()
+    kind = body.get("kind")
+    name = _safe_name(body.get("name") or "")
+    if kind not in ("vrm", "voice") or not name:
+        raise HTTPException(status_code=400, detail="kind must be vrm|voice and name required")
+
+    _ensure_user_library(user_id)
+    target = _user_lib_dir(user_id, kind + "s") / name
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail=f"{kind} '{name}' not found in library")
+
+    active = _read_active(user_id)
+    active[kind] = name
+    _write_active(user_id, active)
+    return JSONResponse({"status": "ok", "kind": kind, "active": name})
+
+
+@app.get("/api/user/voice-file")
+async def user_voice_file(request: Request, name: str = "", token: str = ""):
+    """Serve a single voice file from the user's voices/ library.
+
+    Used by the Avatar tab to play back a clip in an <audio> preview.
+    """
+    user_id = _extract_user_id(request) or (jwt_decode(token).user_id if token else None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    name = _safe_name(name)
+    if not name:
+        raise HTTPException(status_code=400, detail="name required")
+    p = _user_lib_dir(user_id, "voices") / name
+    if not p.is_file():
+        raise HTTPException(status_code=404, detail="voice not found")
+    # Generic audio media type — browsers sniff actual format from content.
+    return FileResponse(p, media_type="audio/wav", filename=name)
+
+
+@app.get("/api/character-default")
+async def character_default(kind: str = ""):
+    """Serve the GLOBAL default soul.md or behaviors.yaml (no auth — these
+    are the public starter content). Used by the Avatar tab's 'Reset to
+    default' buttons to repopulate the editor without overwriting the
+    user's saved file (user must click Save afterwards)."""
+    if kind == "soul":
+        p = _DEFAULT_CHAR_DIR / "soul.md"
+        media = "text/markdown; charset=utf-8"
+    elif kind == "behaviors":
+        p = _DEFAULT_CHAR_DIR / "behaviors.yaml"
+        media = "text/yaml; charset=utf-8"
+    else:
+        raise HTTPException(status_code=400, detail="kind must be soul|behaviors")
+    if not p.is_file():
+        raise HTTPException(status_code=404, detail="default not found")
+    return FileResponse(p, media_type=media, filename=p.name)
+
+
+@app.delete("/api/user/asset")
+async def user_delete_asset(request: Request, kind: str = "", name: str = "", token: str = ""):
+    """Remove a library asset. Refuses to delete the currently-active one
+    (caller must switch active first)."""
+    user_id = _extract_user_id(request) or (jwt_decode(token).user_id if token else None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if kind not in ("vrm", "voice"):
+        raise HTTPException(status_code=400, detail="kind must be vrm|voice")
+    name = _safe_name(name)
+    if not name:
+        raise HTTPException(status_code=400, detail="name required")
+
+    _ensure_user_library(user_id)
+    active = _read_active(user_id)
+    if active.get(kind) == name:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot delete the active {kind}. Switch active first.",
+        )
+
+    target = _user_lib_dir(user_id, kind + "s") / name
+    if target.is_file():
+        target.unlink()
+    return JSONResponse({"status": "ok", "kind": kind, "deleted": name})
 
 
 @app.post("/api/user/upload/background")
@@ -2056,11 +2368,29 @@ async def user_upload_background(request: Request, file: UploadFile = File(...),
 
 @app.get("/api/user/vrm")
 async def user_vrm(request: Request, token: str = ""):
+    """Serve the user's currently-active VRM from their library.
+
+    Resolution order:
+      1) data/users/{uid}/vrms/<active>      (library, current)
+      2) data/users/{uid}/character.vrm      (legacy single-slot, pre-library)
+      3) character/Mocha.vrm                 (global default)
+    """
     user_id = _extract_user_id(request) or (jwt_decode(token).user_id if token else None)
     if user_id:
-        custom = _user_dir(user_id) / "character.vrm"
-        if custom.exists():
-            return FileResponse(custom, media_type="model/gltf-binary", filename="character.vrm")
+        try:
+            _ensure_user_library(user_id)
+            active = _read_active(user_id).get("vrm")
+            if active:
+                lib_path = _user_lib_dir(user_id, "vrms") / active
+                if lib_path.is_file():
+                    return FileResponse(
+                        lib_path, media_type="model/gltf-binary", filename=active,
+                    )
+        except Exception as exc:
+            log.debug("active VRM lookup failed: %s", exc)
+        legacy = _user_dir(user_id) / "character.vrm"
+        if legacy.exists():
+            return FileResponse(legacy, media_type="model/gltf-binary", filename="character.vrm")
     fallback = _DEFAULT_CHAR_DIR / "Mocha.vrm"
     if fallback.exists():
         return FileResponse(fallback, media_type="model/gltf-binary", filename="Mocha.vrm")
