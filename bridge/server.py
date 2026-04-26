@@ -298,11 +298,15 @@ async def _claim_active(user_id: str | None, session_id: str | None) -> None:
     welcome-first frontend just skip the presence dance entirely).
     """
     if not user_id or not session_id:
+        log.info("presence: claim skipped (uid=%s sid=%s)", user_id, session_id)
         return
     prev = _active_session.get(user_id)
     if prev == session_id:
         return
     _active_session[user_id] = session_id
+    log.info("presence: claim_active uid=%s sid=%s prev=%s sockets_for_user=%d",
+             user_id[:8], session_id[:8], (prev[:8] if prev else None),
+             sum(1 for (u, _) in _user_sockets if u == user_id))
     if prev:
         await _send_presence(user_id, prev, active=False)
     await _send_presence(user_id, session_id, active=True)
@@ -3542,8 +3546,12 @@ async def live_ws(ws: WebSocket):
                     _ws_session_id = sid or None
                     is_only_session = _register_session(_ws_user_id, sid, ws)
                     log.info(
-                        "client_hello from session %s (active=%s)",
-                        sid or "?", is_only_session,
+                        "client_hello uid=%s sid=%s only_session=%s active_users=%d total_sockets=%d",
+                        (_ws_user_id[:8] if _ws_user_id else "?"),
+                        (sid[:8] if sid else "?"),
+                        is_only_session,
+                        len(_active_session),
+                        len(_user_sockets),
                     )
                     if is_only_session:
                         # First/only session for this user → auto-claim active.
