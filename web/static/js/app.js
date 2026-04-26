@@ -397,6 +397,15 @@ function scheduleMonitorReconnect() {
 // ============================================================================
 
 function handleLiveMessage(msg) {
+    // TEMP diag: log every Live WS message type so we can see whether
+    // presence_active / presence_inactive arrive at all on the inactive device.
+    if (msg && msg.type) {
+        const t = msg.type;
+        if (t === 'presence_active' || t === 'presence_inactive' ||
+            t === 'quota_exceeded') {
+            console.log('[ws]', t, msg);
+        }
+    }
     switch (msg.type) {
         case 'speech_segment': {
             // Dedup: bridge sends same segment twice (direct + broadcast)
