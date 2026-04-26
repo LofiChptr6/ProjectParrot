@@ -1658,33 +1658,52 @@ body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
 .acct-reset-btn:hover { color: var(--text); border-color: var(--muted); }
 
 /* ── Single-active-Mocha presence (mocha-away state) ─────────────────── */
-/* When this device is NOT the active session, the 3D model slides off and
-   audio mutes. UI panels stay normally usable. Click anywhere to claim. */
+/* When this device is NOT the active session, the 3D model slides off, the
+   background dims, and audio mutes. UI panels stay normally usable.
+   Click anywhere to claim Mocha back. */
 #canvas3d {
-    transition: transform 400ms cubic-bezier(0.4, 0, 0.2, 1), opacity 400ms;
+    transition: transform 400ms cubic-bezier(0.4, 0, 0.2, 1), opacity 400ms !important;
 }
 body.mocha-away #canvas3d {
-    transform: translateX(-110%);
-    opacity: 0;
-    pointer-events: none;
+    transform: translateX(-110%) !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
 }
+/* Background layer dims too — extra visual signal that this device is asleep */
+#bgLayer { transition: filter 400ms ease, opacity 400ms ease; }
+body.mocha-away #bgLayer {
+    filter: brightness(0.35) blur(4px);
+    opacity: 0.7;
+}
+/* Full-screen dim overlay so it's unmistakable: this device is the "away" one.
+   pointer-events:none so the user can still click through to wake. */
+body.mocha-away::before {
+    content: '';
+    position: fixed; inset: 0; z-index: 8000;
+    background: rgba(0, 0, 0, 0.55);
+    pointer-events: none;
+    animation: mocha-away-fade-in 400ms ease forwards;
+}
+@keyframes mocha-away-fade-in { from { opacity: 0; } to { opacity: 1; } }
+
 .mocha-away-pill {
     position: fixed;
     bottom: 28px;
     left: 50%;
     transform: translateX(-50%);
-    padding: 10px 18px;
-    background: rgba(20, 20, 28, 0.92);
-    color: #eee;
-    border: 1px solid var(--border);
+    padding: 12px 22px;
+    background: rgba(20, 20, 28, 0.95);
+    color: #fff;
+    border: 1px solid var(--accent);
     border-radius: 999px;
-    font-size: 13px;
+    font-size: 14px;
+    font-weight: 500;
     backdrop-filter: blur(6px);
     z-index: 9000;
     cursor: pointer;
     user-select: none;
     display: none;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+    box-shadow: 0 4px 24px rgba(233, 69, 96, 0.35);
 }
 body.mocha-away .mocha-away-pill { display: block; }
 .mocha-away-pill:hover { background: rgba(40, 40, 52, 0.95); }
