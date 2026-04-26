@@ -191,6 +191,22 @@
             <button class="btn btn-mic" id="btnMic" title="Toggle microphone">&#127908;</button>
         </div>
     </aside>
+
+    <!-- ── Phone-only floating input bar ───────────────────────────────────
+         On portrait/narrow viewports, the chat panel is collapsed by default
+         and the .chat-input above is hidden (CSS in style.css media query).
+         This bar stays visible at the bottom of the screen so the user can
+         always type or speak without expanding the chat history. The chat-
+         history toggle button lives in the status bar. -->
+    <div class="phone-input-bar" id="phoneInputBar">
+        <input type="text" id="phoneTextInput" placeholder="Say something…"
+               autocapitalize="sentences" autocomplete="off"
+               enterkeyhint="send" inputmode="text">
+        <button class="phone-input-btn phone-input-mic" id="phoneBtnMic"
+                title="Toggle microphone" aria-label="Microphone">&#127908;</button>
+        <button class="phone-input-btn phone-input-send" id="phoneBtnSend"
+                title="Send" aria-label="Send">&#8593;</button>
+    </div>
 </div>
 
 <!-- ══ Top-right status bar ══ -->

@@ -91,7 +91,7 @@ def _extract_tool_calls_from_text(content: str) -> list[dict] | None:
 # Tool schemas Nori can use.
 # Shell access (bash_exec) is gated by the blocklist in tools/executor.py.
 _NORI_TOOL_NAMES = [
-    "get_stock_data", "get_news", "get_weather", "calculate", "web_search",
+    "get_stock_data", "get_news", "show_weather", "calculate", "web_search",
     "show_slides", "show_card", "show_notification",
     "bash_exec",
     "schedule_cron", "list_cron_jobs", "cancel_cron_job",

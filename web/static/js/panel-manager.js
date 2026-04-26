@@ -456,13 +456,21 @@
     // project every obstruction that crosses that band onto the X axis, then
     // pick the widest free interval.
     //
-    // Mocha's body band covers shoulders-to-feet in screen coords.
-    const MOCHA_BAND_TOP    = 0.20;  // fraction of vh where shoulders sit
-    const MOCHA_BAND_BOTTOM = 0.95;  // fraction of vh where feet sit
+    // Mocha's body band covers shoulders-to-feet in screen coords. In
+    // portrait mode the chat sidebar reflows to a 50vh bottom sheet — if
+    // we kept the wide landscape band, the sheet would briefly count as a
+    // partial-width X obstruction during its slide-in animation and shove
+    // Mocha left for ~300ms. Narrowing the band to the upper half on
+    // portrait makes her ignore anything anchored to the bottom.
+    const MOCHA_BAND_TOP_LANDSCAPE    = 0.20;
+    const MOCHA_BAND_BOTTOM_LANDSCAPE = 0.95;
+    const MOCHA_BAND_TOP_PORTRAIT     = 0.05;
+    const MOCHA_BAND_BOTTOM_PORTRAIT  = 0.50;
 
     function _findBestXBand(vw, vh, rects) {
-        const bandTop    = vh * MOCHA_BAND_TOP;
-        const bandBottom = vh * MOCHA_BAND_BOTTOM;
+        const portrait = vh > vw;
+        const bandTop    = vh * (portrait ? MOCHA_BAND_TOP_PORTRAIT    : MOCHA_BAND_TOP_LANDSCAPE);
+        const bandBottom = vh * (portrait ? MOCHA_BAND_BOTTOM_PORTRAIT : MOCHA_BAND_BOTTOM_LANDSCAPE);
 
         // Keep only obstructions whose vertical extent crosses Mocha's band.
         // A rect that sits entirely above or below the band doesn't block her.

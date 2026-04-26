@@ -1129,9 +1129,45 @@ body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
     .status-lights .light-label { display: none; }
 }
 
+/* ── Phone-only floating input bar ───────────────────────────────────── */
+/* Hidden on desktop; shown only inside the portrait/narrow media query
+   below so that on phone the user can always type or speak without having
+   to expand the chat history sheet. Layered above the chat sheet (z>20). */
+.phone-input-bar { display: none; }
+.phone-input-bar input {
+    flex: 1;
+    background: var(--card);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    font-size: 16px;        /* iOS won't auto-zoom on focus when >= 16px */
+    padding: 10px 16px;
+    min-width: 0;
+    -webkit-appearance: none; appearance: none;
+}
+.phone-input-bar input:focus { outline: none; border-color: var(--accent); }
+.phone-input-btn {
+    flex: 0 0 auto;
+    width: 40px; height: 40px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: var(--card);
+    color: var(--text);
+    font-size: 18px;
+    cursor: pointer;
+    -webkit-appearance: none; appearance: none;
+    display: flex; align-items: center; justify-content: center;
+    transition: background 0.15s, color 0.15s;
+}
+.phone-input-btn:hover { background: var(--surface); }
+.phone-input-send { background: var(--accent); color: #fff; border-color: var(--accent); }
+.phone-input-mic.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
 /* ── Phone / portrait layout ──────────────────────────────────────────────
  * Below this width (or in portrait orientation), reflow the app:
- *   - Chat sidebar → bottom-half panel spanning full width
+ *   - Floating phone-input bar visible at the bottom (always)
+ *   - Chat sidebar → bottom-half panel spanning full width (only when expanded)
+ *   - Sidebar's own .chat-input is hidden — typing happens in the floating bar
  *   - Status bar → top-center (else it'd be buried under the chat panel)
  *   - Settings modal → full screen, tabs wrap onto multiple rows
  *   - Mocha-away pill → moved up so it doesn't sit behind the chat
@@ -1139,13 +1175,35 @@ body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
  */
 @media (orientation: portrait) and (max-width: 900px), (max-width: 600px) {
 
-    /* ── Chat: bottom half, full width ──────────────────────────────── */
+    /* Floating input bar always visible at bottom (above the chat sheet). */
+    .phone-input-bar {
+        display: flex;
+        position: fixed;
+        left: 8px; right: 8px;
+        bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+        z-index: 30;
+        gap: 8px;
+        align-items: center;
+        padding: 6px;
+        background: rgba(18, 21, 28, 0.92);
+        backdrop-filter: blur(12px);
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+    }
+    /* Hide the chat panel's built-in input row — typing is done via the
+       floating bar instead, so the sheet is purely a history viewer. */
+    .chat-sidebar .chat-input { display: none; }
+
+    /* ── Chat: bottom half, full width — but lifted above the floating
+           input bar so its bottom edge isn't hidden behind it ─────────── */
     .chat-sidebar {
         top: auto;
-        left: 0; right: 0; bottom: 0;
+        left: 0; right: 0;
+        bottom: calc(60px + env(safe-area-inset-bottom, 0px));
         width: 100vw;
-        height: 50vh;
-        max-height: 50vh;
+        height: calc(50vh - 60px);
+        max-height: calc(50vh - 60px);
         border-left: none;
         border-top: 1px solid var(--border);
         /* Round the top corners so it reads as a sheet over Mocha */

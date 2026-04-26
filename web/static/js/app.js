@@ -2661,6 +2661,42 @@ async function init() {
         btnMic.addEventListener('click', () => toggleMic());
     }
 
+    // ── Phone-only floating input bar ───────────────────────────────────
+    // Always-visible input + send + mic at the bottom of the screen on
+    // phone, so the user can type/talk without expanding the chat history.
+    // Mirrors the desktop sendText flow but reads from #phoneTextInput.
+    const phoneInput = document.getElementById('phoneTextInput');
+    const phoneBtnSend = document.getElementById('phoneBtnSend');
+    const phoneBtnMic = document.getElementById('phoneBtnMic');
+
+    function _phoneSend() {
+        if (!phoneInput) return;
+        const text = phoneInput.value.trim();
+        if (!text) return;
+        if (!wsLive || wsLive.readyState !== WebSocket.OPEN) return;
+        ensureAudioCtx();
+        wsSend({ type: 'user_input', text });
+        appendChat('user', text);
+        phoneInput.value = '';
+    }
+
+    if (phoneInput) {
+        phoneInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                _phoneSend();
+            }
+        });
+    }
+    if (phoneBtnSend) phoneBtnSend.addEventListener('click', _phoneSend);
+    if (phoneBtnMic) {
+        phoneBtnMic.addEventListener('click', () => {
+            toggleMic();
+            // Reflect mic active state on the floating button.
+            phoneBtnMic.classList.toggle('active', !!micActive);
+        });
+    }
+
     // 5. Bootstrap active theme's non-CSS assets (background image is in
     //    active.css; audio/decor/html_mods are in active.json).
     bootstrapActiveTheme();
