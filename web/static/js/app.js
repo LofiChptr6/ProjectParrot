@@ -616,6 +616,23 @@ function initKeyboardTracker() {
     vv.addEventListener('resize', update);
     vv.addEventListener('scroll', update);
     update();
+
+    // iOS Safari belt-and-suspenders: even with position:fixed on html/body,
+    // the browser sometimes still scrolls the document to bring the focused
+    // input into view. Pin scroll to 0 whenever it drifts. Cheap.
+    function _pinScroll() {
+        if (window.scrollY !== 0 || window.scrollX !== 0) {
+            window.scrollTo(0, 0);
+        }
+    }
+    window.addEventListener('scroll', _pinScroll, { passive: true });
+    document.addEventListener('focusin', () => {
+        // Defer past the browser's auto-scroll-into-view, then snap back.
+        requestAnimationFrame(() => requestAnimationFrame(_pinScroll));
+    });
+    document.addEventListener('focusout', () => {
+        requestAnimationFrame(_pinScroll);
+    });
 }
 
 // ============================================================================
