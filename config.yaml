@@ -324,6 +324,16 @@ call_log:
   pool_min: 1
   pool_max: 5
 
+# ---------------------------------------------------------------------------
+# Quota — daily LLM token cap. Registered users are unlimited; anonymous
+# guests are capped to keep cost bounded and to give the sign-up CTA teeth.
+# Both values may be set to null for unlimited. Cap is on total_tokens
+# (prompt + completion), summed from llm_call_log over the local-day window.
+# ---------------------------------------------------------------------------
+quota:
+  anon_daily_token_cap: 150000
+  registered_daily_token_cap: null
+
 # Idle heartbeat — makes the character feel alive when no one is talking.
 # The bridge sends silent idle_action messages (emotion + gesture, no audio)
 # to Unity after the conversation has been quiet for a while.

@@ -4,9 +4,8 @@
  * Handles:
  *  - WebSocket connections to bridge (/ws/live and /ws/monitor)
  *  - Message handling (speech_segment, speech_end, interrupt, mic_mute, etc.)
- *  - Segment queue + sequential playback (mirrors Unity PlaySegmentQueue)
+ *  - Segment queue + sequential playback
  *  - Audio decoding + playback via Web Audio API
- *  - Motion data decoding (motion_b64 -> per-frame bone quaternions)
  *  - Viseme data decoding (viseme_b64 -> per-frame 5-channel weights)
  *  - Mic capture (getUserMedia -> PCM16 16kHz -> binary WS frames)
  *  - Text input handling
@@ -80,6 +79,24 @@ function ensureAudioCtx() {
     }
 }
 
+// Global one-shot audio unlock. Without this, on page reload the AudioContext
+// starts suspended and only Send/mic toggles unlock it — any queued TTS sits
+// waiting on `audioCtx.resume()` which can't resolve without a user gesture.
+// Any pointer/key interaction anywhere on the page now unlocks it.
+(function _installAudioUnlockOnce() {
+    const unlock = () => {
+        ensureAudioCtx();
+        if (audioCtx && audioCtx.state !== 'suspended') {
+            document.removeEventListener('pointerdown', unlock, true);
+            document.removeEventListener('keydown', unlock, true);
+            document.removeEventListener('touchstart', unlock, true);
+        }
+    };
+    document.addEventListener('pointerdown', unlock, true);
+    document.addEventListener('keydown', unlock, true);
+    document.addEventListener('touchstart', unlock, true);
+})();
+
 // -- Mic capture --
 let micStream    = null;
 let micAudioCtx  = null;
@@ -107,13 +124,66 @@ function wsSend(obj) {
     }
 }
 
+function _bridgeWsUrl(path) {
+    if (location.protocol === 'https:') {
+        return `wss://${location.host}${path}`;
+    }
+    return `ws://${bridgeHost}:${bridgePort}${path}`;
+}
+
+function _bridgeHttpUrl(path) {
+    if (location.protocol === 'https:') {
+        return `https://${location.host}${path}`;
+    }
+    return `http://${bridgeHost}:${bridgePort}${path}`;
+}
+
 // ============================================================================
 //  Presence — session id, activity tracking, page visibility
 // ============================================================================
 
 const SESSION_ID_KEY = 'parrot.session_id';
 const LAST_SEEN_KEY  = 'parrot.last_seen_at';
+const JWT_KEY        = 'parrot.jwt';
 const IDLE_MS        = 60 * 1000;   // report idle after 60s of no interaction
+
+function getJwt() {
+    try { return localStorage.getItem(JWT_KEY) || ''; } catch (_) { return ''; }
+}
+
+function authHeaders() {
+    const t = getJwt();
+    return t ? { 'Authorization': `Bearer ${t}` } : {};
+}
+
+/**
+ * Welcome-first onboarding: claim (or create) an anonymous profile keyed to
+ * this browser's persistent session_id. Backend resolves the same user across
+ * visits, links new IPs to the same account, and seeds a fresh per-user
+ * data/users/{uid}/ directory on first contact.
+ *
+ * Returns true on success (JWT now in localStorage), false on network error
+ * — caller falls back to the manual /login page.
+ */
+async function tryAnonBootstrap() {
+    try {
+        const r = await fetch('/api/auth/anon', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                browser_token: getSessionId(),
+                user_agent: navigator.userAgent || null,
+            }),
+        });
+        if (!r.ok) return false;
+        const j = await r.json();
+        if (!j || !j.access_token) return false;
+        localStorage.setItem(JWT_KEY, j.access_token);
+        return true;
+    } catch (_) {
+        return false;
+    }
+}
 
 function _randId() {
     try {
@@ -171,6 +241,20 @@ function initPresence() {
             _reportActive();
         }
     });
+    // Tab closing — best-effort nudge to the bridge so it can finalise the
+    // diary page before the process drops us. WS send isn't guaranteed on
+    // unload; we also send a sendBeacon fallback to a cheap endpoint so the
+    // server at least gets *some* trigger.
+    window.addEventListener('beforeunload', () => {
+        try { wsSend({ type: 'page_closing' }); } catch (e) {}
+        try {
+            if (navigator.sendBeacon) {
+                const blob = new Blob([JSON.stringify({reason: 'beforeunload'})],
+                                       { type: 'application/json' });
+                navigator.sendBeacon('/api/diary/write-now', blob);
+            }
+        } catch (e) {}
+    });
     // Periodic last_seen ping so reconnect_hello can gauge how long we were away.
     _presenceHeartbeat = setInterval(touchLastSeen, 30 * 1000);
     touchLastSeen();
@@ -194,7 +278,8 @@ function connectLive() {
     if (!bridgePort) return;
     if (wsLive && wsLive.readyState <= WebSocket.OPEN) return;
 
-    const url = `ws://${bridgeHost}:${bridgePort}/ws/live`;
+    const _tok = getJwt();
+    const url = _bridgeWsUrl('/ws/live') + (_tok ? `?token=${encodeURIComponent(_tok)}` : '');
     wsLive = new WebSocket(url);
     wsLive.binaryType = 'arraybuffer';
 
@@ -209,6 +294,28 @@ function connectLive() {
             last_seen_at: getLastSeenIso(),
         });
         touchLastSeen();
+
+        // Report the user's timezone / locale so the bridge can render time in
+        // the user's local zone (not the server's). Optionally include
+        // geolocation on HTTPS / localhost — fails silently on plain HTTP.
+        try {
+            const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+            const locale = navigator.language || 'en-US';
+            wsSend({ type: 'user_context', tz, locale });
+            if (navigator.geolocation && !localStorage.getItem('parrot.geo.disabled')) {
+                navigator.geolocation.getCurrentPosition(
+                    (p) => wsSend({
+                        type: 'user_context',
+                        tz, locale,
+                        lat: p.coords.latitude,
+                        lng: p.coords.longitude,
+                        accuracy_m: p.coords.accuracy,
+                    }),
+                    () => {},  // silent on permission denied / HTTP
+                    { timeout: 8000, maximumAge: 3600000 }
+                );
+            }
+        } catch (e) { /* Intl unavailable on very old browsers */ }
     };
 
     wsLive.onmessage = (e) => {
@@ -250,7 +357,7 @@ function connectMonitor() {
     if (!bridgePort) return;
     if (wsMonitor && wsMonitor.readyState <= WebSocket.OPEN) return;
 
-    const url = `ws://${bridgeHost}:${bridgePort}/ws/monitor`;
+    const url = _bridgeWsUrl('/ws/monitor');
     wsMonitor = new WebSocket(url);
 
     wsMonitor.onopen = () => {
@@ -391,8 +498,209 @@ function handleMonitorMessage(msg) {
             appendThinkingEntry(msg);
             break;
 
+        // ── Single-active-Mocha presence ──────────────────────────────────
+        // The same account may be open on multiple tabs/devices; only one
+        // gets to "be Mocha" at a time. The bridge picks the active session
+        // and sends presence_active/inactive events to coordinate.
+        case 'presence_active':
+            applyPresence(true);
+            break;
+
+        case 'presence_inactive':
+            applyPresence(false);
+            break;
+
+        // ── Quota cap hit (anonymous users only) ──────────────────────────
+        // Backend refuses the LLM call and sends a Mocha-voiced refusal
+        // string. We render it in the chat, flash the gear, and pop the
+        // Account tab so the sign-up CTA is right there.
+        case 'quota_exceeded':
+            handleQuotaExceeded(msg);
+            break;
+
         default:
             break;
+    }
+}
+
+// ============================================================================
+//  Single-active-Mocha presence — applyPresence + claim_active wake
+// ============================================================================
+
+let _isPresent = true;  // optimistic; flipped by presence_inactive
+
+function applyPresence(active) {
+    _isPresent = !!active;
+    if (active) {
+        document.body.classList.remove('mocha-away');
+        // Resume TTS playback context + unmute mic capture.
+        try { if (typeof audioCtx !== 'undefined' && audioCtx) audioCtx.resume(); } catch (_) {}
+        try { micMuted = false; } catch (_) {}
+    } else {
+        document.body.classList.add('mocha-away');
+        try { if (typeof audioCtx !== 'undefined' && audioCtx) audioCtx.suspend(); } catch (_) {}
+        try { micMuted = true; } catch (_) {}
+        // Stop any in-flight TTS playback so we don't keep speaking on the
+        // device the user just walked away from.
+        try { if (typeof cancelPlayback === 'function') cancelPlayback(); } catch (_) {}
+    }
+}
+
+/**
+ * Wake-from-away handler. Any user gesture on this device while Mocha is
+ * away should claim her back. We hook the existing presence "_reportActive"
+ * fan-out plus a direct click on the away pill.
+ */
+function claimMochaActive() {
+    if (_isPresent) return;
+    // Optimistic: flip UI immediately so the response feels instant. If the
+    // server overrides us (race with another device), it'll send presence_inactive.
+    applyPresence(true);
+    wsSend({ type: 'claim_active' });
+}
+window.claimMochaActive = claimMochaActive;
+
+// Attach: clicks on the away pill, and any pointerdown on the canvas area
+// while away. Initialized once after DOM is ready.
+function initPresenceClaim() {
+    const pill = document.getElementById('mochaAwayPill');
+    if (pill) pill.addEventListener('click', claimMochaActive);
+    // Catch-all: any pointerdown/keydown while away → claim.
+    const onAnyInput = () => {
+        if (document.body.classList.contains('mocha-away')) claimMochaActive();
+    };
+    window.addEventListener('pointerdown', onAnyInput, { passive: true, capture: true });
+    window.addEventListener('keydown', onAnyInput, { passive: true, capture: true });
+}
+
+// ============================================================================
+//  Quota cap UX — refusal toast + Account tab nudge
+// ============================================================================
+
+function handleQuotaExceeded(msg) {
+    const refusal = msg.message || 'hit my limit for guest chats today.';
+    // Render the refusal as a Mocha message in the chat (no audio).
+    try {
+        if (typeof appendChat === 'function') {
+            appendChat('mocha', refusal, 'thinking');
+        }
+    } catch (_) {}
+
+    // Flash the Account tab badge.
+    const badge = document.getElementById('accountBadge');
+    if (badge) badge.style.display = 'inline-block';
+
+    // Open Settings → Account so the sign-up form is right there.
+    openAccountTab();
+
+    // Refresh /me so the Account tab shows the maxed-out usage bar.
+    refreshAccountState();
+}
+
+function openAccountTab() {
+    const backdrop = document.getElementById('modalBackdrop');
+    if (backdrop) backdrop.classList.add('open');
+    document.querySelectorAll('.modal-tab').forEach(t => {
+        t.classList.toggle('active', t.dataset.tab === 'account');
+    });
+    document.querySelectorAll('.modal-content').forEach(c => {
+        c.classList.toggle('active', c.id === 'modal-account');
+    });
+    refreshAccountState();
+}
+
+/**
+ * Pull /api/auth/me and reflect it in the Account tab — anon vs registered
+ * view, and current quota usage. Cheap; safe to call on any modal open.
+ */
+async function refreshAccountState() {
+    let me;
+    try {
+        const r = await fetch('/api/auth/me', { headers: authHeaders() });
+        if (!r.ok) return;
+        me = await r.json();
+    } catch (_) {
+        return;
+    }
+    const anonBox = document.getElementById('acctAnonSection');
+    const regBox = document.getElementById('acctRegisteredSection');
+    if (!anonBox || !regBox) return;
+
+    if (me.account_type === 'anon') {
+        anonBox.style.display = '';
+        regBox.style.display = 'none';
+        const used = me.tokens_used_today || 0;
+        const cap = me.daily_token_cap || 0;
+        const lbl = document.getElementById('acctUsageLabel');
+        if (lbl) lbl.textContent = `${used.toLocaleString()} / ${cap.toLocaleString()}`;
+        const fill = document.getElementById('acctUsageFill');
+        if (fill) {
+            const pct = cap > 0 ? Math.min(100, Math.round((used / cap) * 100)) : 0;
+            fill.style.width = pct + '%';
+        }
+    } else {
+        anonBox.style.display = 'none';
+        regBox.style.display = '';
+        const u = document.getElementById('acctUsername');
+        const e = document.getElementById('acctEmail');
+        if (u) u.textContent = me.username || '—';
+        if (e) e.textContent = me.email || '—';
+    }
+}
+
+/**
+ * Wire up the signup form (anon → registered upgrade) and the sign-out button.
+ * Call once on init after the modal DOM is present.
+ */
+function setupAccountTab() {
+    const form = document.getElementById('acctSignupForm');
+    if (form) {
+        form.addEventListener('submit', async (ev) => {
+            ev.preventDefault();
+            const email = document.getElementById('acctSignupEmail').value.trim();
+            const username = document.getElementById('acctSignupUsername').value.trim();
+            const password = document.getElementById('acctSignupPassword').value;
+            const errBox = document.getElementById('acctSignupError');
+            const btn = document.getElementById('acctSignupBtn');
+            if (errBox) errBox.style.display = 'none';
+            if (btn) { btn.disabled = true; btn.textContent = 'Creating account…'; }
+            try {
+                const r = await fetch('/api/auth/upgrade', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+                    body: JSON.stringify({ email, username, password }),
+                });
+                const j = await r.json().catch(() => ({}));
+                if (!r.ok) {
+                    throw new Error(j.detail || 'Signup failed');
+                }
+                // Swap to the new JWT (same user_id, refreshed claims).
+                if (j.access_token) localStorage.setItem(JWT_KEY, j.access_token);
+                // Refresh UI; the badge clears, sections swap, cap goes away.
+                await refreshAccountState();
+                const badge = document.getElementById('accountBadge');
+                if (badge) badge.style.display = 'none';
+            } catch (e) {
+                if (errBox) {
+                    errBox.textContent = (e && e.message) || 'Signup failed';
+                    errBox.style.display = '';
+                }
+            } finally {
+                if (btn) { btn.disabled = false; btn.textContent = 'Sign up & remove cap'; }
+            }
+        });
+    }
+
+    const out = document.getElementById('acctSignOutBtn');
+    if (out) {
+        out.addEventListener('click', () => {
+            // Drop the JWT *and* the browser_token so the next visit is a
+            // fresh anon profile (otherwise we'd just re-attach the existing
+            // registered user via browser_token lookup).
+            try { localStorage.removeItem(JWT_KEY); } catch (_) {}
+            try { localStorage.removeItem(SESSION_ID_KEY); } catch (_) {}
+            location.reload();
+        });
     }
 }
 
@@ -836,7 +1144,7 @@ function _gchatTrimDOM() {
 async function gchatLoadHistory() {
     if (!bridgePort || gchatLoaded) return;
     try {
-        const resp = await fetch(`http://${bridgeHost}:${bridgePort}/api/conversation?limit=${GCHAT_MAX}`);
+        const resp = await fetch(_bridgeHttpUrl(`/api/conversation?limit=${GCHAT_MAX}`), { headers: authHeaders() });
         if (!resp.ok) return;
         const data = await resp.json();
         gchatExchanges = data.exchanges || [];
@@ -865,9 +1173,12 @@ async function gchatSend() {
     if (!groupEl) { gchatStreamActive = false; return; }
 
     try {
-        const url = `http://${bridgeHost}:${bridgePort}/chat/stream?text=${encodeURIComponent(text)}&client_id=${GCHAT_CLIENT_ID}`;
-        const resp = await fetch(url);
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const url = _bridgeHttpUrl(`/chat/stream?text=${encodeURIComponent(text)}&client_id=${GCHAT_CLIENT_ID}`);
+        const resp = await fetch(url, { headers: authHeaders() });
+        if (!resp.ok) {
+            if (resp.status === 401) { location.href = '/login'; return; }
+            throw new Error(`HTTP ${resp.status}`);
+        }
 
         const reader = resp.body.getReader();
         const decoder = new TextDecoder();
@@ -926,20 +1237,53 @@ async function gchatSend() {
                     if (!gchatExchanges[exIdx].tool_events) gchatExchanges[exIdx].tool_events = [];
                     gchatExchanges[exIdx].tool_events.push(evt);
 
-                } else if (evt.type === 'segment') {
+                } else if (evt.type === 'emotion') {
+                    // Fire-and-forget: apply emotion blendshape immediately.
+                    if (window._applyEmotion) window._applyEmotion(evt.id);
+                    // Stash latest emotion so subsequent speech_chunks can render it in-bubble.
+                    gchatExchanges[exIdx]._lastEmotion = evt.id;
+
+                } else if (evt.type === 'gesture') {
+                    // Fire-and-forget: apply gesture immediately.
+                    if (window._animController && evt.name) {
+                        window._animController.setGesture(evt.name);
+                    }
+                    gchatExchanges[exIdx]._lastGesture = evt.name;
+
+                } else if (evt.type === 'speech_chunk') {
                     const typing = groupEl.querySelector('.gchat-typing');
                     if (typing) typing.remove();
                     const thinkBlock = groupEl.querySelector('.gchat-thinking');
                     if (thinkBlock) thinkBlock.classList.add('collapsed');
-                    const segIdx = gchatExchanges[exIdx].segments.length;
-                    gchatExchanges[exIdx].segments.push(evt);
+                    const chunkIdx = gchatExchanges[exIdx].segments.length;
+                    // Normalise chunk → segment-shape so existing renderers work.
+                    const segShape = {
+                        text: evt.text,
+                        emotion: gchatExchanges[exIdx]._lastEmotion || 'neutral',
+                        gesture: gchatExchanges[exIdx]._lastGesture || '',
+                        audio_base64: evt.audio_base64,
+                        viseme_b64: evt.viseme_b64,
+                        viseme_fps: evt.viseme_fps,
+                        viseme_frames: evt.viseme_frames,
+                        chunk_idx: evt.chunk_idx,
+                    };
+                    gchatExchanges[exIdx].segments.push(segShape);
                     const sdiv = document.createElement('div');
                     sdiv.className = 'gchat-msg assistant';
-                    const emo = evt.emotion ? `<span class="gchat-emotion">${escapeHtml(evt.emotion)}</span>` : '';
-                    const play = evt.audio_base64
-                        ? ` <button class="gchat-seg-play" onclick="gchatPlaySeg(${exIdx},${segIdx})">&#x1f50a;</button>` : '';
-                    sdiv.innerHTML = `<div class="gchat-bubble">${emo}${escapeHtml(evt.text)}${play}</div>`;
+                    const emo = segShape.emotion
+                        ? `<span class="gchat-emotion">${escapeHtml(segShape.emotion)}</span>` : '';
+                    const play = segShape.audio_base64
+                        ? ` <button class="gchat-seg-play" onclick="gchatPlaySeg(${exIdx},${chunkIdx})">&#x1f50a;</button>` : '';
+                    sdiv.innerHTML = `<div class="gchat-bubble">${emo}${escapeHtml(segShape.text)}${play}</div>`;
                     groupEl.appendChild(sdiv);
+
+                    // Stream audio immediately for a live-conversational feel.
+                    if (segShape.audio_base64) {
+                        _gchatEnqueueChunk(exIdx, segShape);
+                    }
+
+                } else if (evt.type === 'speech_end') {
+                    // No-op visually; audio queue drains on its own.
 
                 } else if (evt.type === 'done') {
                     if (gchatExchanges[exIdx].segments.length > 0) {
@@ -970,9 +1314,100 @@ async function gchatSend() {
 
 window.gchatSend = gchatSend;
 
+// -- Live chunk audio queue (continuous playback with 30ms crossfade) --
+//
+// Chunks arrive from /chat/stream as speech_chunk events. We schedule them on
+// a shared AudioContext timeline so adjacent WAVs overlap ~30 ms and there is
+// no audible seam. Each scheduled source also drives visemes for its chunk.
+
+const _gchatChunkQueue = {
+    ctx: null,
+    nextStart: 0,            // absolute context time when next chunk should start
+    lastSource: null,        // current source (for barge-in stop)
+    activeChunks: 0,         // for tracking playback state
+};
+
+function _gchatEnsureAudioCtx() {
+    if (!_gchatChunkQueue.ctx) {
+        _gchatChunkQueue.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (_gchatChunkQueue.ctx.state === 'suspended') {
+        _gchatChunkQueue.ctx.resume();
+    }
+    return _gchatChunkQueue.ctx;
+}
+
+function _gchatEnqueueChunk(exIdx, seg) {
+    const ctx = _gchatEnsureAudioCtx();
+    const bytes = Uint8Array.from(atob(seg.audio_base64), c => c.charCodeAt(0));
+    ctx.decodeAudioData(bytes.buffer.slice(0)).then((buffer) => {
+        const source = ctx.createBufferSource();
+        source.buffer = buffer;
+        const gain = ctx.createGain();
+        source.connect(gain).connect(ctx.destination);
+
+        const now = ctx.currentTime;
+        const CROSSFADE = 0.030;  // 30 ms
+        let startAt = Math.max(now, _gchatChunkQueue.nextStart - CROSSFADE);
+
+        // Equal-power ramp in / ramp out at boundaries.
+        gain.gain.setValueAtTime(0.0, startAt);
+        gain.gain.linearRampToValueAtTime(1.0, startAt + CROSSFADE);
+        const endAt = startAt + buffer.duration;
+        gain.gain.setValueAtTime(1.0, Math.max(startAt + CROSSFADE, endAt - CROSSFADE));
+        gain.gain.linearRampToValueAtTime(0.0, endAt);
+
+        // Schedule visemes
+        if (seg.viseme_b64 && window._applyVisemes) {
+            _gchatScheduleVisemes(seg, startAt, ctx);
+        }
+
+        source.start(startAt);
+        _gchatChunkQueue.lastSource = source;
+        _gchatChunkQueue.nextStart = endAt;
+        _gchatChunkQueue.activeChunks++;
+
+        source.onended = () => {
+            _gchatChunkQueue.activeChunks--;
+            if (_gchatChunkQueue.activeChunks === 0) {
+                if (window._clearLipSync) window._clearLipSync();
+            }
+        };
+    }).catch((err) => {
+        console.warn('_gchatEnqueueChunk decode failed:', err);
+    });
+}
+
+function _gchatScheduleVisemes(seg, startAt, ctx) {
+    // Decode base64 → Float32 LE per frame (5 channels)
+    const bytes = Uint8Array.from(atob(seg.viseme_b64), c => c.charCodeAt(0));
+    const totalFloats = bytes.byteLength / 4;
+    const nFrames = Math.floor(totalFloats / 5);
+    const f32 = new Float32Array(bytes.buffer, bytes.byteOffset, totalFloats);
+    const fps = seg.viseme_fps || 30;
+    const msPerFrame = 1000 / fps;
+    for (let i = 0; i < nFrames; i++) {
+        const delayMs = (startAt - ctx.currentTime) * 1000 + i * msPerFrame;
+        setTimeout(() => {
+            const frame = Array.from(f32.slice(i * 5, i * 5 + 5));
+            if (window._applyVisemes) window._applyVisemes(frame);
+        }, Math.max(0, delayMs));
+    }
+}
+
+function _gchatBargeInStopChunks() {
+    if (_gchatChunkQueue.lastSource) {
+        try { _gchatChunkQueue.lastSource.stop(); } catch {}
+        _gchatChunkQueue.lastSource = null;
+    }
+    _gchatChunkQueue.nextStart = 0;
+    _gchatChunkQueue.activeChunks = 0;
+}
+
 // -- Audio playback --
 
 function _gchatStopAudio() {
+    _gchatBargeInStopChunks();
     if (gchatAudio) { gchatAudio.pause(); gchatAudio = null; }
     document.querySelectorAll('.gchat-action-btn.playing, .gchat-seg-play.playing').forEach(b => b.classList.remove('playing'));
 }
@@ -1027,7 +1462,7 @@ async function gchatPlayAll(index) {
     if (btn) { btn.innerHTML = '&#x23f3;'; btn.classList.add('loading'); }
     try {
         const fullText = ex.assistant_text || ex.segments?.map(s => s.text).join(' ') || '';
-        const resp = await fetch(`http://${bridgeHost}:${bridgePort}/api/tts`, {
+        const resp = await fetch(_bridgeHttpUrl('/api/tts'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ text: fullText }),
@@ -1165,13 +1600,11 @@ async function playNext() {
             });
         }
 
-        // Play audio with synchronized visemes (motion is now handled by animation controller)
+        // Play audio with synchronized visemes (motion is handled by animation controller)
         if (seg.audio_base64) {
             await playSegment(
                 seg.audio_base64,
-                null,    // no more per-segment motion_b64
                 visemes,
-                30,
                 seg.viseme_fps || 30
             );
         }
@@ -1280,21 +1713,19 @@ function decodeVisemes(b64, numFrames) {
 }
 
 // ============================================================================
-//  Audio playback with analyser + synchronized motion/viseme timers
+//  Audio playback with analyser + synchronized viseme timer
 // ============================================================================
 
 /**
- * Play one audio segment with optional synchronized motion + viseme data.
+ * Play one audio segment with optional synchronized viseme data.
  * Returns a promise that resolves when the audio finishes playing.
  *
- * @param {string}   audioB64     - Base64-encoded audio (WAV/OGG)
- * @param {Object[]} motionFrames - Decoded motion frames, or null
+ * @param {string}     audioB64     - Base64-encoded audio (WAV/OGG)
  * @param {number[][]} visemeFrames - Decoded viseme frames, or null
- * @param {number}   motionFps    - Motion playback frame rate
- * @param {number}   visemeFps    - Viseme playback frame rate
+ * @param {number}     visemeFps    - Viseme playback frame rate
  * @returns {Promise<void>}
  */
-async function playSegment(audioB64, motionFrames, visemeFrames, motionFps, visemeFps) {
+async function playSegment(audioB64, visemeFrames, visemeFps) {
     ensureAudioCtx();
     if (audioCtx.state === 'suspended') {
         await audioCtx.resume();
@@ -1317,17 +1748,6 @@ async function playSegment(audioB64, motionFrames, visemeFrames, motionFps, vise
                 analyserData = a.data;
             } else {
                 source.connect(audioCtx.destination);
-            }
-
-            // --- Motion playback timer ---
-            let mf = 0;
-            let mt = null;
-            if (motionFrames && motionFrames.length > 0) {
-                mt = setInterval(() => {
-                    if (mf >= motionFrames.length) { clearInterval(mt); return; }
-                    if (window._applyBones) window._applyBones(motionFrames[mf]);
-                    mf++;
-                }, 1000 / motionFps);
             }
 
             // --- Viseme playback timer (server-sent phoneme data) ---
@@ -1368,7 +1788,6 @@ async function playSegment(audioB64, motionFrames, visemeFrames, motionFps, vise
             // --- Cleanup on audio end ---
             source.onended = () => {
                 currentAudioSource = null;
-                if (mt) clearInterval(mt);
                 if (vt) clearInterval(vt);
                 if (window._clearLipSync) window._clearLipSync();
                 resolve();
@@ -1466,6 +1885,21 @@ function stopMic() {
 //  Tab switching
 // ============================================================================
 
+let _cronRefreshTimer = null;
+
+function _startCronRefreshLoop() {
+    refreshCronJobs();
+    if (_cronRefreshTimer) clearInterval(_cronRefreshTimer);
+    _cronRefreshTimer = setInterval(refreshCronJobs, 15000);
+}
+
+function _stopCronRefreshLoop() {
+    if (_cronRefreshTimer) {
+        clearInterval(_cronRefreshTimer);
+        _cronRefreshTimer = null;
+    }
+}
+
 function setupTabs() {
     // Modal tabs (inside settings modal)
     document.querySelectorAll('.modal-tab').forEach(btn => {
@@ -1475,6 +1909,19 @@ function setupTabs() {
             btn.classList.add('active');
             const panel = document.getElementById('modal-' + btn.dataset.tab);
             if (panel) panel.classList.add('active');
+
+            // Tab-specific hooks
+            if (btn.dataset.tab === 'crons') {
+                _startCronRefreshLoop();
+            } else {
+                _stopCronRefreshLoop();
+            }
+            if (btn.dataset.tab === 'account') {
+                refreshAccountState();
+                // Visiting the Account tab clears the "you hit your cap" badge.
+                const badge = document.getElementById('accountBadge');
+                if (badge) badge.style.display = 'none';
+            }
         });
     });
 
@@ -1482,18 +1929,287 @@ function setupTabs() {
     const backdrop = document.getElementById('modalBackdrop');
     document.getElementById('btnGear')?.addEventListener('click', () => {
         backdrop?.classList.add('open');
+        // If Crons tab is the active one when the modal opens, refresh it
+        const activeTab = document.querySelector('.modal-tab.active');
+        if (activeTab?.dataset.tab === 'crons') {
+            _startCronRefreshLoop();
+        }
+        if (activeTab?.dataset.tab === 'account') {
+            refreshAccountState();
+        }
     });
     document.getElementById('btnCloseModal')?.addEventListener('click', () => {
         backdrop?.classList.remove('open');
+        _stopCronRefreshLoop();
     });
     // Click backdrop to close
     backdrop?.addEventListener('click', (e) => {
-        if (e.target === backdrop) backdrop.classList.remove('open');
+        if (e.target === backdrop) {
+            backdrop.classList.remove('open');
+            _stopCronRefreshLoop();
+        }
     });
     // Escape key closes modal
     document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') backdrop?.classList.remove('open');
+        if (e.key === 'Escape') {
+            backdrop?.classList.remove('open');
+            _stopCronRefreshLoop();
+        }
     });
+
+    // Manual refresh button on Crons tab
+    document.getElementById('btnRefreshCrons')?.addEventListener('click', () => {
+        refreshCronJobs();
+    });
+}
+
+// ============================================================================
+//  Cron jobs modal
+// ============================================================================
+
+function _fmtCronTime(iso) {
+    if (!iso) return '<span style="color:#666;">—</span>';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '<span style="color:#666;">—</span>';
+    const now = Date.now();
+    const diffS = Math.round((d.getTime() - now) / 1000);
+    const abs = Math.abs(diffS);
+    let rel;
+    if (abs < 60)            rel = diffS <= 0 ? `${abs}s ago` : `in ${abs}s`;
+    else if (abs < 3600)     rel = diffS <= 0 ? `${Math.round(abs/60)}m ago`  : `in ${Math.round(abs/60)}m`;
+    else if (abs < 86400)    rel = diffS <= 0 ? `${Math.round(abs/3600)}h ago`: `in ${Math.round(abs/3600)}h`;
+    else                     rel = diffS <= 0 ? `${Math.round(abs/86400)}d ago`: `in ${Math.round(abs/86400)}d`;
+    const local = d.toLocaleString(undefined, {
+        month: 'short', day: '2-digit',
+        hour: '2-digit', minute: '2-digit'
+    });
+    return `<span title="${d.toISOString()}">${local}<br><span style="color:#888;font-size:11px;">${rel}</span></span>`;
+}
+
+function _escHtml(s) {
+    if (s == null) return '';
+    return String(s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+async function refreshCronJobs() {
+    const tbody = document.getElementById('cronJobsTbody');
+    if (!tbody) return;
+    try {
+        const resp = await fetch('/api/cron_jobs', { cache: 'no-store' });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        const jobs = Array.isArray(data.jobs) ? data.jobs : [];
+        if (jobs.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="6" style="padding:20px 10px;color:#888;text-align:center;">No scheduled jobs.</td></tr>`;
+            return;
+        }
+        const rows = jobs.map(j => {
+            const name = _escHtml(j.id || j.name || '(unnamed)');
+            const desc = _escHtml(j.description || '');
+            const enabled = j.enabled !== false;
+            const statusBadge = enabled
+                ? `<span style="color:#7ec87e;">● on</span>`
+                : `<span style="color:#b88;">○ off</span>`;
+            const cronHuman = _escHtml(j.cron_human || j.cron || '');
+            const cronRaw = _escHtml(j.cron || '');
+            const schedule = `${cronHuman}<br><code style="color:#888;font-size:11px;">${cronRaw}</code>`;
+            const lastFire = _fmtCronTime(j.last_fire);
+            const nextFire = _fmtCronTime(j.next_run_iso || j.next_run);
+            return `<tr style="border-bottom:1px solid #222;">
+                <td style="padding:8px 10px;vertical-align:top;"><b>${name}</b></td>
+                <td style="padding:8px 10px;vertical-align:top;">${desc}</td>
+                <td style="padding:8px 10px;vertical-align:top;">${statusBadge}</td>
+                <td style="padding:8px 10px;vertical-align:top;">${schedule}</td>
+                <td style="padding:8px 10px;vertical-align:top;">${lastFire}</td>
+                <td style="padding:8px 10px;vertical-align:top;">${nextFire}</td>
+            </tr>`;
+        });
+        tbody.innerHTML = rows.join('');
+    } catch (e) {
+        tbody.innerHTML = `<tr><td colspan="6" style="padding:20px 10px;color:#b88;text-align:center;">Failed to load cron jobs: ${_escHtml(e.message)}</td></tr>`;
+    }
+}
+
+// ============================================================================
+//  Decorations: scene background image (drag-drop, persisted to localStorage)
+// ============================================================================
+
+const _BG_DEFAULT = null; // solid dark background by default
+const _BG_KEY = 'parrot.bg';
+const _BG_STYLES_KEY = 'parrot.bg_settings';
+// 4 MB source cap: base64 inflates ~33 %, so ~5.3 MB in storage. Most browsers
+// give localStorage ~5–10 MB per origin; leave headroom for other keys.
+const _BG_MAX_BYTES = 4 * 1024 * 1024;
+
+const _BG_STYLE_DEFAULTS = { fit: 'cover', posX: 50, posY: 50, blur: 0, brightness: 1 };
+
+function _loadBgStyles() {
+    try {
+        const raw = localStorage.getItem(_BG_STYLES_KEY);
+        if (raw) return { ..._BG_STYLE_DEFAULTS, ...JSON.parse(raw) };
+    } catch { /* ignore */ }
+    return { ..._BG_STYLE_DEFAULTS };
+}
+
+function _saveBgStyles(s) {
+    try { localStorage.setItem(_BG_STYLES_KEY, JSON.stringify(s)); } catch { /* ignore */ }
+}
+
+function _applyBgStyles(s) {
+    if (window._setSceneBackgroundStyles) window._setSceneBackgroundStyles(s);
+}
+
+function _humanBytes(n) {
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+    return (n / 1024 / 1024).toFixed(2) + ' MB';
+}
+
+function _updateBgPreview(src, label) {
+    const row = document.getElementById('bgPreviewRow');
+    const img = document.getElementById('bgPreview');
+    const hint = document.getElementById('bgSizeHint');
+    if (!row || !img) return;
+    if (src) {
+        img.src = src;
+        img.style.display = '';
+    } else {
+        img.src = '';
+        img.style.display = 'none';
+    }
+    if (hint) hint.textContent = label || '';
+    row.style.display = '';
+}
+
+function _applySceneBg(src) {
+    if (window._setSceneBackground) window._setSceneBackground(src);
+}
+
+async function _handleBgFile(file) {
+    if (!file || !file.type.startsWith('image/')) {
+        alert('Please drop an image file.');
+        return;
+    }
+    if (file.size > _BG_MAX_BYTES) {
+        alert(`Image is ${_humanBytes(file.size)}. Pick one under ${_humanBytes(_BG_MAX_BYTES)} so it fits in browser storage.`);
+        return;
+    }
+    const dataUrl = await new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(r.result);
+        r.onerror = () => reject(r.error);
+        r.readAsDataURL(file);
+    });
+    try {
+        localStorage.setItem(_BG_KEY, dataUrl);
+    } catch (e) {
+        alert('Could not save to browser storage: ' + e.message +
+              '\nThe background will apply for this session but won\'t persist.');
+    }
+    _applySceneBg(dataUrl);
+    _updateBgPreview(dataUrl, `${file.name} — ${_humanBytes(file.size)}`);
+}
+
+function setupDecorations() {
+    const dropzone = document.getElementById('bgDropzone');
+    const fileInput = document.getElementById('bgFile');
+    const resetBtn = document.getElementById('btnBgReset');
+    if (!dropzone || !fileInput) return;
+
+    dropzone.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', (e) => {
+        if (e.target.files[0]) _handleBgFile(e.target.files[0]);
+        fileInput.value = '';
+    });
+
+    dropzone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropzone.classList.add('drag-over');
+    });
+    dropzone.addEventListener('dragleave', (e) => {
+        if (!dropzone.contains(e.relatedTarget)) dropzone.classList.remove('drag-over');
+    });
+    dropzone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropzone.classList.remove('drag-over');
+        const f = e.dataTransfer.files[0];
+        if (f) _handleBgFile(f);
+    });
+
+    resetBtn?.addEventListener('click', () => {
+        try {
+            localStorage.removeItem(_BG_KEY);
+            localStorage.removeItem(_BG_STYLES_KEY);
+        } catch { /* ignore */ }
+        _applySceneBg(null);
+        _applyBgStyles(_BG_STYLE_DEFAULTS);
+        _syncBgStyleControls(_BG_STYLE_DEFAULTS);
+        _updateBgPreview(null, 'default (solid dark)');
+    });
+
+    let saved = null;
+    try { saved = localStorage.getItem(_BG_KEY); } catch { /* ignore */ }
+    if (saved) {
+        _updateBgPreview(saved, 'custom (saved in browser)');
+    } else {
+        _applySceneBg(null);
+        _updateBgPreview(null, 'default (solid dark)');
+    }
+
+    // --- Tuning knobs: fit, position, blur, brightness ---
+    const styles = _loadBgStyles();
+    _syncBgStyleControls(styles);
+    _applyBgStyles(styles);
+
+    const bgFit = document.getElementById('bgFit');
+    const sX = document.getElementById('slider-bg-posX');
+    const sY = document.getElementById('slider-bg-posY');
+    const sBlur = document.getElementById('slider-bg-blur');
+    const sBright = document.getElementById('slider-bg-bright');
+
+    function _push(partial) {
+        Object.assign(styles, partial);
+        _applyBgStyles(styles);
+        _saveBgStyles(styles);
+    }
+
+    bgFit?.addEventListener('change', () => _push({ fit: bgFit.value }));
+    sX?.addEventListener('input', () => {
+        document.getElementById('val-bg-posX').textContent = sX.value;
+        _push({ posX: +sX.value });
+    });
+    sY?.addEventListener('input', () => {
+        document.getElementById('val-bg-posY').textContent = sY.value;
+        _push({ posY: +sY.value });
+    });
+    sBlur?.addEventListener('input', () => {
+        document.getElementById('val-bg-blur').textContent = sBlur.value;
+        _push({ blur: +sBlur.value });
+    });
+    sBright?.addEventListener('input', () => {
+        document.getElementById('val-bg-bright').textContent = sBright.value;
+        _push({ brightness: +sBright.value / 100 });
+    });
+}
+
+function _syncBgStyleControls(s) {
+    const bgFit = document.getElementById('bgFit');
+    const sX = document.getElementById('slider-bg-posX');
+    const sY = document.getElementById('slider-bg-posY');
+    const sBlur = document.getElementById('slider-bg-blur');
+    const sBright = document.getElementById('slider-bg-bright');
+    if (bgFit) bgFit.value = s.fit;
+    if (sX) sX.value = s.posX;
+    if (sY) sY.value = s.posY;
+    if (sBlur) sBlur.value = s.blur;
+    if (sBright) sBright.value = Math.round(s.brightness * 100);
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    set('val-bg-posX', s.posX);
+    set('val-bg-posY', s.posY);
+    set('val-bg-blur', s.blur);
+    set('val-bg-bright', Math.round(s.brightness * 100));
 }
 
 // ============================================================================
@@ -1611,7 +2327,7 @@ function setupAdminButtons() {
         btnRestartTTS.addEventListener('click', async () => {
             btnRestartTTS.disabled = true;
             try {
-                await fetch(`http://${bridgeHost}:${bridgePort}/admin/tts/restart`, { method: 'POST' });
+                await fetch(_bridgeHttpUrl('/admin/tts/restart'), { method: 'POST' });
                 if (debugBar) debugBar.textContent = 'TTS restarted';
             } catch (e) {
                 console.error('TTS restart failed:', e);
@@ -1621,6 +2337,63 @@ function setupAdminButtons() {
         });
     }
 
+    // Process-level restart (for when STT/TTS have died and HTTP isn't an
+    // option). Shells out to ./start.sh on the bridge. Expect a few seconds
+    // for model load; health check confirms when it's back.
+    async function _restartService(svc, statusEl) {
+        const buttons = [
+            document.getElementById('btnRestartSTT'),
+            document.getElementById('btnRestartTTSProc'),
+            document.getElementById('btnRestartBoth'),
+        ].filter(Boolean);
+        buttons.forEach(b => b.disabled = true);
+        if (statusEl) statusEl.textContent = `Restarting ${svc}…`;
+
+        try {
+            const resp = await fetch(
+                _bridgeHttpUrl(`/admin/services/restart?service=${encodeURIComponent(svc)}`),
+                { method: 'POST' }
+            );
+            const data = await resp.json();
+            if (!resp.ok) throw new Error(data.detail || 'HTTP ' + resp.status);
+
+            // Poll /health for up to 30s so the status reflects reality
+            if (statusEl) statusEl.textContent = `${svc} started, waiting for model load…`;
+            const deadline = Date.now() + 30000;
+            while (Date.now() < deadline) {
+                await new Promise(r => setTimeout(r, 1500));
+                try {
+                    const h = await fetch(_bridgeHttpUrl('/health'));
+                    const hj = await h.json();
+                    const targets = svc === 'all' ? ['stt', 'tts'] : [svc];
+                    const allOk = targets.every(t => (hj.services?.[t] || '').startsWith('ok'));
+                    if (allOk) {
+                        if (statusEl) statusEl.textContent = `${svc} ready.`;
+                        if (debugBar) debugBar.textContent = `${svc} restarted OK`;
+                        break;
+                    }
+                } catch { /* ignore transient failures */ }
+            }
+            if (statusEl && statusEl.textContent.includes('waiting')) {
+                statusEl.textContent = `${svc} taking longer than usual — check logs.`;
+            }
+        } catch (e) {
+            console.error(`restart ${svc} failed:`, e);
+            if (statusEl) statusEl.textContent = `Restart failed: ${e.message || e}`;
+            if (debugBar) debugBar.textContent = `Restart ${svc} failed`;
+        } finally {
+            buttons.forEach(b => b.disabled = false);
+        }
+    }
+
+    const svcStatusEl = document.getElementById('svcRestartStatus');
+    const btnSTT = document.getElementById('btnRestartSTT');
+    const btnTTSProc = document.getElementById('btnRestartTTSProc');
+    const btnBoth = document.getElementById('btnRestartBoth');
+    if (btnSTT)     btnSTT.addEventListener('click',      () => _restartService('stt', svcStatusEl));
+    if (btnTTSProc) btnTTSProc.addEventListener('click',  () => _restartService('tts', svcStatusEl));
+    if (btnBoth)    btnBoth.addEventListener('click',     () => _restartService('all', svcStatusEl));
+
     // Clear memory
     const btnClearMemory = document.getElementById('btnClearMemory');
     if (btnClearMemory) {
@@ -1628,7 +2401,7 @@ function setupAdminButtons() {
             if (!confirm('Clear all memory? This cannot be undone.')) return;
             btnClearMemory.disabled = true;
             try {
-                await fetch(`http://${bridgeHost}:${bridgePort}/admin/clear-memory`, { method: 'POST' });
+                await fetch(_bridgeHttpUrl('/admin/clear-memory'), { method: 'POST' });
                 if (debugBar) debugBar.textContent = 'Memory cleared';
             } catch (e) {
                 console.error('Memory clear failed:', e);
@@ -1644,7 +2417,7 @@ function setupAdminButtons() {
         btnShiroToggle.addEventListener('click', async () => {
             btnShiroToggle.disabled = true;
             try {
-                await fetch(`http://${bridgeHost}:${bridgePort}/admin/shiro/toggle`, { method: 'POST' });
+                await fetch(_bridgeHttpUrl('/admin/shiro/toggle'), { method: 'POST' });
             } catch (e) {
                 console.error('Shiro toggle failed:', e);
             }
@@ -1658,7 +2431,7 @@ function setupAdminButtons() {
         btnReloadTools.addEventListener('click', async () => {
             btnReloadTools.disabled = true;
             try {
-                const resp = await fetch(`http://${bridgeHost}:${bridgePort}/admin/reload-tools`, { method: 'POST' });
+                const resp = await fetch(_bridgeHttpUrl('/admin/reload-tools'), { method: 'POST' });
                 const data = await resp.json();
                 if (debugBar) debugBar.textContent = `Tools reloaded: ${(data.tools || []).length}`;
             } catch (e) {
@@ -1678,7 +2451,7 @@ function setupAdminButtons() {
 async function loadChatHistory(limit) {
     if (!bridgePort) return;
     try {
-        const resp = await fetch(`http://${bridgeHost}:${bridgePort}/api/conversation?limit=${limit || 50}`);
+        const resp = await fetch(_bridgeHttpUrl(`/api/conversation?limit=${limit || 50}`), { headers: authHeaders() });
         if (!resp.ok) return;
         const data = await resp.json();
         if (data.exchanges && Array.isArray(data.exchanges)) {
@@ -1704,6 +2477,16 @@ async function loadChatHistory(limit) {
 // ============================================================================
 
 async function init() {
+    // 0. Auth — try anonymous bootstrap on fresh visits.
+    //    No JWT stored → POST /api/auth/anon with the persistent browser_token
+    //    (= localStorage parrot.session_id). Backend resolves to an existing
+    //    user (by browser_token, then by IP) or creates a fresh anon profile.
+    //    Only fall back to /login if the bootstrap call itself fails.
+    if (!getJwt()) {
+        const ok = await tryAnonBootstrap();
+        if (!ok) { location.href = '/login'; return; }
+    }
+
     // 1. Fetch /api/config to get bridge port
     try {
         const resp = await fetch('/api/config');
@@ -1739,8 +2522,11 @@ async function init() {
     // 4. Setup UI interactions
     setupTabs();
     setupConfigSliders();
+    setupDecorations();
     setupAdminButtons();
     setupGlobalChat();
+    setupAccountTab();
+    initPresenceClaim();
 
     // Text input enter key
     if (textInput) {

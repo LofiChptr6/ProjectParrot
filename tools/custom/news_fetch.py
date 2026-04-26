@@ -1,6 +1,7 @@
 """Custom tool: get_news — fetch recent news via Brave Search API."""
 
 import json
+import os
 
 TOOL_DEF = {
     "type": "function",
@@ -27,7 +28,9 @@ TOOL_DEF = {
     },
 }
 
-_BRAVE_API_KEY = "BSAztOV-ipiwcO1nXSMzAxIYl3kveoM"
+# Read at call time so rotation doesn't require a code change. Export
+# BRAVE_API_KEY before launching the bridge.
+_BRAVE_API_KEY = os.environ.get("BRAVE_API_KEY", "")
 
 
 async def execute(arguments: dict) -> str:
@@ -39,6 +42,8 @@ async def execute(arguments: dict) -> str:
 
     if not topic:
         return "Error: no topic provided."
+    if not _BRAVE_API_KEY:
+        return "Error: BRAVE_API_KEY env var not set — news fetch disabled."
 
     try:
         async with httpx.AsyncClient(timeout=10) as client:

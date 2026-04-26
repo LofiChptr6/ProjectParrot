@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mocha — Sign In</title>
+<style>
+:root {
+    --bg: #0a0c10;
+    --surface: #12151c;
+    --card: #1a1e28;
+    --border: #252a36;
+    --accent: #e94560;
+    --accent-dim: #c73652;
+    --text: #d4d8e4;
+    --muted: #6b7280;
+    --radius: 12px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: var(--bg); color: var(--text);
+    min-height: 100vh;
+    display: flex; align-items: center; justify-content: center;
+}
+.card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 40px 36px;
+    width: 100%; max-width: 400px;
+    box-shadow: 0 16px 48px rgba(0,0,0,0.5);
+}
+h1 { font-size: 1.6rem; font-weight: 700; margin-bottom: 6px; }
+.subtitle { color: var(--muted); font-size: 0.9rem; margin-bottom: 28px; }
+
+/* Tabs */
+.tabs { display: flex; gap: 0; margin-bottom: 28px;
+        border-bottom: 1px solid var(--border); }
+.tab-btn {
+    flex: 1; background: none; border: none; color: var(--muted);
+    padding: 10px; font-size: 0.95rem; cursor: pointer;
+    border-bottom: 2px solid transparent; margin-bottom: -1px;
+    transition: color .15s, border-color .15s;
+}
+.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* Form */
+.form-group { margin-bottom: 18px; }
+label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 6px; }
+input {
+    width: 100%; padding: 10px 14px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; color: var(--text); font-size: 0.95rem;
+    outline: none; transition: border-color .15s;
+}
+input:focus { border-color: var(--accent); }
+
+button[type=submit] {
+    width: 100%; padding: 12px;
+    background: var(--accent); border: none; border-radius: 8px;
+    color: #fff; font-size: 1rem; font-weight: 600;
+    cursor: pointer; margin-top: 8px; transition: background .15s;
+}
+button[type=submit]:hover { background: var(--accent-dim); }
+button[type=submit]:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.error {
+    background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.4);
+    border-radius: 8px; padding: 10px 14px;
+    color: #ef4444; font-size: 0.88rem; margin-bottom: 16px; display: none;
+}
+.hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div class="card">
+    <h1>Mocha</h1>
+    <p class="subtitle">Your personal AI companion</p>
+
+    <div class="tabs">
+        <button class="tab-btn active" onclick="switchTab('login')">Sign In</button>
+        <button class="tab-btn" onclick="switchTab('signup')">Sign Up</button>
+    </div>
+
+    <div id="error-msg" class="error"></div>
+
+    <!-- Login form -->
+    <form id="login-form" onsubmit="handleLogin(event)">
+        <div class="form-group">
+            <label>Email or username</label>
+            <input type="text" id="login-identifier" required placeholder="you@example.com">
+        </div>
+        <div class="form-group">
+            <label>Password</label>
+            <input type="password" id="login-password" required placeholder="••••••••">
+        </div>
+        <button type="submit" id="login-btn">Sign In</button>
+    </form>
+
+    <!-- Signup form -->
+    <form id="signup-form" class="hidden" onsubmit="handleSignup(event)">
+        <div class="form-group">
+            <label>Email</label>
+            <input type="email" id="signup-email" required placeholder="you@example.com">
+        </div>
+        <div class="form-group">
+            <label>Username</label>
+            <input type="text" id="signup-username" required placeholder="mocha_fan">
+        </div>
+        <div class="form-group">
+            <label>Password</label>
+            <input type="password" id="signup-password" required placeholder="min 6 characters">
+        </div>
+        <button type="submit" id="signup-btn">Create Account</button>
+    </form>
+</div>
+
+<script>
+const BRIDGE_PORT = null; // resolved at runtime from /api/config
+
+async function getBridgeBase() {
+    try {
+        const r = await fetch('/api/config');
+        const c = await r.json();
+        return `http://${location.hostname}:${c.bridge_port}`;
+    } catch {
+        return '';
+    }
+}
+
+function switchTab(tab) {
+    document.querySelectorAll('.tab-btn').forEach((b, i) =>
+        b.classList.toggle('active', (i === 0) === (tab === 'login')));
+    document.getElementById('login-form').classList.toggle('hidden', tab !== 'login');
+    document.getElementById('signup-form').classList.toggle('hidden', tab !== 'signup');
+    document.getElementById('error-msg').style.display = 'none';
+}
+
+function showError(msg) {
+    const el = document.getElementById('error-msg');
+    el.textContent = msg;
+    el.style.display = 'block';
+}
+
+async function handleLogin(e) {
+    e.preventDefault();
+    const btn = document.getElementById('login-btn');
+    btn.disabled = true;
+    btn.textContent = 'Signing in…';
+    document.getElementById('error-msg').style.display = 'none';
+
+    const identifier = document.getElementById('login-identifier').value.trim();
+    const password = document.getElementById('login-password').value;
+
+    try {
+        const r = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({email_or_username: identifier, password}),
+        });
+        const data = await r.json();
+        if (!r.ok) { showError(data.detail || 'Login failed'); return; }
+        localStorage.setItem('parrot.jwt', data.access_token);
+        location.href = '/';
+    } catch (err) {
+        showError('Network error — is the server running?');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Sign In';
+    }
+}
+
+async function handleSignup(e) {
+    e.preventDefault();
+    const btn = document.getElementById('signup-btn');
+    btn.disabled = true;
+    btn.textContent = 'Creating account…';
+    document.getElementById('error-msg').style.display = 'none';
+
+    const email = document.getElementById('signup-email').value.trim();
+    const username = document.getElementById('signup-username').value.trim();
+    const password = document.getElementById('signup-password').value;
+
+    if (password.length < 6) {
+        showError('Password must be at least 6 characters');
+        btn.disabled = false;
+        btn.textContent = 'Create Account';
+        return;
+    }
+
+    try {
+        const r = await fetch('/api/auth/signup', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({email, username, password}),
+        });
+        const data = await r.json();
+        if (!r.ok) { showError(data.detail || 'Signup failed'); return; }
+        localStorage.setItem('parrot.jwt', data.access_token);
+        location.href = '/';
+    } catch (err) {
+        showError('Network error — is the server running?');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Create Account';
+    }
+}
+</script>
+</body>
+</html>

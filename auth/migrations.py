@@ -24,6 +24,39 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 CREATE INDEX IF NOT EXISTS idx_llm_log_user ON llm_call_log(user_id);
+
+-- Anonymous user support: relax uniqueness constraints + add account_type/display_name.
+-- email/username/password_hash become nullable so anon users (no credentials) can exist.
+-- ALTER COLUMN ... DROP NOT NULL is idempotent in PG14+ (no-op if already nullable).
+ALTER TABLE users ALTER COLUMN email         DROP NOT NULL;
+ALTER TABLE users ALTER COLUMN username      DROP NOT NULL;
+ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS account_type TEXT NOT NULL DEFAULT 'registered';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT;
+
+-- Browser-token (= parrot.session_id from localStorage) → user_id mapping.
+-- Primary anon identity: stable per-browser, survives IP changes.
+CREATE TABLE IF NOT EXISTS user_devices (
+    id            BIGSERIAL PRIMARY KEY,
+    user_id       TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    browser_token TEXT UNIQUE NOT NULL,
+    user_agent    TEXT,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_user_devices_user ON user_devices(user_id);
+
+-- IP → user_id mapping. Fallback identity when browser token is missing
+-- (e.g. cleared localStorage); also records "user has visited from these networks".
+CREATE TABLE IF NOT EXISTS user_ips (
+    id          BIGSERIAL PRIMARY KEY,
+    user_id     TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    ip_address  TEXT NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(user_id, ip_address)
+);
+CREATE INDEX IF NOT EXISTS idx_user_ips_ip ON user_ips(ip_address);
 """
 
 ADMIN_USERNAME = "ika_admin"

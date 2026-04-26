@@ -94,8 +94,19 @@ body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
 
 .main-layout { position: relative; width: 100vw; height: 100vh; overflow: hidden; }
 
-.canvas-area { position: fixed; inset: 0; z-index: 0; }
-#canvas3d { width: 100%; height: 100%; display: block; }
+.canvas-area { position: fixed; inset: 0; z-index: 0; overflow: hidden; }
+/* Background image layer — sits behind the canvas so blur/brightness
+ * filters don't affect Mocha. Overshoots viewport by 30px on every side so
+ * strong blur radii don't reveal the page body at the edges. */
+#bgLayer {
+    position: absolute; inset: -30px; z-index: 0;
+    background-color: #0a0c10;
+    background-repeat: no-repeat;
+    background-size: cover;
+    background-position: center;
+    pointer-events: none;
+}
+#canvas3d { position: relative; z-index: 1; width: 100%; height: 100%; display: block; }
 
 .drop-overlay {
     position: absolute; inset: 0; z-index: 5;
@@ -334,33 +345,63 @@ body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
 .theme-modal-btn.primary:hover { background: var(--accent-dim); border-color: var(--accent-dim); }
 
 /* ── Thinking log — live stream of agent activity, inline in chat sidebar ─ */
+.thinking-log-wrap {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    border-top: 1px solid var(--border);
+    background: rgba(0, 0, 0, 0.22);
+}
+.thinking-log-wrap:has(.thinking-log:empty):not(.collapsed) {
+    display: none;
+}
+.thinking-log-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 5px 12px 5px;
+    border-bottom: 1px dashed var(--border);
+}
+.thinking-log-title {
+    font-size: 9px;
+    letter-spacing: 0.12em;
+    color: var(--muted);
+}
+.thinking-log-toggle {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    cursor: pointer;
+    width: 20px;
+    height: 18px;
+    line-height: 1;
+    font-size: 12px;
+    border-radius: 4px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.thinking-log-toggle:hover {
+    color: var(--text);
+    border-color: var(--muted);
+}
+.thinking-log-wrap.collapsed .thinking-log {
+    display: none;
+}
 .thinking-log {
     flex: 0 0 auto;
     max-height: 32%;
     min-height: 0;
     overflow-y: auto;
     padding: 6px 12px;
-    border-top: 1px solid var(--border);
-    background: rgba(0, 0, 0, 0.22);
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 11px;
     line-height: 1.45;
     color: var(--muted);
     scrollbar-width: thin;
     scrollbar-color: var(--border) transparent;
-}
-.thinking-log:empty {
-    display: none;
-}
-.thinking-log::before {
-    content: "THINKING";
-    display: block;
-    font-size: 9px;
-    letter-spacing: 0.12em;
-    color: var(--muted);
-    padding: 4px 0 6px;
-    border-bottom: 1px dashed var(--border);
-    margin-bottom: 4px;
 }
 .thinking-entry {
     white-space: nowrap;
@@ -663,6 +704,14 @@ body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
 }
 .config-card label { font-size: 13px; color: var(--text); display: block; margin-bottom: 6px; }
 .config-value { color: var(--accent); font-family: monospace; font-weight: 600; }
+.config-hint  { color: var(--muted); font-size: 11px; font-weight: 400; margin-left: 6px; }
+.svc-restart-row {
+    display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px;
+}
+.svc-restart-status {
+    margin-top: 8px; font-size: 11px; color: var(--muted);
+    font-family: 'SF Mono', Menlo, monospace; min-height: 14px;
+}
 
 .config-slider {
     width: 100%; height: 4px; -webkit-appearance: none; appearance: none;
@@ -693,7 +742,8 @@ body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
     padding: 16px; text-align: center; cursor: pointer; color: var(--muted);
     font-size: 13px; transition: border-color 0.2s;
 }
-.voice-upload:hover { border-color: var(--accent); }
+.voice-upload:hover,
+.voice-upload.drag-over { border-color: var(--accent); color: var(--accent); }
 
 /* ── Training tab ──────────────────────────────────────────────────────── */
 
@@ -1078,3 +1128,419 @@ body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
     .thread-cards { grid-template-columns: 1fr; }
     .status-lights .light-label { display: none; }
 }
+
+/* ── Diary Modal — Kawaii Notebook ───────────────────────────────────── */
+/*
+ * A pastel spiral-bound diary that opens over the dark app. Pure CSS +
+ * inline SVG for the binding rings; no image assets required.
+ *
+ * Palette:
+ *   paper        #fff7ec   warm cream, not stark white
+ *   rule line    #f5d8e4   pastel pink, faint
+ *   margin line  #ff9fb7   pink, for the "ruled notebook" vertical
+ *   text         #5a4538   soft dark-brown, easy on cream
+ *   muted        #a68a7d
+ *   pink-accent  #ffb3c6
+ *   mint-accent  #bdeed1
+ *   peach-accent #ffd3b6
+ *   lavender     #e2d1ff
+ */
+
+.diary-modal {
+    position: fixed; inset: 0; z-index: 150;  /* above Settings modal (100) */
+    background: radial-gradient(ellipse at center,
+        rgba(60, 40, 60, 0.55),
+        rgba(10, 5, 15, 0.75));
+    backdrop-filter: blur(8px);
+    display: flex; align-items: center; justify-content: center;
+    animation: diary-fade-in 0.2s ease-out;
+}
+.diary-modal.hidden { display: none; }
+
+@keyframes diary-fade-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+
+.diary-book {
+    position: relative;
+    width: min(560px, 92vw);
+    max-height: 86vh;
+    background: #fff7ec;
+    color: #5a4538;
+    border-radius: 6px 6px 14px 14px;
+    padding-top: 18px;   /* coil now sits outside the book; small breathing room */
+    font-family: 'Nunito', 'Quicksand', system-ui, sans-serif;
+    font-weight: 500;
+    /* Page depth — stacked shadows suggest pages beneath, then a soft outer glow */
+    box-shadow:
+        inset 0 0 0 1px #f7e5cd,             /* paper edge highlight */
+        0  2px 0 #f4dcbf,                    /* page 1 under */
+        0  4px 0 #ecd1ae,                    /* page 2 under */
+        0  6px 0 #e1c29a,                    /* page 3 under */
+        0 20px 40px rgba(120, 40, 80, 0.35), /* warm pinkish cast */
+        0 40px 80px rgba(0, 0, 0, 0.35);
+    display: flex; flex-direction: column;
+    overflow: visible;  /* washi + bookmark can hang out slightly */
+    animation: diary-open 0.35s cubic-bezier(0.25, 1.2, 0.4, 1);
+}
+
+@keyframes diary-open {
+    0%   { transform: translateY(14px) scale(0.9) rotate(-1.5deg); opacity: 0; }
+    60%  { transform: translateY(-2px) scale(1.015) rotate(0.5deg); }
+    100% { transform: translateY(0)   scale(1)     rotate(0);      opacity: 1; }
+}
+
+/* Ruled-paper lines + pink margin line behind everything */
+.diary-book::before {
+    content: '';
+    position: absolute;
+    top: 18px; left: 0; right: 0; bottom: 0;
+    background:
+        /* vertical pink margin line, ~48px from left */
+        linear-gradient(90deg,
+            transparent 0, transparent 48px,
+            #ff9fb7 48px, #ff9fb7 49px,
+            transparent 49px, transparent 100%),
+        /* horizontal ruled lines */
+        repeating-linear-gradient(
+            #fff7ec 0, #fff7ec 27px,
+            #f5d8e4 28px, #fff7ec 29px);
+    pointer-events: none;
+    border-radius: 0 0 14px 14px;
+    opacity: 0.75;
+}
+
+/* Spiral binding along the top — pastel pink plastic coil looping through
+ * punched holes in the paper. Implemented as an SVG background pattern so
+ * we get real curves (a row of discrete circles reads as "buttons", not
+ * binding). Each repeat unit is 58px wide, with the back-half arc faded and
+ * the front-half arc opaque to suggest the coil wrapping over the paper.
+ */
+.diary-spiral {
+    position: absolute;
+    left: 0; right: 0; top: -14px;   /* coil sits above the paper edge */
+    height: 30px;
+    pointer-events: none;
+    z-index: 3;
+    /* A single "ring" unit, tiled horizontally. Inline SVG, URL-escaped. */
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='58' height='30' viewBox='0 0 58 30'><defs><linearGradient id='coil' x1='0%25' y1='0%25' x2='0%25' y2='100%25'><stop offset='0%25' stop-color='%23ffd3e1'/><stop offset='45%25' stop-color='%23f79ab8'/><stop offset='100%25' stop-color='%23d46a94'/></linearGradient></defs><ellipse cx='29' cy='26' rx='9' ry='2.3' fill='%23a8826a' opacity='0.35'/><ellipse cx='29' cy='24' rx='7.5' ry='2.1' fill='%232c1b10' opacity='0.85'/><path d='M22 24 C 22 10 36 10 36 24' fill='none' stroke='%23d46a94' stroke-width='2' opacity='0.35'/><path d='M19 24 C 19 3 39 3 39 24' fill='none' stroke='url(%23coil)' stroke-width='3.5' stroke-linecap='round'/><path d='M22 18 C 22 7 30 3 34 5' fill='none' stroke='%23ffeef5' stroke-width='1.2' stroke-linecap='round' opacity='0.85'/></svg>");
+    background-repeat: repeat-x;
+    background-position: center bottom;
+    background-size: 58px 30px;
+}
+/* The 12 decorative spans in HTML are now unnecessary — the SVG tile
+ * handles all the rings. Hide them cleanly instead of touching the HTML. */
+.diary-spiral > span { display: none; }
+
+/* Washi tape — pink-&-white diagonal stripe, rotated, tucked over top edge */
+.diary-washi {
+    position: absolute;
+    top: 10px; right: -28px;
+    width: 130px; height: 30px;
+    background: repeating-linear-gradient(
+        -45deg,
+        #ffb3c6 0 10px,
+        #ffd3e1 10px 20px);
+    opacity: 0.85;
+    transform: rotate(14deg);
+    box-shadow:
+        0 2px 4px rgba(120, 40, 80, 0.25),
+        inset 0 0 0 1px rgba(255,255,255,0.3);
+    pointer-events: none;
+    z-index: 3;
+    /* Torn/uneven ends via a clip-path */
+    clip-path: polygon(
+        2% 20%, 6% 0%, 14% 15%, 22% 5%, 34% 10%, 46% 0%, 58% 12%, 70% 3%,
+        82% 10%, 94% 0%, 98% 25%, 96% 90%, 88% 100%, 78% 85%, 68% 100%,
+        56% 90%, 44% 100%, 32% 88%, 20% 100%, 10% 85%, 3% 95%);
+}
+
+/* Bookmark ribbon hanging from the top-right, teal */
+.diary-bookmark {
+    position: absolute;
+    top: 0; right: 30px;
+    width: 22px; height: 70px;
+    background: linear-gradient(180deg, #7fd5c0 0%, #5fb8a2 60%, #4a9f8a 100%);
+    box-shadow:
+        inset 1px 0 0 rgba(255,255,255,0.3),
+        0 2px 6px rgba(0,0,0,0.25);
+    clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 82%, 0 100%);
+    pointer-events: none;
+    z-index: 2;
+}
+
+/* Dog-ear fold bottom-right */
+.diary-dogear {
+    position: absolute;
+    bottom: -2px; right: -2px;
+    width: 32px; height: 32px;
+    background: linear-gradient(135deg, #f0dec4 0 50%, transparent 50%);
+    filter: drop-shadow(-1px -1px 2px rgba(100, 60, 30, 0.2));
+    clip-path: polygon(100% 0, 100% 100%, 0 100%);
+    pointer-events: none;
+    z-index: 3;
+    border-bottom-right-radius: 14px;
+}
+
+/* ── Header: date + nav buttons ───────────────────────────────────── */
+
+.diary-book-header {
+    position: relative;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 22px 10px 60px;   /* left-pad past the pink margin line */
+    z-index: 1;  /* above ruled-paper pseudo */
+}
+.diary-date {
+    font-family: 'Nunito', sans-serif;
+    font-size: 18px; font-weight: 800; letter-spacing: 0.02em;
+    color: #c2497a;
+}
+.diary-nav { display: flex; align-items: center; gap: 6px; z-index: 4; }
+.diary-counter {
+    font-size: 12px; color: #a68a7d; min-width: 44px; text-align: center;
+    font-weight: 700;
+}
+.diary-nav-btn {
+    background: #fff;
+    border: 1.5px solid #ffb3c6;
+    color: #c2497a;
+    width: 32px; height: 32px; border-radius: 50%;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 15px; font-weight: 700;
+    transition: transform 0.15s, background 0.15s, box-shadow 0.15s;
+    box-shadow: 0 2px 4px rgba(194, 73, 122, 0.15);
+}
+.diary-nav-btn:hover {
+    background: #ffe4ec;
+    transform: translateY(-1px) scale(1.05);
+    box-shadow: 0 3px 8px rgba(194, 73, 122, 0.3);
+}
+.diary-nav-btn:active { transform: translateY(0) scale(0.96); }
+.diary-close-btn {
+    border-color: #d0c0b4; color: #8a6f60;
+    box-shadow: 0 2px 4px rgba(80, 60, 40, 0.1);
+}
+.diary-close-btn:hover {
+    background: #fee2e2; color: #c04040; border-color: #f0a0a0;
+}
+
+/* ── Page body ─────────────────────────────────────────────────────── */
+
+.diary-page-body {
+    position: relative;
+    flex: 1; overflow-y: auto;
+    padding: 8px 26px 22px 60px;  /* left padding clears the pink margin line */
+    z-index: 1;
+}
+
+.diary-status {
+    font-size: 11px; color: #c2497a;
+    font-style: italic; letter-spacing: 0.02em;
+    margin-bottom: 6px; min-height: 14px;
+}
+
+.diary-summary {
+    font-family: 'Patrick Hand', cursive;
+    font-size: 20px; line-height: 28px;  /* 28px matches the ruled-line repeat */
+    color: #5a4538;
+    white-space: pre-wrap; word-wrap: break-word;
+    padding: 0 0 14px 0;
+    letter-spacing: 0.01em;
+}
+
+.diary-highlights {
+    margin-top: 4px;
+}
+.diary-highlights ul {
+    margin: 6px 0 16px 0; padding: 0;
+    list-style: none;
+}
+.diary-highlights li {
+    position: relative;
+    padding: 4px 0 4px 22px;
+    font-family: 'Patrick Hand', cursive;
+    font-size: 17px; line-height: 1.55;
+    color: #6a5042;
+}
+.diary-highlights li::before {
+    content: '♡';
+    position: absolute; left: 0; top: 3px;
+    color: #ff7aa0; font-size: 15px;
+    font-family: 'Nunito', sans-serif;
+}
+.diary-highlights li:nth-child(2)::before { content: '✦'; color: #6ab8a0; }
+.diary-highlights li:nth-child(3)::before { content: '✿'; color: #d48cc5; }
+
+/* ── Activity log ──────────────────────────────────────────────────── */
+
+.diary-activities {
+    margin-top: 14px;
+    padding-top: 10px;
+    border-top: 1px dashed #e6cdb5;
+}
+.diary-activities > summary {
+    cursor: pointer;
+    font-family: 'Nunito', sans-serif;
+    font-size: 12px; font-weight: 700;
+    color: #a68a7d; letter-spacing: 0.08em;
+    padding: 4px 0; user-select: none;
+    list-style: none;
+    display: flex; align-items: center; gap: 6px;
+}
+.diary-activities > summary::-webkit-details-marker { display: none; }
+.diary-activities > summary::after {
+    content: '▾'; display: inline-block; transition: transform 0.15s;
+    color: #c6a48a; margin-left: 4px;
+}
+.diary-activities[open] > summary::after { transform: rotate(-180deg); }
+
+.diary-activities-list {
+    margin-top: 8px;
+    font-family: 'Nunito', sans-serif;
+    font-size: 12px;
+    max-height: 200px; overflow-y: auto;
+    padding-right: 4px;
+}
+.diary-activity {
+    padding: 6px 10px;
+    margin-bottom: 4px;
+    border-radius: 8px;
+    background: #fdecd8;
+    border: 1px solid #f0dcc0;
+    line-height: 1.45;
+    transition: background 0.15s;
+}
+/* Rotate pastel accent colours so the sticky-note list feels playful */
+.diary-activity:nth-child(3n+1) { background: #fdecd8; border-color: #f0dcc0; } /* peach */
+.diary-activity:nth-child(3n+2) { background: #e8f7ef; border-color: #c9e8d7; } /* mint */
+.diary-activity:nth-child(3n+3) { background: #ffeef5; border-color: #ffd4e0; } /* pink */
+.diary-activity:hover { filter: brightness(1.04); }
+.diary-activity-time {
+    color: #c2497a; margin-right: 8px; font-weight: 700;
+}
+.diary-activity-tool {
+    color: #5a4538; font-weight: 700; margin-right: 4px;
+}
+.diary-activity-brief {
+    color: #8a6f60;
+}
+.diary-activity-empty {
+    padding: 12px 0; color: #a68a7d; font-style: italic; font-size: 13px;
+    text-align: center;
+}
+
+/* ── Actions (delete button) ──────────────────────────────────────── */
+
+.diary-actions {
+    display: flex; justify-content: flex-end;
+    margin-top: 16px; padding-top: 10px;
+}
+.diary-action-btn {
+    background: #fff; border: 1.5px solid #e6c5cd;
+    color: #a68a7d;
+    padding: 6px 14px; font-size: 11px; letter-spacing: 0.08em;
+    font-weight: 700; text-transform: uppercase;
+    border-radius: 18px; cursor: pointer;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+    font-family: 'Nunito', sans-serif;
+}
+.diary-action-btn:hover:not(:disabled) {
+    color: #c04040; border-color: #e08080; background: #ffeded;
+}
+.diary-action-btn:disabled { cursor: not-allowed; opacity: 0.5; }
+
+/* Scrollbars — match the pastel theme */
+.diary-page-body::-webkit-scrollbar,
+.diary-activities-list::-webkit-scrollbar {
+    width: 6px;
+}
+.diary-page-body::-webkit-scrollbar-thumb,
+.diary-activities-list::-webkit-scrollbar-thumb {
+    background: #e6c5cd; border-radius: 3px;
+}
+.diary-page-body::-webkit-scrollbar-thumb:hover,
+.diary-activities-list::-webkit-scrollbar-thumb:hover {
+    background: #d498a8;
+}
+
+/* ── Account tab + quota bar ─────────────────────────────────────────── */
+.account-badge {
+    display: inline-block;
+    margin-left: 6px;
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #fff;
+    font-size: 10px; font-weight: 700;
+    line-height: 16px; text-align: center;
+}
+.acct-form {
+    display: flex; flex-direction: column; gap: 10px;
+    margin-top: 14px;
+}
+.acct-field { display: flex; flex-direction: column; gap: 4px; }
+.acct-field span { font-size: 12px; color: var(--muted); }
+.acct-field input {
+    padding: 8px 10px;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 13px;
+}
+.acct-field input:focus { outline: none; border-color: var(--accent); }
+.acct-error {
+    padding: 8px 10px;
+    background: rgba(233, 69, 96, 0.1);
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    font-size: 12px;
+}
+.acct-quota-bar {
+    height: 8px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+    margin-top: 6px;
+}
+.acct-quota-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #4ade80, #fbbf24, var(--accent));
+    transition: width 300ms ease-out;
+}
+
+/* ── Single-active-Mocha presence (mocha-away state) ─────────────────── */
+/* When this device is NOT the active session, the 3D model slides off and
+   audio mutes. UI panels stay normally usable. Click anywhere to claim. */
+#canvas3d {
+    transition: transform 400ms cubic-bezier(0.4, 0, 0.2, 1), opacity 400ms;
+}
+body.mocha-away #canvas3d {
+    transform: translateX(-110%);
+    opacity: 0;
+    pointer-events: none;
+}
+.mocha-away-pill {
+    position: fixed;
+    bottom: 28px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 10px 18px;
+    background: rgba(20, 20, 28, 0.92);
+    color: #eee;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    font-size: 13px;
+    backdrop-filter: blur(6px);
+    z-index: 9000;
+    cursor: pointer;
+    user-select: none;
+    display: none;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+body.mocha-away .mocha-away-pill { display: block; }
+.mocha-away-pill:hover { background: rgba(40, 40, 52, 0.95); }

@@ -58,6 +58,16 @@ async def close_pool() -> None:
     _enabled = False
 
 
+def get_pool() -> Any:
+    """Return the shared asyncpg pool, or None if not initialized.
+
+    Exposed so other modules (auth.quota, account-related queries) can reuse
+    the same pool instead of opening their own. None means call-log is disabled
+    in config; callers should treat that as "no DB available."
+    """
+    return _pool
+
+
 # ------------------------------------------------------------------
 #  Schema bootstrap (idempotent)
 # ------------------------------------------------------------------

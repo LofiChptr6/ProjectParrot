@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import time
+from contextvars import ContextVar
 from pathlib import Path
 
 import yaml
@@ -21,6 +22,22 @@ import yaml
 from bridge.call_log import CallContext
 from bridge import call_log
 from tools.registry import TOOL_SCHEMAS, TOOL_NAMES
+from tools.handle_registry import (
+    resolve_handles_in_args,
+    substitute_urls_with_handles,
+)
+
+# Per-task capture for /admin/eval. When non-None, execute_tool appends one
+# record per call (args before/after handle resolution, result preview + size,
+# latency, ok, round). Stays None on the live path — zero overhead.
+EVAL_CAPTURE: ContextVar[list[dict] | None] = ContextVar("eval_capture", default=None)
+# Tool round counter within a single eval. Bumped once per tool_loop round so
+# captured records know which round they came from; the live path never reads
+# or sets it.
+EVAL_TOOL_ROUND: ContextVar[int] = ContextVar("eval_tool_round", default=0)
+# ProjectParrot user_id of the user whose turn is currently being processed.
+# Set by _run_inline_turn so that cron/diary tools can tag their output.
+TOOL_USER_ID: ContextVar[str | None] = ContextVar("tool_user_id", default=None)
 
 log = logging.getLogger("tools")
 
@@ -46,43 +63,103 @@ _BASH_BLOCKLIST = list(_tools_cfg.get("bash_exec", {}).get("blocklist_patterns",
 # Custom tools registered by Shiro via tools/custom/ hot-reload
 _CUSTOM_EXECUTORS: dict[str, callable] = {}
 
+# Tools whose output is local/structural — skip URL→handle substitution here.
+_NO_SUBSTITUTE = {"bash_exec", "read_file", "write_file", "list_dir", "git_status"}
+
 
 async def execute_tool(name: str, arguments: dict) -> str:
-    """Dispatch a single tool call and return the result as a string."""
+    """Dispatch a single tool call and return the result as a string.
+
+    Two registry hooks wrap the dispatch so tools themselves stay handle-naive:
+
+      pre-dispatch:   resolve any handle in ``arguments`` to its real URL/ID
+      post-dispatch:  substitute raw URLs in the output with opaque handles
+
+    The LLM therefore only ever sees handles; real URLs round-trip invisibly
+    through the tool layer.
+    """
+    if not isinstance(arguments, dict):
+        arguments = {}
+    resolved_args = resolve_handles_in_args(arguments)
+
+    _capture = EVAL_CAPTURE.get()
+    _t0 = time.monotonic()
+    _ok = True
     try:
         if name == "bash_exec":
-            return await _bash_exec(
-                arguments["command"],
-                working_dir=arguments.get("working_dir", _WORKING_DIR),
-                timeout=arguments.get("timeout", _TOOL_TIMEOUT),
+            result = await _bash_exec(
+                resolved_args["command"],
+                working_dir=resolved_args.get("working_dir", _WORKING_DIR),
+                timeout=resolved_args.get("timeout", _TOOL_TIMEOUT),
             )
         elif name == "read_file":
-            return _read_file(arguments["path"])
+            result = _read_file(resolved_args["path"])
         elif name == "write_file":
-            return _write_file(arguments["path"], arguments["content"])
+            result = _write_file(resolved_args["path"], resolved_args["content"])
         elif name == "git_status":
-            return await _bash_exec("git status", working_dir=_WORKING_DIR, timeout=10)
+            result = await _bash_exec("git status", working_dir=_WORKING_DIR, timeout=10)
         elif name == "list_dir":
-            return _list_dir(arguments.get("path", _WORKING_DIR))
+            result = _list_dir(resolved_args.get("path", _WORKING_DIR))
         elif name == "web_search":
-            return _web_search(
-                query=arguments.get("query", ""),
-                max_results=int(arguments.get("max_results", 5)),
+            result = _web_search(
+                query=resolved_args.get("query", ""),
+                max_results=int(resolved_args.get("max_results", 5)),
             )
         elif name in _CUSTOM_EXECUTORS:
-            return await _CUSTOM_EXECUTORS[name](arguments)
+            result = await _CUSTOM_EXECUTORS[name](resolved_args)
         else:
-            return f"Unknown tool: {name}"
+            result = f"Unknown tool: {name}"
+            _ok = False
     except Exception as exc:
-        return f"Tool error ({name}): {exc}"
+        result = f"Tool error ({name}): {exc}"
+        _ok = False
+
+    # Hide raw URLs behind handles before the LLM sees the output. Skip tools
+    # whose output is local/structural (bash, file IO, dir listings) — those
+    # don't leak URLs to the LLM in practice and substituting there would
+    # break any exact-string reasoning.
+    if _ok and name not in _NO_SUBSTITUTE:
+        try:
+            result = substitute_urls_with_handles(result)
+        except Exception as exc:
+            log.warning("handle substitution failed for %s: %s", name, exc)
+
+    if _capture is not None:
+        _result_str = result if isinstance(result, str) else str(result)
+        _capture.append({
+            "round": EVAL_TOOL_ROUND.get(),
+            "name": name,
+            "arguments_raw": arguments,
+            "arguments_resolved": resolved_args,
+            "result_preview": _result_str[:800],
+            "result_bytes": len(_result_str),
+            "latency_ms": round((time.monotonic() - _t0) * 1000, 1),
+            "ok": _ok,
+        })
+
+    # Feed every successful tool call into the session scratchpad so Mocha
+    # has within-session recall ("play that again") and the diary writer has
+    # the day's activity log. Fire-and-forget, never blocking the tool path.
+    if _ok:
+        try:
+            from bridge import session_scratchpad
+            session_scratchpad.add(name, arguments, result)
+        except Exception:
+            pass
+
+    return result
 
 
-_BRAVE_API_KEY = "BSAztOV-ipiwcO1nXSMzAxIYl3kveoM"
+# Brave Search API key — read from env at call time so rotation doesn't need
+# a code change. Export BRAVE_API_KEY before launching the bridge.
+_BRAVE_API_KEY = os.environ.get("BRAVE_API_KEY", "")
 
 def _web_search(query: str, max_results: int = 5) -> str:
     """Search the web via Brave Search API and return top results."""
     log.info("Tool web_search: %r (max_results=%d)", query[:80], max_results)
     max_results = min(max(1, max_results), 10)
+    if not _BRAVE_API_KEY:
+        return "[web_search disabled: BRAVE_API_KEY env var not set]"
     try:
         import httpx
         resp = httpx.get(
@@ -169,160 +246,3 @@ def _list_dir(path: str) -> str:
     return "\n".join(lines) or "(empty)"
 
 
-async def tool_loop(
-    user_text: str,
-    memories: list[dict],
-    llm_client,
-    job_id: int = 0,
-    log_ctx: CallContext | None = None,
-) -> list[dict]:
-    """ReAct-style loop: LLM may call tools, we execute and feed results back.
-
-    After at most ``_MAX_TOOL_ROUNDS`` rounds of tool calls, or when the LLM
-    produces a final answer without tool calls, we return the segment list.
-
-    ``llm_client`` is the bridge's ``LLMClient`` instance.
-    """
-
-    from character.context import build_system_prompt
-    from bridge.server import (
-        conversation_history,
-        MAX_HISTORY,
-        _parse_llm_response,
-        normalize_llm_segments,
-        ANIMATION_MODE,
-        _ANIMATION_CLIPS,
-        _LLM_FALLBACK,
-    )
-
-    system_prompt = build_system_prompt(
-        animation_mode=ANIMATION_MODE,
-        animation_clips=_ANIMATION_CLIPS if ANIMATION_MODE == "llm_select" else None,
-        tools_available=True,
-    )
-
-    messages = [{"role": "system", "content": system_prompt}]
-    if memories:
-        mem_lines = [f"- ({m['role']}): {m['text']}" for m in memories]
-        messages.append({"role": "system", "content": "[Relevant memories from past conversations]:\n" + "\n".join(mem_lines)})
-    for entry in conversation_history[-MAX_HISTORY:]:
-        messages.append(entry)
-    messages.append({"role": "user", "content": user_text})
-
-    _base_ctx = log_ctx or CallContext(triggered_by="tool_loop", conversation_id=str(job_id))
-
-    def _log_result(result: dict, msgs: list[dict], latency: float,
-                    triggered_by: str, tool_round: int | None = None,
-                    tools_provided: bool = True) -> None:
-        ctx = dataclasses.replace(_base_ctx, triggered_by=triggered_by, tool_round=tool_round)
-        _usage = result.get("usage", {})
-        asyncio.create_task(call_log.log_call(
-            ctx, model=llm_client.model,
-            temperature=llm_client.default_temperature,
-            max_tokens=llm_client.default_max_tokens,
-            stream=False, tools_provided=tools_provided,
-            messages=msgs,
-            response_content=result.get("content"),
-            response_tool_calls=result.get("tool_calls"),
-            finish_reason=result.get("finish_reason"),
-            error=result.get("_error"), latency_ms=latency,
-            prompt_tokens=_usage.get("prompt_tokens"),
-            completion_tokens=_usage.get("completion_tokens"),
-            total_tokens=_usage.get("total_tokens"),
-        ))
-
-    _seen_calls: set[tuple] = set()  # dedup: prevent infinite retry loops
-
-    for round_num in range(_MAX_TOOL_ROUNDS):
-        try:
-            _t0 = time.monotonic()
-            result = await llm_client.chat(messages, tools=TOOL_SCHEMAS)
-            _lat = (time.monotonic() - _t0) * 1000
-            _log_result(result, messages, _lat, "tool_loop", tool_round=round_num + 1)
-        except Exception as exc:
-            log.error("Tool-loop LLM request failed: %s", exc)
-            return [dict(_LLM_FALLBACK)]
-
-        tool_calls = result.get("tool_calls")
-
-        if not tool_calls:
-            content = result.get("content", "")
-            if not content:
-                return [dict(_LLM_FALLBACK)]
-            segments = _parse_llm_response(content)
-            return await normalize_llm_segments(user_text, segments, job_id=job_id)
-
-        # Deduplication: if all calls in this round are identical to ones already
-        # executed, inject a nudge instead of running them again (breaks retry loops).
-        dedup_keys = []
-        for tc in tool_calls:
-            fn = tc.get("function", {})
-            args_str = json.dumps(fn.get("arguments", {}), sort_keys=True) if isinstance(fn.get("arguments"), dict) else str(fn.get("arguments", ""))
-            dedup_keys.append((fn.get("name", ""), args_str))
-        if all(k in _seen_calls for k in dedup_keys):
-            log.warning("Tool loop: all calls are duplicates — injecting give-up nudge")
-            messages.append({"role": "user", "content": "The search didn't find useful results. Please give your best answer based on what you know, or acknowledge you couldn't find it."})
-            _t0 = time.monotonic()
-            result = await llm_client.chat(messages)
-            _lat = (time.monotonic() - _t0) * 1000
-            _log_result(result, messages, _lat, "tool_loop_nudge",
-                        tool_round=round_num + 1, tools_provided=False)
-            content = result.get("content", "")
-            segments = _parse_llm_response(content) if content else [dict(_LLM_FALLBACK)]
-            return await normalize_llm_segments(user_text, segments, job_id=job_id)
-        _seen_calls.update(dedup_keys)
-
-        # Process tool calls — re-serialize arguments for the OpenAI API
-        api_msg = {
-            "role": "assistant",
-            "content": result.get("content") or "",
-            "tool_calls": [
-                {
-                    "id": tc.get("id", f"call_{i}"),
-                    "type": "function",
-                    "function": {
-                        "name": tc["function"]["name"],
-                        "arguments": (
-                            json.dumps(tc["function"]["arguments"])
-                            if isinstance(tc["function"]["arguments"], dict)
-                            else tc["function"]["arguments"]
-                        ),
-                    },
-                }
-                for i, tc in enumerate(tool_calls)
-            ],
-        }
-        messages.append(api_msg)
-        for tc in tool_calls:
-            fn = tc.get("function", {})
-            name = fn.get("name", "")
-            args = fn.get("arguments", {})
-            if isinstance(args, str):
-                try:
-                    args = json.loads(args)
-                except json.JSONDecodeError:
-                    args = {}
-
-            log.info("Tool call [round %d]: %s(%s)", round_num + 1, name, str(args)[:120])
-            tool_result = await execute_tool(name, args)
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tc.get("id", f"call_{round_num}"),
-                "content": tool_result,
-            })
-
-    # Exhausted rounds — force a final answer without tools
-    try:
-        _force_msgs = messages + [{"role": "user", "content": "Please provide your final answer now."}]
-        _t0 = time.monotonic()
-        result = await llm_client.chat(_force_msgs)
-        _lat = (time.monotonic() - _t0) * 1000
-        _log_result(result, _force_msgs, _lat, "tool_loop_force", tools_provided=False)
-        content = result.get("content", "")
-        if content:
-            segments = _parse_llm_response(content)
-            return await normalize_llm_segments(user_text, segments, job_id=job_id)
-    except Exception:
-        pass
-
-    return [dict(_LLM_FALLBACK)]
