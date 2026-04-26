@@ -1208,18 +1208,29 @@ body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
         height: 100%;
     }
 
-    /* Floating input bar — position:absolute inside .main-layout (which is
-       sized 100dvh), so bottom:8px anchors to the DYNAMIC viewport bottom.
-       When the keyboard opens, dvh shrinks → main-layout shrinks → the bar
-       rides up natively, regardless of URL bar / Safari toolbar / iPhone
-       size. The 60px extra padding when body.keyboard-open clears the iOS
-       AutoFill suggestion bar (which sits above the keyboard but isn't
-       always counted in dvh). */
+    /* On phone: switch the whole layout to flex-column so the keyboard
+       naturally shrinks main-layout (height:100dvh) and the input bar,
+       being a flex child, rides up with the visible viewport. This is the
+       canonical iOS-keyboard fix per recent CSSWG / web.dev guidance —
+       avoids ALL the fixed-position + visualViewport gymnastics. */
+    .main-layout {
+        display: flex;
+        flex-direction: column;
+    }
+    .canvas-area {
+        position: relative !important;   /* override desktop's position:fixed */
+        inset: auto !important;
+        flex: 1 1 auto;                  /* grow to fill the remaining space */
+        height: auto !important;
+        min-height: 0;                   /* allow shrink */
+    }
+    /* Floating input bar: in normal flow at the bottom of main-layout. */
     .phone-input-bar {
         display: flex;
-        position: absolute;
-        left: 8px; right: 8px;
-        bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+        position: relative;              /* override default absolute */
+        left: auto; right: auto; bottom: auto;
+        flex: 0 0 auto;                  /* don't grow, don't shrink */
+        margin: 8px 8px calc(8px + env(safe-area-inset-bottom, 0px));
         z-index: 30;
         gap: 8px;
         align-items: center;
@@ -1229,34 +1240,28 @@ body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
         border: 1px solid var(--border);
         border-radius: 999px;
         box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
-        transition: bottom 180ms ease;
-    }
-    /* Lift extra when keyboard is open to clear the iOS suggestion bar. */
-    body.keyboard-open .phone-input-bar {
-        bottom: calc(56px + env(safe-area-inset-bottom, 0px));
     }
     /* Hide the chat panel's built-in input row — typing is done via the
        floating bar instead, so the sheet is purely a history viewer. */
     .chat-sidebar .chat-input { display: none; }
 
-    /* ── Chat: bottom half — position:absolute inside main-layout so it
-           also rides the dynamic viewport. Sits above the floating input. */
+    /* ── Chat sheet — fixed-position overlay anchored to the bottom of
+           the visible viewport. Sits above the input bar (which is the last
+           flex child in main-layout). On iOS the whole flex layout shrinks
+           with the keyboard, which auto-positions the input correctly; the
+           chat sheet uses 100dvh-based offsets to track the same area. */
     .chat-sidebar {
-        position: absolute;
+        position: fixed;
         top: auto;
         left: 0; right: 0;
         bottom: calc(60px + env(safe-area-inset-bottom, 0px));
-        width: 100%;
+        width: 100vw;
         height: calc(50dvh - 60px);
         max-height: calc(100dvh - 80px);
         border-left: none;
         border-top: 1px solid var(--border);
         border-top-left-radius: 16px;
         border-top-right-radius: 16px;
-        transition: bottom 180ms ease;
-    }
-    body.keyboard-open .chat-sidebar {
-        bottom: calc(108px + env(safe-area-inset-bottom, 0px));
     }
     /* Collapse button repositions slightly so it's reachable with a thumb */
     .chat-collapse-btn {
