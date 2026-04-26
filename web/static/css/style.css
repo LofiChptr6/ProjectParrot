@@ -92,9 +92,29 @@ body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
 /* Layer 1: 3D canvas fills entire viewport (always fullscreen)           */
 /* Layer 2: Chat, panels, modals float on top as overlays                 */
 
-.main-layout { position: relative; width: 100vw; height: 100vh; overflow: hidden; }
+/* `dvh` = dynamic viewport height — automatically shrinks when the iOS soft
+ * keyboard opens. The layout, canvas-area, and Mocha all repaint into the
+ * smaller visible area, so the keyboard simply takes back the bottom of the
+ * viewport without iOS having to scroll Mocha out of view. Fall back to vh
+ * for ancient browsers. */
+.main-layout {
+    position: relative;
+    width: 100vw;
+    height: 100vh;        /* fallback */
+    height: 100dvh;
+    overflow: hidden;
+}
 
-.canvas-area { position: fixed; inset: 0; z-index: 0; overflow: hidden; }
+.canvas-area {
+    position: fixed;
+    inset: 0;
+    /* On phones, anchor the canvas to the dynamic viewport so it shrinks
+     * with the keyboard. On desktop these properties are no-ops. */
+    bottom: 0;
+    height: 100dvh;
+    z-index: 0;
+    overflow: hidden;
+}
 /* Background image layer — sits behind the canvas so blur/brightness
  * filters don't affect Mocha. Overshoots viewport by 30px on every side so
  * strong blur radii don't reveal the page body at the edges. */
