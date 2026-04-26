@@ -603,31 +603,42 @@ function initPresenceClaim() {
 function initKeyboardTracker() {
     if (!window.visualViewport) return;  // Pre-iOS 13 / older browsers
     const vv = window.visualViewport;
+    const canvasArea = document.getElementById('canvasArea');
 
     function update() {
-        // visualViewport.height shrinks when keyboard is up.
-        // visualViewport.offsetTop is non-zero if Safari decided to scroll
-        // (shouldn't happen with our position:fixed lock, but include it).
-        const offset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
-        document.documentElement.style.setProperty('--kb-offset', offset + 'px');
-        document.body.classList.toggle('keyboard-open', offset > 50);
+        // Keyboard height = whatever the layout viewport has that the
+        // visual viewport doesn't.
+        const kb = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+        document.documentElement.style.setProperty('--kb-offset', kb + 'px');
+        document.body.classList.toggle('keyboard-open', kb > 50);
+
+        // iOS Safari sometimes scrolls the layout viewport up to bring the
+        // focused input into view (vv.offsetTop > 0 when this happens).
+        // Counter-translate the canvas DOWN by that amount so Mocha stays
+        // pinned to the visible area regardless of what Safari does.
+        if (canvasArea) {
+            if (vv.offsetTop > 0) {
+                canvasArea.style.transform = `translateY(${vv.offsetTop}px)`;
+            } else {
+                canvasArea.style.transform = '';
+            }
+        }
     }
 
     vv.addEventListener('resize', update);
     vv.addEventListener('scroll', update);
     update();
 
-    // iOS Safari belt-and-suspenders: even with position:fixed on html/body,
-    // the browser sometimes still scrolls the document to bring the focused
-    // input into view. Pin scroll to 0 whenever it drifts. Cheap.
+    // iOS Safari belt-and-suspenders: snap scroll to 0 whenever it drifts.
     function _pinScroll() {
         if (window.scrollY !== 0 || window.scrollX !== 0) {
             window.scrollTo(0, 0);
         }
+        // Also re-run the offset compensation in case scroll changed offsetTop.
+        update();
     }
     window.addEventListener('scroll', _pinScroll, { passive: true });
     document.addEventListener('focusin', () => {
-        // Defer past the browser's auto-scroll-into-view, then snap back.
         requestAnimationFrame(() => requestAnimationFrame(_pinScroll));
     });
     document.addEventListener('focusout', () => {
