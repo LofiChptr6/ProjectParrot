@@ -14,9 +14,10 @@ from pathlib import Path
 import httpx
 import websockets as _wss
 import yaml
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, Request, WebSocket
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 import uvicorn
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -25,6 +26,51 @@ _bridge_port = _cfg.get("bridge", {}).get("port", 8000)
 _web_port = _cfg.get("web", {}).get("port", 8080)
 
 app = FastAPI(title="Mocha Web")
+
+
+# ── Cache-control middleware ────────────────────────────────────────────────
+# Cloudflare aggressively caches HTML/JS/CSS at the edge by default. That broke
+# the welcome-first rollout: visitors got a stale app.js without tryAnonBootstrap
+# and fell through to the old /login page. Force no-cache on the source-of-truth
+# entry assets (HTML + JS + CSS) so deploys take effect immediately. Real binaries
+# (images, VRM model, audio clips) keep a long max-age — those are versioned by
+# filename and almost never change.
+class CacheControlMiddleware(BaseHTTPMiddleware):
+    """Tell Cloudflare (and the browser) what to cache vs always re-fetch."""
+
+    NO_CACHE_SUFFIXES = (".html", ".js", ".css", ".json")
+    LONG_CACHE_SUFFIXES = (
+        ".vrm", ".jpg", ".jpeg", ".png", ".webp", ".gif",
+        ".svg", ".ico", ".mp3", ".wav", ".ogg", ".mp4", ".woff", ".woff2",
+    )
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        path = request.url.path
+
+        # Never cache API/WS responses or HTML entry points (/, /login).
+        if path.startswith(("/api/", "/admin/", "/ws/", "/chat/")) or path in ("/", "/login"):
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+            return response
+
+        # Source files we deploy frequently — fetch every time, but allow
+        # 304s via ETag/Last-Modified. Prevents Cloudflare from holding stale
+        # JS/CSS at the edge after a code push.
+        if path.endswith(self.NO_CACHE_SUFFIXES):
+            response.headers["Cache-Control"] = "no-cache, must-revalidate"
+            return response
+
+        # Real binary assets — safe to cache for a day at the edge + browser.
+        if path.endswith(self.LONG_CACHE_SUFFIXES):
+            response.headers["Cache-Control"] = "public, max-age=86400"
+            return response
+
+        return response
+
+
+app.add_middleware(CacheControlMiddleware)
 
 # ── Static file routes ──────────────────────────────────────────────────────
 
