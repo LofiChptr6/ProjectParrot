@@ -227,10 +227,13 @@ def create_anon_user(browser_token: str, ip: str | None, user_agent: str | None 
 
 
 def upgrade_anon_to_registered(
-    user_id: str, email: str, username: str, password_hash: str
+    user_id: str, email: str | None, username: str, password_hash: str
 ) -> dict:
     """Attach credentials to an existing (anon) user. Same user_id; all per-user
     data (memory, diary, soul.md, etc.) keeps working without re-keying.
+
+    `email` is optional — pass None when the signup form only collects a
+    username. The DB column is nullable (and UNIQUE-friendly to NULLs).
 
     Raises psycopg2.IntegrityError if email/username already taken.
     """

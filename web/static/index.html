@@ -384,14 +384,14 @@
             </div>
         </div>
 
-        <!-- Account tab — anon → registered upgrade + quota usage -->
+        <!-- Account tab — anon view (sign-up / sign-in tabs) + registered view -->
         <div class="modal-content" id="modal-account">
             <div class="config-grid">
-                <!-- Anon view: sign-up CTA + token quota progress -->
+                <!-- Anon view: sign-up + sign-in toggle + quota usage ─────── -->
                 <div class="config-section" id="acctAnonSection" style="display:none;">
                     <h3 class="section-title">You're chatting as a guest</h3>
                     <p class="config-hint" style="margin:0 0 14px;">
-                        Sign up to keep your conversation across devices and chat without a daily limit.
+                        Sign up to save your conversation across devices, or sign in to an existing account.
                     </p>
 
                     <div class="config-card">
@@ -404,14 +404,18 @@
                         </div>
                     </div>
 
-                    <form id="acctSignupForm" class="acct-form">
-                        <label class="acct-field">
-                            <span>Email</span>
-                            <input type="email" id="acctSignupEmail" required autocomplete="email">
-                        </label>
+                    <!-- Sub-tabs: Sign Up / Sign In -->
+                    <div class="acct-subtabs">
+                        <button type="button" class="acct-subtab active" data-acct="signup">Sign up</button>
+                        <button type="button" class="acct-subtab" data-acct="signin">Sign in</button>
+                    </div>
+
+                    <!-- Sign Up form (single username field; email auto-mirrors if it looks like one) -->
+                    <form id="acctSignupForm" class="acct-form acct-pane" data-acct-pane="signup">
                         <label class="acct-field">
                             <span>Username</span>
-                            <input type="text" id="acctSignupUsername" required autocomplete="username" minlength="3">
+                            <input type="text" id="acctSignupUsername" required autocomplete="username" minlength="3"
+                                   placeholder="pick anything — username or email">
                         </label>
                         <label class="acct-field">
                             <span>Password</span>
@@ -420,22 +424,39 @@
                         <div class="acct-error" id="acctSignupError" style="display:none;"></div>
                         <button class="btn" type="submit" id="acctSignupBtn">Sign up &amp; remove cap</button>
                     </form>
+
+                    <!-- Sign In form (existing account) -->
+                    <form id="acctSigninForm" class="acct-form acct-pane" data-acct-pane="signin" style="display:none;">
+                        <label class="acct-field">
+                            <span>Username</span>
+                            <input type="text" id="acctSigninUsername" required autocomplete="username">
+                        </label>
+                        <label class="acct-field">
+                            <span>Password</span>
+                            <input type="password" id="acctSigninPassword" required autocomplete="current-password">
+                        </label>
+                        <div class="acct-error" id="acctSigninError" style="display:none;"></div>
+                        <button class="btn" type="submit" id="acctSigninBtn">Sign in</button>
+                    </form>
+
+                    <!-- Reset / "log out" of guest profile (drops browser_token, fresh start) -->
+                    <button class="btn btn-sm acct-reset-btn" id="acctResetGuestBtn"
+                            title="Drop this guest profile and start fresh on next reload">
+                        Reset guest profile
+                    </button>
                 </div>
 
-                <!-- Registered view: profile + sign out -->
+                <!-- Registered view: profile + sign out ─────────────────── -->
                 <div class="config-section" id="acctRegisteredSection" style="display:none;">
                     <h3 class="section-title">Account</h3>
                     <div class="config-card">
-                        <label>Username <span class="config-value" id="acctUsername">—</span></label>
-                    </div>
-                    <div class="config-card">
-                        <label>Email <span class="config-value" id="acctEmail">—</span></label>
+                        <label>Signed in as <span class="config-value" id="acctUsername">—</span></label>
                     </div>
                     <div class="config-card">
                         <label>Daily token cap</label>
                         <div class="config-hint">Unlimited (registered)</div>
                     </div>
-                    <button class="btn btn-sm" id="acctSignOutBtn">Sign out</button>
+                    <button class="btn" id="acctSignOutBtn">Sign out</button>
                 </div>
             </div>
         </div>

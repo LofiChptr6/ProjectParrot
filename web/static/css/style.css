@@ -1612,6 +1612,37 @@ body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
     transition: width 300ms ease-out;
 }
 
+/* Sub-tabs inside the Account anon view: Sign Up / Sign In toggle */
+.acct-subtabs {
+    display: flex;
+    gap: 4px;
+    margin: 14px 0 8px;
+    border-bottom: 1px solid var(--border);
+}
+.acct-subtab {
+    background: none;
+    border: none;
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 500;
+    padding: 8px 16px;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    transition: color 0.15s, border-color 0.15s;
+}
+.acct-subtab:hover { color: var(--text); }
+.acct-subtab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* "Reset guest profile" — secondary, smaller, separated visually */
+.acct-reset-btn {
+    margin-top: 14px;
+    background: transparent;
+    color: var(--muted);
+    border: 1px solid var(--border);
+}
+.acct-reset-btn:hover { color: var(--text); border-color: var(--muted); }
+
 /* ── Single-active-Mocha presence (mocha-away state) ─────────────────── */
 /* When this device is NOT the active session, the 3D model slides off and
    audio mutes. UI panels stay normally usable. Click anywhere to claim. */

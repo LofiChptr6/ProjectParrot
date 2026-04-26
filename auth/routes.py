@@ -133,9 +133,11 @@ async def anon_bootstrap(body: AnonBootstrap, request: Request):
 # ---------------------------------------------------------------------------
 
 class UpgradeRequest(BaseModel):
-    email: str
+    # Single identifier — username (also stored as email if it parses like one).
+    # Email is optional; the modal sign-up only asks for username + password.
     username: str
     password: str
+    email: Optional[str] = None
 
 
 class UpgradeResponse(TokenResponse):
@@ -149,18 +151,28 @@ async def upgrade(body: UpgradeRequest, current_user: CurrentUser = Depends(get_
 
     Same user_id stays — all per-user data (memory, diary, soul.md, etc.)
     is keyed by user_id and continues working without re-keying.
+
+    Only `username` and `password` are required. `email` is optional; if the
+    username happens to look like an email we copy it into the email column too
+    (so users who type their email as the identifier can still log in via the
+    email field later).
     """
     if current_user.account_type != "anon":
         raise HTTPException(
             status_code=400,
-            detail="Account is already registered. Use logout + signup to create a new one.",
+            detail="Account is already registered.",
         )
-    email = body.email.strip().lower()
     username = body.username.strip()
-    if not email or not username or not body.password:
-        raise HTTPException(status_code=400, detail="email, username, and password are required")
-    if get_user_by_email(email):
-        raise HTTPException(status_code=409, detail="Email already registered")
+    if not username or not body.password:
+        raise HTTPException(status_code=400, detail="username and password are required")
+    # If the user provided an explicit email, normalize it; otherwise mirror
+    # the username when it looks like an email (e.g. "alice@x.com").
+    email = (body.email or "").strip().lower() or None
+    if email is None and "@" in username:
+        email = username.lower()
+
+    if email and get_user_by_email(email):
+        raise HTTPException(status_code=409, detail="Email already taken")
     if get_user_by_username(username):
         raise HTTPException(status_code=409, detail="Username already taken")
 

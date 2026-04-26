@@ -642,22 +642,41 @@ async function refreshAccountState() {
         anonBox.style.display = 'none';
         regBox.style.display = '';
         const u = document.getElementById('acctUsername');
-        const e = document.getElementById('acctEmail');
-        if (u) u.textContent = me.username || '—';
-        if (e) e.textContent = me.email || '—';
+        if (u) u.textContent = me.username || me.email || '—';
     }
 }
 
 /**
- * Wire up the signup form (anon → registered upgrade) and the sign-out button.
+ * Wire up the Account tab:
+ *   - Sub-tab toggle (Sign Up / Sign In) inside the anon view
+ *   - Sign-up form: anon → registered upgrade (single username field)
+ *   - Sign-in form: claim an existing registered account from this browser
+ *   - "Reset guest profile": drop browser_token + JWT, fresh anon on reload
+ *   - Sign-out (registered view): clear JWT + browser_token, reload
  * Call once on init after the modal DOM is present.
  */
 function setupAccountTab() {
-    const form = document.getElementById('acctSignupForm');
-    if (form) {
-        form.addEventListener('submit', async (ev) => {
+    // ── Sub-tab toggle (Sign Up / Sign In) ────────────────────────────
+    document.querySelectorAll('.acct-subtab').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const target = btn.dataset.acct;
+            document.querySelectorAll('.acct-subtab').forEach(b =>
+                b.classList.toggle('active', b === btn));
+            document.querySelectorAll('.acct-pane').forEach(p =>
+                p.style.display = (p.dataset.acctPane === target ? '' : 'none'));
+            // Clear any stale error from the other pane
+            ['acctSignupError', 'acctSigninError'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.style.display = 'none';
+            });
+        });
+    });
+
+    // ── Sign Up: POST /api/auth/upgrade { username, password } ──────────
+    const signupForm = document.getElementById('acctSignupForm');
+    if (signupForm) {
+        signupForm.addEventListener('submit', async (ev) => {
             ev.preventDefault();
-            const email = document.getElementById('acctSignupEmail').value.trim();
             const username = document.getElementById('acctSignupUsername').value.trim();
             const password = document.getElementById('acctSignupPassword').value;
             const errBox = document.getElementById('acctSignupError');
@@ -668,15 +687,11 @@ function setupAccountTab() {
                 const r = await fetch('/api/auth/upgrade', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', ...authHeaders() },
-                    body: JSON.stringify({ email, username, password }),
+                    body: JSON.stringify({ username, password }),
                 });
                 const j = await r.json().catch(() => ({}));
-                if (!r.ok) {
-                    throw new Error(j.detail || 'Signup failed');
-                }
-                // Swap to the new JWT (same user_id, refreshed claims).
+                if (!r.ok) throw new Error(j.detail || 'Signup failed');
                 if (j.access_token) localStorage.setItem(JWT_KEY, j.access_token);
-                // Refresh UI; the badge clears, sections swap, cap goes away.
                 await refreshAccountState();
                 const badge = document.getElementById('accountBadge');
                 if (badge) badge.style.display = 'none';
@@ -691,6 +706,56 @@ function setupAccountTab() {
         });
     }
 
+    // ── Sign In: POST /api/auth/login { email_or_username, password } ───
+    // The current anon profile gets abandoned (left in DB unowned). Browser
+    // token gets relinked to the registered user_id on next page load via
+    // anon endpoint's browser_token lookup — so we proactively call it here
+    // by clearing the local browser_token before reload.
+    const signinForm = document.getElementById('acctSigninForm');
+    if (signinForm) {
+        signinForm.addEventListener('submit', async (ev) => {
+            ev.preventDefault();
+            const username = document.getElementById('acctSigninUsername').value.trim();
+            const password = document.getElementById('acctSigninPassword').value;
+            const errBox = document.getElementById('acctSigninError');
+            const btn = document.getElementById('acctSigninBtn');
+            if (errBox) errBox.style.display = 'none';
+            if (btn) { btn.disabled = true; btn.textContent = 'Signing in…'; }
+            try {
+                const r = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email_or_username: username, password }),
+                });
+                const j = await r.json().catch(() => ({}));
+                if (!r.ok) throw new Error(j.detail || 'Sign in failed');
+                if (j.access_token) localStorage.setItem(JWT_KEY, j.access_token);
+                // Reload so the WS reconnects with the new JWT (different user_id
+                // than the anon one — needs a fresh ConversationController).
+                location.reload();
+            } catch (e) {
+                if (errBox) {
+                    errBox.textContent = (e && e.message) || 'Sign in failed';
+                    errBox.style.display = '';
+                }
+            } finally {
+                if (btn) { btn.disabled = false; btn.textContent = 'Sign in'; }
+            }
+        });
+    }
+
+    // ── Reset guest profile (anon "log out") ───────────────────────────
+    const resetBtn = document.getElementById('acctResetGuestBtn');
+    if (resetBtn) {
+        resetBtn.addEventListener('click', () => {
+            if (!confirm('Drop this guest profile and start fresh? Your conversation memory will be left behind.')) return;
+            try { localStorage.removeItem(JWT_KEY); } catch (_) {}
+            try { localStorage.removeItem(SESSION_ID_KEY); } catch (_) {}
+            location.reload();
+        });
+    }
+
+    // ── Sign out (registered view) ─────────────────────────────────────
     const out = document.getElementById('acctSignOutBtn');
     if (out) {
         out.addEventListener('click', () => {
