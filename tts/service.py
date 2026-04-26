@@ -54,6 +54,11 @@ class SynthRequest(BaseModel):
     # user's active voice from data/users/{uid}/voices/. Adds zero latency
     # — F5-TTS already reads the ref file fresh on every infer() call.
     ref_audio_path: str | None = None
+    # Optional per-call cfg_strength override. When None, uses the server's
+    # config.yaml `tts.cfg_strength`. Higher → more matches reference
+    # (calmer, less prosody variation). Lower → more free (more swings).
+    # F5's default is 2.0; we ship 2.2 to dampen exclamation/ALL-CAPS spikes.
+    cfg_strength: float | None = None
 
 
 @app.on_event("startup")
@@ -140,12 +145,21 @@ async def synthesize(req: SynthRequest):
     else:
         ref_text = (config.get("reference_text") or "").strip()
 
+    # cfg_strength = classifier-free guidance strength. Default in F5-TTS
+    # is 2.0; raising to ~2.2-2.5 dampens prosody peaks (e.g. F5's pitch
+    # spike on "!" or ALL CAPS) by leaning harder on the calm reference.
+    # Server-side default from config.yaml; per-call override accepted.
+    cfg_strength = req.cfg_strength
+    if cfg_strength is None:
+        cfg_strength = float(config.get("cfg_strength", 2.0))
+
     try:
         wav, sr, _ = tts_model.infer(
             ref_file=ref_audio,
             ref_text=ref_text,
             gen_text=req.text,
             speed=req.speed,
+            cfg_strength=cfg_strength,
         )
     except FileNotFoundError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e

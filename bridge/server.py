@@ -1443,8 +1443,34 @@ async def _generate_visemes(audio_bytes: bytes | None, text: str = "") -> dict |
         return None
 
 
+def _sanitize_for_tts(text: str) -> str:
+    """Calm down F5-TTS prosody peaks before synthesis.
+
+    F5 reads the gen_text literally and was trained on real speech, so
+    exclamation marks → big pitch + energy spike (often shouty) and ALL
+    CAPS → louder + sharper attack. Both sound off in Mocha's voice.
+
+    This mutates ONLY the text sent to TTS. The chat bubble + history are
+    built upstream from the original text, so the visual `!` emphasis is
+    preserved while the audio stays calm.
+    """
+    if not text:
+        return text
+    # Collapse `!` (any run, optionally followed by other punctuation) into
+    # a soft period. "wow!" → "wow." / "really?!" → "really?."  / "!!!" → "."
+    text = re.sub(r'!+', '.', text)
+    # Treat 2+ consecutive caps as shouting → Title-case it. Skips
+    # standalone single letters ("I", "A") and acronyms of length 1.
+    text = re.sub(
+        r'\b[A-Z]{2,}\b',
+        lambda m: m.group(0).capitalize(),
+        text,
+    )
+    return text
+
+
 async def _synthesize(text: str, user_id: str | None = None) -> Optional[bytes]:
-    payload: dict = {"text": text}
+    payload: dict = {"text": _sanitize_for_tts(text)}
     voice_path = _user_active_voice_path(user_id)
     if voice_path:
         payload["ref_audio_path"] = voice_path

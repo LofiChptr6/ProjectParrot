@@ -88,6 +88,15 @@ tts:
   reference_audio: audio/reference_voice.wav
   # GPU assignment: all services on Blackwell (GPU 0)
   gpu_id: 0
+  # Classifier-free guidance strength. F5-TTS default is 2.0.
+  #   Lower (1.5–1.8): more variation, can sound dramatic / shouty on "!"
+  #   Default (2.0):    F5's stock balance
+  #   Higher (2.2–2.6): leans harder on the calm reference voice; dampens
+  #                     prosody peaks (the "!" pitch spike, ALL CAPS energy).
+  #                     Too high → starts to sound monotone.
+  # Bridge also strips "!" → "." before sending text to TTS, so this knob is
+  # mostly belt-and-suspenders for ALL CAPS / strong emphasis cases.
+  cfg_strength: 2.2
 
 memory:
   # In-process mem0 store (no HTTP service). See memory/mem0_store.py.
