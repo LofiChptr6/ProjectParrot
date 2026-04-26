@@ -280,14 +280,20 @@ async def _send_presence(user_id: str, session_id: str, *, active: bool) -> None
     """Send presence_active / presence_inactive to one specific socket."""
     sock = _user_sockets.get((user_id, session_id))
     if sock is None:
+        log.info("presence: send skipped (no socket) uid=%s sid=%s active=%s",
+                 user_id[:8], session_id[:8], active)
         return
     try:
         await sock.send_text(json.dumps({
             "type": "presence_active" if active else "presence_inactive",
         }))
-    except Exception:
+        log.info("presence: SENT %s to uid=%s sid=%s",
+                 "active" if active else "inactive",
+                 user_id[:8], session_id[:8])
+    except Exception as exc:
         # Socket dead; let the WS handler's finally clause clean it up.
-        pass
+        log.info("presence: send FAILED uid=%s sid=%s err=%s",
+                 user_id[:8], session_id[:8], exc)
 
 
 async def _claim_active(user_id: str | None, session_id: str | None) -> None:

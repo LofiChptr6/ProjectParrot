@@ -530,6 +530,8 @@ function handleMonitorMessage(msg) {
 let _isPresent = true;  // optimistic; flipped by presence_inactive
 
 function applyPresence(active) {
+    console.log('[presence] applyPresence(%s) — body class before:', active,
+                document.body.className);
     _isPresent = !!active;
     if (active) {
         document.body.classList.remove('mocha-away');
@@ -544,6 +546,10 @@ function applyPresence(active) {
         // device the user just walked away from.
         try { if (typeof cancelPlayback === 'function') cancelPlayback(); } catch (_) {}
     }
+    console.log('[presence] applyPresence(%s) — body class after:', active,
+                document.body.className,
+                '| #canvas3d display:',
+                getComputedStyle(document.getElementById('canvas3d')).display);
 }
 
 /**
