@@ -25,6 +25,16 @@
     pointer-events: none;
 }
 
+/* Phone: chat sheet sits at the BOTTOM, so it should slide DOWN out of
+   view (not right). The horizontal slide briefly produces a partial-width
+   rect that the obstruction algo would interpret as "Mocha must dodge
+   left" — slide-down keeps the rect full-width-or-nothing the whole way. */
+@media (orientation: portrait) and (max-width: 900px), (max-width: 600px) {
+    .main-layout.chat-collapsed .chat-sidebar {
+        transform: translateY(100%);
+    }
+}
+
 .chat-toggle-btn { position: relative; }
 .chat-toggle-btn::after {
     content: '';

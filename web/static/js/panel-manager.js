@@ -430,6 +430,13 @@
 
     function _collectObstructions() {
         const vw = window.innerWidth, vh = window.innerHeight;
+        const portrait = vh > vw;
+        // On portrait, anything anchored in the bottom half of the screen
+        // (chat sheet, floating input bar, future bottom toolbars) sits BELOW
+        // Mocha — it shouldn't shift her horizontally. Skip it at collection
+        // time so the band algo never sees it. Threshold = 45% so a panel
+        // exactly at 50vh top-edge still doesn't count even mid-animation.
+        const skipBelow = portrait ? vh * 0.45 : Infinity;
         const out = [];
         for (const el of document.querySelectorAll(AVOID_SELECTORS)) {
             if (el.dataset && el.dataset.mochaAvoid === 'false') continue;
@@ -440,6 +447,8 @@
             if (r.right <= 0 || r.bottom <= 0 || r.left >= vw || r.top >= vh) continue;
             // card-container: skip if no visible children
             if (el.classList.contains('card-container') && el.children.length === 0) continue;
+            // Portrait: bottom-anchored panels are below Mocha, not next to her.
+            if (r.top >= skipBelow) continue;
             out.push({
                 left:   Math.max(0, r.left),
                 top:    Math.max(0, r.top),
