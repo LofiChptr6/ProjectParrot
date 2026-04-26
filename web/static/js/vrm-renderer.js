@@ -635,20 +635,26 @@ function initDragAndDrop() {
     const area = document.getElementById('canvasArea');
     const overlay = document.getElementById('dropOverlay');
 
+    // Save the default ("Loading…") text so we can restore it after dragleave.
+    const _defaultOverlayText = overlay.textContent;
+
     area.addEventListener('dragover', (e) => {
         e.preventDefault();
         overlay.classList.add('drag-over');
+        overlay.textContent = 'Drop .vrm model here';
     });
 
     area.addEventListener('dragleave', (e) => {
         if (!area.contains(e.relatedTarget)) {
             overlay.classList.remove('drag-over');
+            overlay.textContent = _defaultOverlayText;
         }
     });
 
     area.addEventListener('drop', async (e) => {
         e.preventDefault();
         overlay.classList.remove('drag-over');
+        overlay.textContent = _defaultOverlayText;
         const f = e.dataTransfer.files[0];
         if (f && f.name.toLowerCase().endsWith('.vrm')) {
             await loadVRMFile(f);
