@@ -457,6 +457,23 @@ function handleLiveMessage(msg) {
 
         // chat_entry handled only on /ws/monitor to avoid duplicates
 
+        // ── Single-active-Mocha presence ──────────────────────────────────
+        // Bridge sends these on the Live WS (because that's where the per-
+        // session socket is registered). When this device is told it's
+        // inactive, slide Mocha off + mute. presence_active swings it back.
+        case 'presence_active':
+            applyPresence(true);
+            break;
+
+        case 'presence_inactive':
+            applyPresence(false);
+            break;
+
+        // ── Quota cap hit (anonymous users only) ──────────────────────────
+        case 'quota_exceeded':
+            handleQuotaExceeded(msg);
+            break;
+
         default:
             // Unknown message type — ignore
             break;
@@ -507,25 +524,8 @@ function handleMonitorMessage(msg) {
             appendThinkingEntry(msg);
             break;
 
-        // ── Single-active-Mocha presence ──────────────────────────────────
-        // The same account may be open on multiple tabs/devices; only one
-        // gets to "be Mocha" at a time. The bridge picks the active session
-        // and sends presence_active/inactive events to coordinate.
-        case 'presence_active':
-            applyPresence(true);
-            break;
-
-        case 'presence_inactive':
-            applyPresence(false);
-            break;
-
-        // ── Quota cap hit (anonymous users only) ──────────────────────────
-        // Backend refuses the LLM call and sends a Mocha-voiced refusal
-        // string. We render it in the chat, flash the gear, and pop the
-        // Account tab so the sign-up CTA is right there.
-        case 'quota_exceeded':
-            handleQuotaExceeded(msg);
-            break;
+        // presence_active / presence_inactive / quota_exceeded are dispatched
+        // on the Live WS, not Monitor — they're handled in handleLiveMessage.
 
         default:
             break;
