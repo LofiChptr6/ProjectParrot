@@ -27,9 +27,16 @@ log = logging.getLogger("channels.telegram")
 class TelegramChannel(Channel):
     name = "telegram"
 
-    def __init__(self, bot_token: str, bridge_url: str, allowed_users: list[str] | None = None):
+    def __init__(
+        self,
+        bot_token: str,
+        bridge_url: str,
+        app_user_id: str | None = None,
+        allowed_users: list[str] | None = None,
+    ):
         self._token = bot_token
         self._bridge_url = bridge_url.rstrip("/")
+        self._app_user_id = app_user_id  # ProjectParrot user_id this bot belongs to
         self._allowed_users = set(allowed_users) if allowed_users else None
         self._app: Optional[Application] = None
         self._http = httpx.AsyncClient(timeout=120.0)
@@ -54,13 +61,21 @@ class TelegramChannel(Channel):
             return
 
         text = update.message.text
-        user_id = str(user.id) if user else "unknown"
-        log.info("Telegram [%s]: %s", user_id, text[:80])
+        tg_chat_id = str(user.id) if user else "unknown"
+        log.info("Telegram [app_user=%s tg=%s]: %s", self._app_user_id, tg_chat_id, text[:80])
+
+        payload: dict = {
+            "text": text,
+            "user_id": tg_chat_id,
+            "source": "telegram",
+        }
+        if self._app_user_id:
+            payload["app_user_id"] = self._app_user_id
 
         try:
             resp = await self._http.post(
                 f"{self._bridge_url}/channel",
-                json={"text": text, "user_id": user_id, "source": "telegram"},
+                json=payload,
             )
             if resp.status_code == 200:
                 data = resp.json()
@@ -83,7 +98,7 @@ class TelegramChannel(Channel):
         await self._app.initialize()
         await self._app.start()
         await self._app.updater.start_polling(drop_pending_updates=True)
-        log.info("Telegram bot started (polling)")
+        log.info("Telegram bot started (polling) app_user_id=%s", self._app_user_id)
 
     async def stop(self) -> None:
         if self._app:

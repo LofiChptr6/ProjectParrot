@@ -1,28 +1,80 @@
-/* Theme: lofi-vibe
- * Warm amber glows and soft textures for a chill atmosphere
- * Generated: 2026-04-18T06:41:29.760049+00:00
- * Load order: appended AFTER style.css + panel-manager.css.
+/* Theme: warm-home
+ * A homey evening living-room: warm taupe, soft caramel lamp-glow, sage
+ * secondaries. Less blue, less amber-bar, more lived-in.
+ * Load order: appended AFTER style.css + panel-manager.css, so :root
+ * overrides below take effect everywhere that uses CSS variables.
  */
 
 :root {
-  --bg: #0f0e0d;
-  --surface: #1a1815;
-  --card: #242218;
-  --border: #3a3530;
-  --accent: #d4a574;
-  --accent-dim: #8b7355;
-  --text: #e8e6e1;
-  --muted: #6b6560;
+    /* -- surfaces -- */
+    --bg:         #1a1612;   /* warm charcoal, not slate */
+    --surface:    #221c16;
+    --card:       #2c241c;
+    --border:     #3b2f25;
+
+    /* -- accents -- */
+    --accent:     #c79274;   /* caramel lamp-glow (replaces crimson) */
+    --accent-dim: #8a6a50;
+    --accent-2:   #8fa987;   /* sage green — secondary for liveliness */
+
+    /* -- text -- */
+    --text:       #ece2d0;   /* warm cream */
+    --muted:      #a0907e;   /* warm taupe muted */
+
+    /* -- semantic (dialed down from default electric hues) -- */
+    --green:      #94b88f;   /* sage success */
+    --red:        #c47466;   /* dusty terracotta warning */
+    --yellow:     #d6b267;   /* honey yellow */
 }
 
+/* Soft vignette + two warm light sources (one caramel top-left, one sage
+ * bottom-right). Purely CSS — no external image, no cache thrash. */
 body {
-  background-image: url('https://images.unsplash.com/photo-1590010304834-5115710d756a?auto=format&fit=crop&w=1950&q=80');
-  background-size: cover;
-  background-position: center;
-  background-attachment: fixed;
+    background:
+        radial-gradient(ellipse at 18% 12%, rgba(199, 146, 116, 0.10), transparent 48%),
+        radial-gradient(ellipse at 82% 88%, rgba(143, 169, 135, 0.07), transparent 52%),
+        radial-gradient(ellipse at 50% 50%, rgba(0, 0, 0, 0.25), transparent 75%),
+        var(--bg);
+    background-attachment: fixed;
 }
 
-body::before {
-  content: ''; position: fixed; inset: 0;
-  background: rgba(15,14,13,0.65); pointer-events: none; z-index: -1;
+/* Soften hardcoded blue status-light backgrounds so the settings pipeline
+ * view doesn't read as a cold network monitor. The colors below re-dress
+ * the blue/indigo/cyan hues that style.css hardcodes outside of vars. */
+
+#light-stt .light-dot.active,
+#light-stt .light-dot.processing { background: #7aa1d1; box-shadow: 0 0 6px #7aa1d1; }
+
+#light-llm .light-dot.active,
+#light-llm .light-dot.processing { background: var(--yellow); box-shadow: 0 0 6px var(--yellow); }
+
+#light-nori .light-dot.active,
+#light-nori .light-dot.processing { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+
+#light-tts .light-dot.active,
+#light-tts .light-dot.processing { background: var(--green); box-shadow: 0 0 6px var(--green); }
+
+/* Gantt chart bars — warm equivalents of the default blue/indigo/cyan. */
+.gantt-bar[data-phase="stt"]     { background: #7aa1d1; }
+.gantt-bar[data-phase="llm"]     { background: var(--yellow); }
+.gantt-bar[data-phase="tts"]     { background: var(--green); }
+.gantt-bar[data-phase="nori"]    { background: var(--accent); }
+.gantt-bar[data-phase="tool"]    { background: var(--accent-dim); }
+
+/* Tool-activity pill backgrounds — replace indigo/cyan overlays with warm
+ * muted. These rgba tints appeared too blue in the default theme. */
+.tool-activity-tag,
+.gchat-tool-name {
+    background: rgba(199, 146, 116, 0.14);   /* warm caramel tint */
+    border-color: rgba(199, 146, 116, 0.35);
+    color: var(--accent);
 }
+
+/* Primary buttons lean into the caramel accent rather than default crimson. */
+.btn-send,
+.btn.btn-primary {
+    background: var(--accent);
+    color: #2a1f15;
+}
+.btn-send:hover,
+.btn.btn-primary:hover { background: #d9a688; }

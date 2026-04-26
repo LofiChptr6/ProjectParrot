@@ -1071,7 +1071,9 @@
     }
 
     function _bridgeUrl(path) {
-        // Use bridge host/port from app.js globals if available, else same origin
+        if (location.protocol === 'https:') {
+            return `https://${location.host}${path}`;
+        }
         const host = window.bridgeHost || location.hostname;
         const port = window.bridgePort || location.port;
         return `http://${host}:${port}${path}`;

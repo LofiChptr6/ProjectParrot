@@ -47,6 +47,8 @@ class ChannelRegistry:
 
     def __init__(self) -> None:
         self._channels: dict[str, Channel] = {}
+        # Per-user Telegram bots, keyed by ProjectParrot app_user_id.
+        self._user_bots: dict[str, Channel] = {}
 
     def register(self, channel: Channel) -> None:
         self._channels[channel.name] = channel
@@ -55,9 +57,25 @@ class ChannelRegistry:
     def get(self, name: str) -> Optional[Channel]:
         return self._channels.get(name)
 
+    def register_user_bot(self, app_user_id: str, channel: Channel) -> None:
+        self._user_bots[app_user_id] = channel
+        log.info("User bot registered: app_user_id=%s", app_user_id)
+
+    def get_user_bot(self, app_user_id: str) -> Optional[Channel]:
+        return self._user_bots.get(app_user_id)
+
+    async def stop_user_bot(self, app_user_id: str) -> None:
+        ch = self._user_bots.pop(app_user_id, None)
+        if ch:
+            try:
+                await ch.stop()
+                log.info("User bot stopped: app_user_id=%s", app_user_id)
+            except Exception as exc:
+                log.warning("Error stopping user bot %s: %s", app_user_id, exc)
+
     @property
     def all(self) -> list[Channel]:
-        return list(self._channels.values())
+        return list(self._channels.values()) + list(self._user_bots.values())
 
     async def broadcast(self, text: str) -> None:
         """Send a message through every registered channel."""
@@ -68,7 +86,7 @@ class ChannelRegistry:
                 log.warning("Broadcast failed on %s: %s", ch.name, exc)
 
     async def start_all(self) -> None:
-        for ch in self._channels.values():
+        for ch in list(self._channels.values()) + list(self._user_bots.values()):
             try:
                 await ch.start()
                 log.info("Channel started: %s", ch.name)
@@ -76,7 +94,7 @@ class ChannelRegistry:
                 log.error("Failed to start channel %s: %s", ch.name, exc)
 
     async def stop_all(self) -> None:
-        for ch in self._channels.values():
+        for ch in list(self._channels.values()) + list(self._user_bots.values()):
             try:
                 await ch.stop()
             except Exception:

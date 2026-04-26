@@ -88,7 +88,7 @@ async def execute(arguments: dict) -> str:
         return "Missing 'palette' — pass the same variables dict you used in theme_propose."
 
     try:
-        from bridge.server import _broadcast_to_unity, unity_clients, get_active_preview
+        from bridge.server import _broadcast_clients, _ws_clients, get_active_preview
     except Exception as exc:
         return f"bridge unavailable: {exc}"
 
@@ -122,10 +122,10 @@ async def execute(arguments: dict) -> str:
         if len(screenshot) < 2_800_000:
             msg["screenshot_b64"] = screenshot
 
-    await _broadcast_to_unity(msg)
+    await _broadcast_clients(msg)
     return json.dumps({
         "status": "modal_opened",
-        "clients": len(unity_clients),
+        "clients": len(_ws_clients),
         "name": name,
         "note": "Modal is visible. WAIT for Ika to click — do not call theme_apply yourself.",
     }, ensure_ascii=False)

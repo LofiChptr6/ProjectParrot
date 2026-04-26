@@ -29,7 +29,7 @@ TOOL_DEF = {
 
 async def execute(arguments: dict) -> str:
     """Send slide navigation command to frontend."""
-    from bridge.server import _broadcast_to_unity
+    from bridge.server import _broadcast_clients
 
     action = arguments.get("action", "next")
     msg = {"type": "ui_command", "action": f"presentation_{action}"}
@@ -37,7 +37,7 @@ async def execute(arguments: dict) -> str:
     if action == "goto":
         msg["slide_index"] = arguments.get("slide_index", 0)
 
-    await _broadcast_to_unity(msg)
+    await _broadcast_clients(msg)
 
     labels = {
         "next": "Advanced to next slide.",

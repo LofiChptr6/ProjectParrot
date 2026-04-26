@@ -97,7 +97,14 @@ def _safe_eval(node):
 
 
 async def execute(arguments: dict) -> str:
-    """Evaluate a math expression safely."""
+    """Evaluate a math expression safely.
+
+    Returns the result wrapped in a ``num:xxxxxxxx`` handle so the LLM must
+    quote the handle (which resolves to the computed value at TTS time)
+    rather than copying the raw number and potentially mutating it.
+    """
+    from tools.handle_registry import get_registry
+
     expr = arguments.get("expression", "")
     if not expr:
         return "Error: no expression provided."
@@ -105,9 +112,10 @@ async def execute(arguments: dict) -> str:
     try:
         tree = ast.parse(expr, mode="eval")
         result = _safe_eval(tree)
-        # Format nicely
         if isinstance(result, float) and result == int(result) and abs(result) < 1e15:
-            return str(int(result))
-        return str(round(result, 10) if isinstance(result, float) else result)
+            formatted = str(int(result))
+        else:
+            formatted = str(round(result, 10) if isinstance(result, float) else result)
+        return get_registry().issue("num", formatted)
     except Exception as e:
         return f"Error: {e}"

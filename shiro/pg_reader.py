@@ -4,10 +4,32 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime
 from typing import Any
 
 log = logging.getLogger("shiro.pg")
+
+
+def _strip_inline_tags(text: str) -> str:
+    """Remove inline XML tags so Shiro sees only the spoken prose.
+
+    We drop full tag BLOCKS (open + body + close) for emotion/gesture/tool_call/
+    think, because their bodies are metadata (emotion IDs, tool payloads,
+    reasoning), not speech. Self-closing <escalate/> is also stripped.
+    """
+    if not text:
+        return ""
+    # Drop full tag blocks including body
+    text = re.sub(r"<(emotion|gesture|tool_call|think)\b[^>]*>.*?</\1>",
+                  "", text, flags=re.DOTALL | re.IGNORECASE)
+    # Self-closing <escalate/> (and other self-closed tags)
+    text = re.sub(r"<(?:emotion|gesture|tool_call|escalate|think)\s*/\s*>",
+                  "", text, flags=re.IGNORECASE)
+    # Any orphan tags that didn't match
+    text = re.sub(r"</?(?:emotion|gesture|tool_call|escalate|think)[^>]*>",
+                  "", text, flags=re.IGNORECASE)
+    return text.strip()
 
 try:
     import asyncpg
@@ -78,7 +100,7 @@ async def fetch_recent_conversations(
 
         conversations.setdefault(cid, []).append({
             "user": user_msg,
-            "assistant": row["response_content"] or "",
+            "assistant": _strip_inline_tags(row["response_content"] or ""),
             "source": row["source"] or "",
             "triggered_by": row["triggered_by"] or "",
             "latency_ms": row["latency_ms"],

@@ -74,11 +74,11 @@ async def execute(arguments: dict) -> str:
     # default means "clear any overrides".
     if entry.get("builtin") and not entry.get("file"):
         try:
-            from bridge.server import _broadcast_to_unity, _reset_active_preview
+            from bridge.server import _broadcast_clients, _reset_active_preview
         except Exception as exc:
             return f"bridge unavailable: {exc}"
         _reset_active_preview()
-        await _broadcast_to_unity({"type": "ui_command", "action": "clear_theme_preview"})
+        await _broadcast_clients({"type": "ui_command", "action": "clear_theme_preview"})
         return json.dumps({"status": "loaded", "name": name, "note": "default — preview cleared"}, ensure_ascii=False)
 
     file_name = entry.get("file") or f"{name}.css"
@@ -109,7 +109,7 @@ async def execute(arguments: dict) -> str:
     html_mods = assets.get("html_mods") or []
 
     try:
-        from bridge.server import _broadcast_to_unity, _active_preview, unity_clients
+        from bridge.server import _broadcast_clients, _active_preview, _ws_clients
     except Exception as exc:
         return f"bridge unavailable: {exc}"
 
@@ -120,7 +120,7 @@ async def execute(arguments: dict) -> str:
     _active_preview["html_decor"] = html_decor
     _active_preview["html_mods"] = list(html_mods)
 
-    await _broadcast_to_unity({
+    await _broadcast_clients({
         "type": "ui_command",
         "action": "apply_theme_preview",
         "variables": variables,
@@ -133,7 +133,7 @@ async def execute(arguments: dict) -> str:
     return json.dumps({
         "status": "loaded",
         "name": name,
-        "clients": len(unity_clients),
+        "clients": len(_ws_clients),
         "variables": variables,
         "css_bytes": len(css),
         "background_image_url": background_image_url or None,

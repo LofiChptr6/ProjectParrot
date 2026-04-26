@@ -75,7 +75,12 @@ TOOL_DEF = {
                             },
                             "url": {
                                 "type": "string",
-                                "description": "(image slide) Image URL",
+                                "description": (
+                                    "(image slide) Image reference. Prefer an "
+                                    "'img:XXXXXXXX' HANDLE from a recent web_search "
+                                    "result — resolves to the real URL automatically. "
+                                    "Raw URLs only for user-supplied images."
+                                ),
                             },
                             "caption": {
                                 "type": "string",
@@ -99,7 +104,13 @@ TOOL_DEF = {
                             },
                             "articles": {
                                 "type": "array",
-                                "description": "(news_feed slide) Array of article objects: [{title, snippet, source, date, url, thumbnail}, ...]",
+                                "description": (
+                                    "(news_feed slide) Array of article objects: "
+                                    "[{title, snippet, source, date, url, thumbnail}, ...]. "
+                                    "'url' and 'thumbnail' accept 'url:' / 'img:' HANDLES "
+                                    "from get_news — pass them through verbatim; they resolve "
+                                    "to real URLs automatically."
+                                ),
                             },
                         },
                         "required": ["type"],
@@ -118,7 +129,7 @@ TOOL_DEF = {
 
 async def execute(arguments: dict) -> str:
     """Show slides in the web frontend."""
-    from bridge.server import _broadcast_to_unity, _set_open_modal
+    from bridge.server import _broadcast_clients, _set_open_modal
 
     title = arguments.get("title", "Slides")
     slides = arguments.get("slides", [])
@@ -129,7 +140,7 @@ async def execute(arguments: dict) -> str:
 
     pres_id = f"pres_{int(time.time() * 1000)}"
 
-    await _broadcast_to_unity({
+    await _broadcast_clients({
         "type": "ui_command",
         "action": "create_presentation",
         "presentation": {

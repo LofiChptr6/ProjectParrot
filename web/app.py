@@ -7,13 +7,15 @@ Usage:
     .venv/bin/python web/app.py
 """
 
+import asyncio
 import csv
 from pathlib import Path
 
 import httpx
+import websockets as _wss
 import yaml
-from fastapi import FastAPI
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI, WebSocket
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 
@@ -32,6 +34,11 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 @app.get("/")
 async def index():
     return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/login")
+async def login_page():
+    return FileResponse(STATIC_DIR / "login.html")
 
 
 @app.get("/api/default-model")
@@ -57,12 +64,16 @@ async def config():
 
 @app.get("/api/health")
 async def health():
-    """Probe all services and return combined health status."""
+    """Probe all services and return combined health status.
+
+    Memory and animation are in-process inside the bridge — the bridge's
+    own /health endpoint already reports them, so we don't hit them
+    separately here.
+    """
     services = {
         "bridge": f"http://127.0.0.1:{_bridge_port}/health",
         "stt": f"http://127.0.0.1:{_cfg.get('stt', {}).get('port', 8001)}/health",
         "tts": f"http://127.0.0.1:{_cfg.get('tts', {}).get('port', 8002)}/health",
-        "memory": f"http://127.0.0.1:{_cfg.get('memory', {}).get('port', 8003)}/health",
     }
     results = {}
     async with httpx.AsyncClient(timeout=2.0) as client:
@@ -100,6 +111,180 @@ async def animation_functions():
                 "max_repeats": int(row["max_repeats"].strip()) if row.get("max_repeats", "").strip() else None,
             })
     return {"functions": rows}
+
+
+# ── /api/* proxy to the bridge ─────────────────────────────────────────────
+# Anything under /api/ that isn't handled by one of the explicit routes above
+# is forwarded transparently to the bridge. The frontend uses relative URLs
+# (``fetch('/api/cron_jobs')``) because it doesn't know where the bridge is
+# hosted; this proxy makes those calls just work regardless of whether the
+# page is served from the web app (8080) or the bridge's /monitor (8000).
+
+from fastapi import Request
+from fastapi.responses import Response as _Response
+
+
+_PROXY_BASE = f"http://127.0.0.1:{_bridge_port}"
+_proxy_client: httpx.AsyncClient | None = None
+
+
+async def _get_proxy_client() -> httpx.AsyncClient:
+    global _proxy_client
+    if _proxy_client is None:
+        _proxy_client = httpx.AsyncClient(timeout=30.0, follow_redirects=False)
+    return _proxy_client
+
+
+async def _ws_relay(client: WebSocket, target_url: str) -> None:
+    """Bidirectional WebSocket proxy: browser client <-> bridge."""
+    try:
+        async with _wss.connect(target_url) as bridge:
+            async def c2b():
+                try:
+                    while True:
+                        msg = await client.receive()
+                        if msg["type"] == "websocket.disconnect":
+                            break
+                        if msg.get("bytes") is not None:
+                            await bridge.send(msg["bytes"])
+                        elif msg.get("text") is not None:
+                            await bridge.send(msg["text"])
+                except Exception:
+                    pass
+                finally:
+                    await bridge.close()
+
+            async def b2c():
+                try:
+                    async for message in bridge:
+                        if isinstance(message, bytes):
+                            await client.send_bytes(message)
+                        else:
+                            await client.send_text(message)
+                except Exception:
+                    pass
+
+            tasks = [asyncio.create_task(c2b()), asyncio.create_task(b2c())]
+            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for t in pending:
+                t.cancel()
+                try:
+                    await t
+                except asyncio.CancelledError:
+                    pass
+    except Exception:
+        pass
+    finally:
+        try:
+            await client.close()
+        except Exception:
+            pass
+
+
+@app.websocket("/ws/live")
+async def _proxy_ws_live(client: WebSocket):
+    qs = client.url.query
+    target = f"ws://127.0.0.1:{_bridge_port}/ws/live" + (f"?{qs}" if qs else "")
+    await client.accept()
+    await _ws_relay(client, target)
+
+
+@app.websocket("/ws/monitor")
+async def _proxy_ws_monitor(client: WebSocket):
+    qs = client.url.query
+    target = f"ws://127.0.0.1:{_bridge_port}/ws/monitor" + (f"?{qs}" if qs else "")
+    await client.accept()
+    await _ws_relay(client, target)
+
+
+@app.websocket("/ws/voice-stream")
+async def _proxy_ws_voice(client: WebSocket):
+    qs = client.url.query
+    target = f"ws://127.0.0.1:{_bridge_port}/ws/voice-stream" + (f"?{qs}" if qs else "")
+    await client.accept()
+    await _ws_relay(client, target)
+
+
+@app.get("/chat/stream", include_in_schema=False)
+async def _proxy_chat_stream(request: Request):
+    qs = request.url.query
+    target = f"{_PROXY_BASE}/chat/stream" + (f"?{qs}" if qs else "")
+    headers = {k: v for k, v in request.headers.items()
+               if k.lower() not in {"host", "content-length"}}
+
+    async def _stream():
+        async with httpx.AsyncClient(timeout=None) as hclient:
+            async with hclient.stream("GET", target, headers=headers) as resp:
+                async for chunk in resp.aiter_bytes():
+                    yield chunk
+
+    return StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.api_route("/admin/{path:path}",
+               methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+               include_in_schema=False)
+async def _proxy_admin(path: str, request: Request):
+    qs = request.url.query
+    target = f"{_PROXY_BASE}/admin/{path}" + (f"?{qs}" if qs else "")
+    body = await request.body()
+    headers = {k: v for k, v in request.headers.items()
+               if k.lower() not in {"host", "content-length"}}
+    try:
+        client = await _get_proxy_client()
+        resp = await client.request(
+            request.method, target,
+            content=body, headers=headers,
+        )
+    except Exception as exc:
+        return JSONResponse({"error": f"bridge proxy error: {exc}"}, status_code=502)
+    drop = {"content-encoding", "transfer-encoding", "connection"}
+    out_headers = {k: v for k, v in resp.headers.items() if k.lower() not in drop}
+    return _Response(content=resp.content, status_code=resp.status_code,
+                     headers=out_headers, media_type=resp.headers.get("content-type"))
+
+
+@app.get("/health", include_in_schema=False)
+async def _proxy_health_fwd(request: Request):
+    target = f"{_PROXY_BASE}/health"
+    headers = {k: v for k, v in request.headers.items() if k.lower() != "host"}
+    try:
+        client = await _get_proxy_client()
+        resp = await client.get(target, headers=headers)
+    except Exception as exc:
+        return JSONResponse({"error": f"bridge proxy error: {exc}"}, status_code=502)
+    drop = {"content-encoding", "transfer-encoding", "connection"}
+    out_headers = {k: v for k, v in resp.headers.items() if k.lower() not in drop}
+    return _Response(content=resp.content, status_code=resp.status_code,
+                     headers=out_headers, media_type=resp.headers.get("content-type"))
+
+
+@app.api_route("/api/{path:path}",
+               methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+               include_in_schema=False)
+async def _proxy_api(path: str, request: Request):
+    """Forward /api/* requests to the bridge."""
+    qs = request.url.query
+    target = f"{_PROXY_BASE}/api/{path}" + (f"?{qs}" if qs else "")
+    body = await request.body()
+    headers = {k: v for k, v in request.headers.items()
+               if k.lower() not in {"host", "content-length"}}
+    try:
+        client = await _get_proxy_client()
+        resp = await client.request(
+            request.method, target,
+            content=body, headers=headers,
+        )
+    except Exception as exc:
+        return JSONResponse({"error": f"bridge proxy error: {exc}"}, status_code=502)
+    drop = {"content-encoding", "transfer-encoding", "connection"}
+    out_headers = {k: v for k, v in resp.headers.items() if k.lower() not in drop}
+    return _Response(content=resp.content, status_code=resp.status_code,
+                     headers=out_headers, media_type=resp.headers.get("content-type"))
 
 
 # Mount static files last so API routes take priority

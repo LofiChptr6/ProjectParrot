@@ -1044,11 +1044,11 @@ function renderTicks(maxMs) {
 let healthTimer = null;
 
 const SVC_META = {
-  stt:       { label: 'STT (Whisper)',  port: 8001 },
-  tts:       { label: 'TTS (F5-TTS)',   port: 8002 },
-  memory:    { label: 'Memory',          port: 8003 },
-  animation: { label: 'Animation',       port: 8004 },
-  llm:       { label: 'LLM (Ollama)',    port: 11434 },
+  stt:       { label: 'STT (Whisper)',            port: 8001 },
+  tts:       { label: 'TTS (F5-TTS)',             port: 8002 },
+  memory:    { label: 'Memory (mem0)',            port: null },  // in-process
+  animation: { label: 'Animation (fbx CSV)',      port: null },  // in-process
+  llm:       { label: 'LLM (vLLM)',               port: 8800 },
 };
 
 async function fetchHealth() {
@@ -1078,14 +1078,15 @@ function renderHealth(data, error) {
   h += '<div class="health-grid">';
   for (const [key, meta] of Object.entries(SVC_META)) {
     const status = (data.services && data.services[key]) || 'unknown';
-    const ok = status === 'ok';
+    const ok = status === 'ok' || status.startsWith('ok');
+    const detail = meta.port ? `Port ${meta.port}` : 'in-process';
     h += `<div class="health-card ${ok ? 'ok' : 'down'}">
       <div class="svc-name">${escHtml(meta.label)}</div>
       <div class="svc-status">
         <div class="health-dot${ok ? ' ok' : ''}"></div>
         <span>${escHtml(status)}</span>
       </div>
-      <div class="svc-detail">Port ${meta.port}</div>
+      <div class="svc-detail">${detail}</div>
     </div>`;
   }
   h += '</div>';

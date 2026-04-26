@@ -1,14 +1,30 @@
-"""Custom tool: get_stock_data — fetch stock market data via yfinance."""
+"""Custom tool: get_stock_data — fetch stock market data via yfinance.
+
+Numeric values (price, change, change_pct, OHLC) are wrapped with the
+``num:xxxxxxxx`` handle system before returning, so the LLM never sees the
+raw number and cannot hallucinate it. The bridge resolves the handle back to
+the formatted display value just before TTS.
+"""
 
 import json
+
+from tools.custom._polygon_client import h_delta, h_pct, h_price
+
+# Backwards-compatible local aliases in case anything imports these names.
+_h_price = h_price
+_h_pct = h_pct
+_h_delta = h_delta
 
 TOOL_DEF = {
     "type": "function",
     "function": {
         "name": "get_stock_data",
         "description": (
-            "Fetch stock market data for one or more ticker symbols. "
-            "Returns current price, daily change, and recent historical data points."
+            "Fetch delayed stock summary (price / change / recent OHLC history) "
+            "via yfinance — free, no rate limit, good for fan-out across many "
+            "tickers or longer history (1mo / 3mo). For precision on a single "
+            "ticker (real-time snapshot, ticker-scoped news, company "
+            "fundamentals, market status) prefer the polygon_* tools."
         ),
         "parameters": {
             "type": "object",
@@ -33,10 +49,9 @@ TOOL_DEF = {
 
 
 async def execute(arguments: dict) -> str:
-    """Fetch stock data and return compact JSON."""
+    """Fetch stock data and return compact JSON with numeric values handle-wrapped."""
     import yfinance as yf
 
-    # Accept common LLM parameter name variations
     raw = arguments.get("symbols", "") or arguments.get("ticker", "") or arguments.get("symbol", "")
     symbols = [s.strip().upper() for s in raw.split(",") if s.strip()][:10]
     period = arguments.get("period", "") or arguments.get("range", "") or "5d"
@@ -56,24 +71,23 @@ async def execute(arguments: dict) -> str:
             change = round(price - prev, 2) if price and prev else None
             change_pct = round((change / prev) * 100, 2) if change and prev else None
 
-            # OHLCV history (last 10 points, compact)
             history_pts = []
             if not hist.empty:
                 for date, row in hist.tail(10).iterrows():
                     history_pts.append({
                         "date": date.strftime("%Y-%m-%d"),
-                        "open": round(row["Open"], 2),
-                        "high": round(row["High"], 2),
-                        "low": round(row["Low"], 2),
-                        "close": round(row["Close"], 2),
+                        "open": _h_price(round(row["Open"], 2)),
+                        "high": _h_price(round(row["High"], 2)),
+                        "low": _h_price(round(row["Low"], 2)),
+                        "close": _h_price(round(row["Close"], 2)),
                     })
 
             results.append({
                 "symbol": sym,
-                "price": price,
-                "prev_close": prev,
-                "change": change,
-                "change_pct": change_pct,
+                "price": _h_price(price),
+                "prev_close": _h_price(prev),
+                "change": _h_delta(change),
+                "change_pct": _h_pct(change_pct),
                 "history": history_pts,
             })
         except Exception as e:

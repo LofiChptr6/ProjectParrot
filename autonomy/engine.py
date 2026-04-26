@@ -163,13 +163,18 @@ def _internal_prompt_for_state(state: str, topic: str, findings_preview: str = "
 
 async def _compose_utterance(state: str, topic: str, elapsed_s: float,
                               findings_preview: str = "") -> list[dict]:
-    """Ask the LLM for segments. Empty list means 'stay silent'."""
+    """Ask the LLM for segments. Empty list means 'stay silent'.
+
+    Returns a list of pseudo-segment dicts ``{text, emotion, gesture}``
+    parsed from the inline-tag output.
+    """
     from bridge.server import (
         build_system_prompt, llm_client, ANIMATION_MODE,
-        conversation_history, MAX_HISTORY, _parse_llm_response, _new_job_id,
+        conversation_history, MAX_HISTORY, _new_job_id,
         call_log,
     )
     from bridge.call_log import CallContext
+    from bridge.inline_tag_parser import InlineTagParser
 
     system_prompt = build_system_prompt(animation_mode=ANIMATION_MODE)
     mood_msg = _build_mood_system_message(state, elapsed_s, topic)
@@ -216,11 +221,35 @@ async def _compose_utterance(state: str, topic: str, elapsed_s: float,
     content = (result.get("content") or "").strip()
     if not content:
         return []
-    try:
-        segments = _parse_llm_response(content) or []
-    except Exception as exc:
-        log.warning("autonomy response parse failed: %s; raw=%s", exc, content[:200])
-        return []
+
+    # Parse inline-tag output → build pseudo-segments grouped by emotion/gesture.
+    parser = InlineTagParser()
+    events = parser.feed(content) + parser.finish()
+    cur_text: list[str] = []
+    cur_emotion = "neutral"
+    cur_gesture = ""
+    segments: list[dict] = []
+
+    def _flush():
+        t = "".join(cur_text).strip()
+        if t:
+            segments.append({"text": t, "emotion": cur_emotion, "gesture": cur_gesture,
+                             "action": cur_gesture})
+        cur_text.clear()
+
+    for ev in events:
+        kind = ev["kind"]
+        if kind == "text_delta":
+            cur_text.append(ev["text"])
+        elif kind == "flush":
+            _flush()
+        elif kind == "emotion":
+            _flush()
+            cur_emotion = ev["id"]
+        elif kind == "gesture":
+            _flush()
+            cur_gesture = ev["name"]
+    _flush()
 
     segments = _post_filter(segments)
     return segments
@@ -304,7 +333,7 @@ async def decide_tick() -> None:
     if not cfg["enabled"]:
         return
 
-    from bridge.server import _mocha_state, _last_interaction_time, unity_clients
+    from bridge.server import _mocha_state, _last_interaction_time, _ws_clients
 
     _maybe_reset_daily_counter()
 
@@ -357,7 +386,7 @@ async def decide_tick() -> None:
     # Require a surface (web or telegram) where the output could land.
     from bridge.channel_router import load_primary_user
     primary = load_primary_user() or {}
-    if not unity_clients and not primary.get("telegram_user_id"):
+    if not _ws_clients and not primary.get("telegram_user_id"):
         log.debug("autonomy tick: no surface available (no web, no telegram) — skip")
         return
 

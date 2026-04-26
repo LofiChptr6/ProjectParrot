@@ -50,11 +50,11 @@ async def execute(arguments: dict) -> str:
     timeout_s = max(6.0, min(timeout_s, 30.0))
 
     try:
-        from bridge.server import request_screenshot, unity_clients
+        from bridge.server import request_screenshot, _ws_clients
     except Exception as exc:
         return json.dumps({"error": f"bridge unavailable: {exc}"}, ensure_ascii=False)
 
-    if not unity_clients:
+    if not _ws_clients:
         return json.dumps(
             {"error": "No web UI connected to capture from. Ask Ika to open the page."},
             ensure_ascii=False,

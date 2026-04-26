@@ -25,18 +25,18 @@ TOOL_DEF = {
 
 async def execute(arguments: dict) -> str:
     try:
-        from bridge.server import _broadcast_to_unity, unity_clients, _reset_active_preview
+        from bridge.server import _broadcast_clients, _ws_clients, _reset_active_preview
     except Exception as exc:
         return f"bridge unavailable: {exc}"
 
     _reset_active_preview()
 
-    await _broadcast_to_unity({
+    await _broadcast_clients({
         "type": "ui_command",
         "action": "revert_theme",
     })
 
     return json.dumps({
         "status": "preview_cleared",
-        "clients": len(unity_clients),
+        "clients": len(_ws_clients),
     }, ensure_ascii=False)

@@ -29,9 +29,9 @@ TOOL_DEF = {
 
 async def execute(arguments: dict) -> str:
     """Show a toast notification in the web frontend."""
-    from bridge.server import _broadcast_to_unity
+    from bridge.server import _broadcast_clients
 
-    await _broadcast_to_unity({
+    await _broadcast_clients({
         "type": "ui_command",
         "action": "show_notification",
         "message": arguments.get("message", ""),

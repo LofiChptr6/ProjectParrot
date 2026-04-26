@@ -25,7 +25,17 @@
      * If speech is already playing, pass through immediately.
      * Otherwise, queue it until playback starts.
      */
+    // Actions that are interactive / user-initiated and shouldn't be held
+    // back for speech-sync. show_diary is one — user said "open my diary",
+    // they want the modal now, not after an 8s safety timeout.
+    const _IMMEDIATE_ACTIONS = new Set(['show_diary']);
+
     function intercept(msg) {
+        // Bypass the queue entirely for interactive commands.
+        if (msg && _IMMEDIATE_ACTIONS.has(msg.action)) {
+            _deliverUiCommand(msg);
+            return;
+        }
         // If already playing audio, deliver immediately (late-arriving UI update)
         if (_isSpeechActive()) {
             _deliverUiCommand(msg);
@@ -110,6 +120,18 @@
     }
 
     function _deliverUiCommand(msg) {
+        // Diary modal has its own dedicated handler — route show_diary there
+        // before the presentation fallback so we don't stuff diary state into
+        // the slides panel.
+        if (msg && msg.action === 'show_diary') {
+            if (!window.Diary) {
+                console.error('[UIOrchestrator] show_diary received but window.Diary is undefined — diary.js may not have loaded');
+                return;
+            }
+            console.log('[UIOrchestrator] dispatching show_diary', msg);
+            window.Diary.open(msg.date || null);
+            return;
+        }
         if (window._presentation) {
             window._presentation.handleUiCommand(msg);
         }

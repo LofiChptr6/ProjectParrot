@@ -70,6 +70,9 @@ async def execute(arguments: dict) -> str:
     if action not in ("reminder", "nori_research", "prompt"):
         return f"Unsupported action '{action}'. Use reminder, nori_research, or prompt."
 
+    from tools.executor import TOOL_USER_ID
+    caller_user_id = TOOL_USER_ID.get()
+
     try:
         job_id = await loop.add_job({
             "cron": cron,
@@ -77,6 +80,7 @@ async def execute(arguments: dict) -> str:
             "params": params,
             "description": description,
             "created_by": "mocha",
+            "user_id": caller_user_id,
         })
     except ValueError as exc:
         return f"Could not schedule: {exc}. Please double-check the cron expression."
@@ -86,7 +90,7 @@ async def execute(arguments: dict) -> str:
 
     # Look up next fire time for a nicer confirmation.
     next_run = ""
-    for j in loop.list_jobs():
+    for j in loop.list_jobs(user_id=caller_user_id):
         if j["id"] == job_id:
             next_run = j.get("next_run_iso") or ""
             break

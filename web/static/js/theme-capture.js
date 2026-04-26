@@ -97,7 +97,9 @@
 
     async function captureAndReply(requestId) {
         if (!requestId) return;
-        const bridge = `http://${window.bridgeHost}:${window.bridgePort}`;
+        const bridge = location.protocol === 'https:'
+            ? `https://${location.host}`
+            : `http://${window.bridgeHost}:${window.bridgePort}`;
         try {
             const b64 = await capturePage();
             await fetch(bridge + '/admin/theme/screenshot-reply', {

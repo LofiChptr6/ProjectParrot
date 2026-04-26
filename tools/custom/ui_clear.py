@@ -24,11 +24,11 @@ TOOL_DEF = {
 
 async def execute(arguments: dict) -> str:
     """Clear UI elements in the web frontend."""
-    from bridge.server import _broadcast_to_unity, _clear_open_modal
+    from bridge.server import _broadcast_clients, _clear_open_modal
 
     target = arguments.get("target", "all")
 
-    await _broadcast_to_unity({
+    await _broadcast_clients({
         "type": "ui_command",
         "action": "clear_ui",
         "target": target,

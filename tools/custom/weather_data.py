@@ -1,6 +1,38 @@
-"""Custom tool: get_weather — fetch weather via Open-Meteo (free, no key)."""
+"""Custom tool: get_weather — fetch weather via Open-Meteo (free, no key).
+
+Numeric values (temps, humidity, wind, precipitation) are wrapped with the
+``num:xxxxxxxx`` handle system so the LLM never sees raw numbers — it must
+quote handles verbatim, and the bridge resolves them to formatted values
+before TTS.
+"""
 
 import json
+
+from tools.handle_registry import get_registry
+
+
+def _h_temp(val) -> str | None:
+    if val is None:
+        return None
+    return get_registry().issue("num", f"{val:.0f}°C")
+
+
+def _h_pct(val) -> str | None:
+    if val is None:
+        return None
+    return get_registry().issue("num", f"{val:.0f}%")
+
+
+def _h_wind(val) -> str | None:
+    if val is None:
+        return None
+    return get_registry().issue("num", f"{val:.0f} km/h")
+
+
+def _h_mm(val) -> str | None:
+    if val is None:
+        return None
+    return get_registry().issue("num", f"{val:.1f} mm")
 
 TOOL_DEF = {
     "type": "function",
@@ -86,9 +118,9 @@ async def execute(arguments: dict) -> str:
             result = {
                 "location": f"{name}, {country}",
                 "current": {
-                    "temp_c": current.get("temperature_2m"),
-                    "humidity": current.get("relative_humidity_2m"),
-                    "wind_kph": current.get("wind_speed_10m"),
+                    "temp_c": _h_temp(current.get("temperature_2m")),
+                    "humidity": _h_pct(current.get("relative_humidity_2m")),
+                    "wind_kph": _h_wind(current.get("wind_speed_10m")),
                     "condition": wmo.get(current.get("weather_code", -1), "Unknown"),
                 },
                 "forecast": [],
@@ -103,10 +135,10 @@ async def execute(arguments: dict) -> str:
             for i in range(min(days, len(dates))):
                 result["forecast"].append({
                     "date": dates[i],
-                    "high_c": highs[i] if i < len(highs) else None,
-                    "low_c": lows[i] if i < len(lows) else None,
+                    "high_c": _h_temp(highs[i]) if i < len(highs) else None,
+                    "low_c": _h_temp(lows[i]) if i < len(lows) else None,
                     "condition": wmo.get(codes[i] if i < len(codes) else -1, "Unknown"),
-                    "precip_mm": precip[i] if i < len(precip) else None,
+                    "precip_mm": _h_mm(precip[i]) if i < len(precip) else None,
                 })
 
             return json.dumps(result, separators=(",", ":"))

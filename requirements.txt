@@ -20,8 +20,11 @@ webrtcvad-wheels>=2.0.13     # fallback VAD (used if torch/silero unavailable)
 # Replaces coqui-ai/TTS which doesn't support Python 3.12+
 f5-tts>=1.1.0
 
-# --- Memory (Chroma + embeddings) ---
-chromadb>=0.5.0
+# --- Memory (mem0 + embeddings) ---
+# mem0 = in-process memory with fact extraction, entity linking, dedup, and
+# time-aware recall. Replaces the old Chroma HTTP service. mem0 pulls chromadb
+# as a transitive dep for its embedded vector backend.
+mem0ai>=0.1.50
 sentence-transformers>=3.0.0
 
 # --- Bridge / Orchestrator ---
@@ -47,6 +50,11 @@ yfinance>=0.2.0
 
 # --- Call logging (PostgreSQL) ---
 asyncpg>=0.30.0
+psycopg2-binary>=2.9.0
+
+# --- Auth ---
+PyJWT>=2.8.0
+bcrypt>=4.0.0
 
 # --- Utilities ---
 python-multipart>=0.0.12

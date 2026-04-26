@@ -24,15 +24,28 @@ __pycache__/
 logs/
 models/
 
-# Data stores (ChromaDB)
+# Data stores (ChromaDB / mem0 / diary vector indexes — generated at runtime)
 memory/chroma_db/
 animation/chroma_db/
+memory/diary_chroma/
+memory/mem0_chroma/
+memory/mem0_history.sqlite
 
 # Runtime autonomy state
 data/cron_jobs.json
 data/notifications.jsonl
 data/primary_user.json
 data/recordings/
+
+# Per-user runtime data (diary entries, soul.md/behaviors.yaml overrides,
+# conversation context). Contains personal info — never commit.
+data/users/
+data/diary/
+
+# Local installer binaries
+cloudflared.rpm
+*.rpm
+*.deb
 
 # User-generated themes (approved prototypes); variants.json is tracked as the registry.
 web/static/css/themes/*.css

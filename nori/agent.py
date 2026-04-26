@@ -95,6 +95,8 @@ _NORI_TOOL_NAMES = [
     "show_slides", "show_card", "show_notification",
     "bash_exec",
     "schedule_cron", "list_cron_jobs", "cancel_cron_job",
+    # Diary recall — Nori can look up past activity when researching
+    "recall_diary",
     # Theme assembly: Nori is the URL-validator + HTML composer for the
     # three-agent theme flow. Hana plans, Nori fetches + validates + fires
     # theme_propose, Mocha just relays user approval.
@@ -102,6 +104,10 @@ _NORI_TOOL_NAMES = [
     # Video player: Nori finds a YouTube video (music or clip) and fires the
     # persistent floating player. Unified for music + general videos.
     "video_player",
+    # Polygon.io (Massive) financial toolbox — higher-precision stock data
+    # than yfinance-based get_stock_data. Nori-only; Mocha routes via ask_nori.
+    "polygon_prev_close", "polygon_bars", "polygon_snapshot",
+    "polygon_ticker_details", "polygon_ticker_news", "polygon_market_status",
 ]
 
 # Lazy-initialized LLM client (Nori's own instance)
@@ -214,8 +220,8 @@ async def process_request(request: str, context: str = "") -> str:
             # Nori is done — return final content
             content = result.get("content", "")
             total_ms = (time.monotonic() - total_start) * 1000
-            log.info("Nori done in %.0fms (%d rounds): %s",
-                     total_ms, round_num + 1, content[:120])
+            log.info("Nori done in %.0fms (%d rounds):\n%s",
+                     total_ms, round_num + 1, content[:1500])
             await _nori_status("idle", f"Done ({total_ms/1000:.1f}s)", total_ms)
             return content
 
@@ -295,7 +301,17 @@ async def process_request(request: str, context: str = "") -> str:
     # Exhausted rounds — force a final answer
     log.warning("Nori exhausted %d rounds, forcing answer", _MAX_ROUNDS)
     await _nori_status("processing", "Wrapping up...")
-    messages.append({"role": "user", "content": "Wrap up now. Return your narration JSON."})
+    messages.append({"role": "user", "content": (
+        "Wrap up now. Return your narration JSON.\n\n"
+        "CRITICAL: every specific number in your narration (prices, percentages, "
+        "temperatures, counts, dates) must be a `num:XXXXXXXX` handle copied VERBATIM "
+        "from the tool results above. Do NOT write a raw number like \"$39.75\" — you "
+        "do not know the true value, only the handle. If a data tool returned "
+        "`\"price\": \"num:3voHEDFQ\"`, write `num:3voHEDFQ` in your narration where "
+        "Mocha should say the price. The bridge substitutes each handle with the real "
+        "formatted value right before TTS. If you don't have a handle for a number, "
+        "omit the claim entirely rather than inventing the number."
+    )})
     result = await llm_client.chat(messages)
     total_ms = (time.monotonic() - total_start) * 1000
     await _nori_status("idle", f"Done ({total_ms/1000:.1f}s)", total_ms)

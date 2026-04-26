@@ -8,7 +8,7 @@ Viseme channels (index order):
   4 = oh   open rounded ("ow", "oy")
 
 Wire format: T frames x 5 floats (aa, ih, ou, ee, oh), float32 little-endian,
-base64-encoded — mirrors the motion_b64 pattern used by the gesture service.
+base64-encoded.
 """
 
 from __future__ import annotations
@@ -182,7 +182,6 @@ def pack_viseme_b64(viseme_frames: list[list[float]]) -> str:
     """Pack viseme weight frames into a base64 string.
 
     Format: T frames x 5 floats (aa, ih, ou, ee, oh), float32 little-endian.
-    Mirrors the ``motion_b64`` packing convention used elsewhere in the project.
     """
     buf = bytearray()
     for frame in viseme_frames:

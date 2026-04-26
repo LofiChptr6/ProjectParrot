@@ -1,9 +1,20 @@
 """
 Proactive agent loop — runs scheduled tasks.
 
-Uses APScheduler for cron-based scheduling.  Each job either sends a prompt
-to the LLM, runs a shell command, delivers a reminder, or delegates a
-research task to Nori (and enqueues the finding for delivery on next reconnect).
+Uses APScheduler for cron-based scheduling. Each job is dispatched to the
+right executor:
+
+  - ``prompt`` / ``morning_greeting`` — run through **Nori**, not Mocha.
+    Nori produces a concise report; the text is then routed to the user's
+    channels (web + Telegram fanout, see ``cron_origin``).
+  - ``command``                       — shell command via tools.executor.
+  - ``reminder``                      — plain text reminder delivered as-is.
+  - ``nori_research``                 — silent research; finding is enqueued
+    for pickup on next web reconnect (no live voicing).
+
+All cron outputs carry ``cron_origin=True`` so ``bridge.channel_router``
+fans them out to Telegram in addition to the live platform — user might
+not be at their desktop.
 """
 
 from __future__ import annotations
@@ -17,7 +28,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
@@ -39,6 +49,28 @@ def _first_line(text: str, max_len: int = 160) -> str:
     return first[:max_len]
 
 
+def _extract_narration(raw: str) -> str:
+    """Nori sometimes returns a Mocha-style ``{"segments":[{"text":...}, ...]}``
+    JSON blob meant to drive the voice pipeline directly. For cron reports we
+    want a single plain string. If parsing succeeds, join segment texts; on
+    any failure, return the raw string (it's already narration)."""
+    if not raw:
+        return ""
+    stripped = raw.strip()
+    if not (stripped.startswith("{") or stripped.startswith("[")):
+        return stripped
+    try:
+        data = json.loads(stripped)
+        segs = data.get("segments") if isinstance(data, dict) else None
+        if isinstance(segs, list) and segs:
+            parts = [s.get("text", "").strip() for s in segs if isinstance(s, dict)]
+            joined = " ".join(p for p in parts if p)
+            return joined or stripped
+    except Exception:
+        pass
+    return stripped
+
+
 class AgentLoop:
     def __init__(
         self,
@@ -49,10 +81,14 @@ class AgentLoop:
         self._config = config
         self._bridge_url = bridge_url.rstrip("/")
         self._registry = channel_registry
-        self._http = httpx.AsyncClient(timeout=120.0)
         self._scheduler = AsyncIOScheduler()
         self._persist_path = ROOT / config.get("persist_file", "data/cron_jobs.json")
         self._persist_lock = asyncio.Lock()
+        # Last-fire timestamps — persisted across restarts so the UI cron modal
+        # can show "last fired at ..." after the bridge is bounced.
+        self._last_fires_path = ROOT / "data" / "cron_last_fires.json"
+        self._last_fires_lock = asyncio.Lock()
+        self._last_fires: dict[str, str] = self._load_last_fires()
 
         config_jobs = [ScheduledJob.from_dict(j) for j in config.get("jobs", DEFAULT_JOBS)]
         persisted_jobs = self._load_persisted()
@@ -111,7 +147,6 @@ class AgentLoop:
 
     async def stop(self) -> None:
         self._scheduler.shutdown(wait=False)
-        await self._http.aclose()
 
     # ------------------------------------------------------------------
     #  Runtime API — called by tools/custom/schedule_cron.py etc.
@@ -138,9 +173,12 @@ class AgentLoop:
         log.info("Added runtime job: %s (%s) — %s", job.id, job.cron, job.description)
         return job.id
 
-    def list_jobs(self) -> list[dict]:
+    def list_jobs(self, user_id: str | None = None) -> list[dict]:
+        """List jobs. If user_id is given, return only that user's jobs."""
         out: list[dict] = []
         for j in self._jobs:
+            if user_id is not None and j.user_id != user_id:
+                continue
             next_run: str | None = None
             try:
                 sj = self._scheduler.get_job(j.id)
@@ -156,19 +194,26 @@ class AgentLoop:
                 "description": j.description,
                 "enabled": j.enabled,
                 "created_by": j.created_by,
+                "user_id": j.user_id,
                 "next_run_iso": next_run,
+                "last_fire": self._last_fires.get(j.id),
             })
         return out
 
-    async def remove_job(self, job_id: str) -> bool:
+    async def remove_job(self, job_id: str, user_id: str | None = None) -> bool:
+        """Remove a job. If user_id is given, only removes jobs owned by that user."""
+        job = next((j for j in self._jobs if j.id == job_id), None)
+        if job is None:
+            return False
+        if user_id is not None and job.user_id != user_id:
+            log.warning("remove_job: user %s tried to cancel job %s owned by %s",
+                        user_id, job_id, job.user_id)
+            return False
         try:
             self._scheduler.remove_job(job_id)
         except Exception as exc:
             log.info("Scheduler remove_job(%s) noop: %s", job_id, exc)
-        before = len(self._jobs)
         self._jobs = [j for j in self._jobs if j.id != job_id]
-        if len(self._jobs) == before:
-            return False
         await self._persist()
         log.info("Removed job: %s", job_id)
         return True
@@ -178,23 +223,52 @@ class AgentLoop:
     # ------------------------------------------------------------------
     async def _run_job(self, job: ScheduledJob) -> None:
         log.info("Running scheduled job: %s (%s)", job.id, job.action)
+        # Record the fire timestamp immediately so the UI shows a recent "last"
+        # even if the job takes time. Best-effort JSON write; no lock contention
+        # expected with default cron granularity (minute).
+        self._last_fires[job.id] = _now_iso()
         try:
-            if job.action == "prompt":
-                text = job.params.get("text", "Hello!")
-                reply = await self._prompt(text)
-                await self._route_text(reply, source=f"cron:{job.id}")
+            await asyncio.to_thread(self._save_last_fires)
+        except Exception:
+            pass
+
+        try:
+            if job.action in ("prompt", "morning_greeting"):
+                # Scheduled tasks go through Nori — Mocha doesn't chat with the
+                # cron scheduler anymore. Nori produces a concise spoken report
+                # that Mocha's voice pipeline reads back on the live channel
+                # AND Telegram (via cron_origin fanout).
+                from nori.agent import process_request
+                prompt = job.params.get("text") or f"Scheduled task: {job.description}"
+                hint = (
+                    "This is a scheduled cron job, not a live user conversation. "
+                    "Produce a concise spoken report (2-5 short sentences) "
+                    "suitable for Mocha to voice back to the user. Respond with "
+                    "plain text, NOT a JSON segments block."
+                )
+                raw = await process_request(f"{hint}\n\n{prompt}")
+                spoken = _extract_narration(raw)
+                await self._route_text(
+                    spoken, source=f"cron:{job.id}", kind="cron_report",
+                    description=job.description, cron_origin=True,
+                    user_id=job.user_id,
+                )
             elif job.action == "command":
                 from tools.executor import execute_tool
                 cmd = job.params.get("command", "echo hello")
                 result = await execute_tool("bash_exec", {"command": cmd})
                 await self._route_text(
                     f"**Scheduled: {job.description}**\n```\n{result}\n```",
-                    source=f"cron:{job.id}",
+                    source=f"cron:{job.id}", cron_origin=True,
+                    user_id=job.user_id,
                 )
             elif job.action == "reminder":
                 text = job.params.get("text", "Reminder!")
-                await self._route_text(text, source=f"cron:{job.id}", kind="reminder",
-                                       description=job.description)
+                await self._route_text(
+                    text, source=f"cron:{job.id}", kind="reminder",
+                    description=job.description, cron_origin=True,
+                    user_id=job.user_id,
+                )
             elif job.action == "nori_research":
                 from nori.agent import process_request
                 from bridge.notifications import enqueue
@@ -207,37 +281,40 @@ class AgentLoop:
                     "detail": result,
                     "job_id": job.id,
                     "topic": topic,
+                    "cron_origin": True,
                 })
             else:
                 log.warning("Unknown job action: %s", job.action)
         except Exception as exc:
             log.error("Job %s failed: %s", job.id, exc)
 
-    async def _prompt(self, text: str) -> str:
-        try:
-            resp = await self._http.post(
-                f"{self._bridge_url}/channel",
-                json={"text": text, "user_id": "agent", "source": "agent_loop"},
-            )
-            if resp.status_code == 200:
-                return resp.json().get("assistant_text", "")
-        except Exception as exc:
-            log.error("Agent prompt failed: %s", exc)
-        return ""
-
-    async def _route_text(self, text: str, source: str, kind: str = "message",
-                          description: str = "") -> None:
-        """Send through the channel router (web → Telegram → queue) if available;
-        otherwise fall back to broadcasting on all registered channels."""
+    async def _route_text(
+        self,
+        text: str,
+        source: str,
+        kind: str = "message",
+        description: str = "",
+        cron_origin: bool = False,
+        user_id: str | None = None,
+    ) -> None:
+        """Send through the channel router (web + Telegram fanout for cron,
+        otherwise priority-based); fall back to broadcast on total failure."""
         if not text:
             return
         try:
-            from bridge.channel_router import route_autonomous
-            await route_autonomous({
-                "text": text, "emotion": "neutral", "gesture": "",
-                "autonomous": True, "source": source, "kind": kind,
-                "description": description,
-            })
+            from bridge.channel_router import route_autonomous, route_autonomous_for_user
+            if user_id:
+                await route_autonomous_for_user(user_id, {
+                    "text": text, "emotion": "neutral", "gesture": "",
+                    "autonomous": True, "source": source, "kind": kind,
+                    "description": description, "cron_origin": cron_origin,
+                })
+            else:
+                await route_autonomous({
+                    "text": text, "emotion": "neutral", "gesture": "",
+                    "autonomous": True, "source": source, "kind": kind,
+                    "description": description, "cron_origin": cron_origin,
+                })
             return
         except Exception as exc:
             log.warning("channel_router unavailable, falling back to broadcast: %s", exc)
@@ -246,9 +323,60 @@ class AgentLoop:
         except Exception as exc:
             log.error("Broadcast failed: %s", exc)
 
+    # ------------------------------------------------------------------
+    #  Last-fire persistence (used by UI cron list)
+    # ------------------------------------------------------------------
+    def _load_last_fires(self) -> dict[str, str]:
+        path = self._last_fires_path
+        if not path.exists():
+            return {}
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return {k: str(v) for k, v in data.items() if isinstance(v, (str, int, float))}
+        except Exception as exc:
+            log.warning("Failed to load %s: %s", path, exc)
+        return {}
+
+    def _save_last_fires(self) -> None:
+        path = self._last_fires_path
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(self._last_fires, indent=2), encoding="utf-8")
+        except Exception as exc:
+            log.warning("Failed to save %s: %s", path, exc)
+
+    def get_last_fire(self, job_id: str) -> str | None:
+        return self._last_fires.get(job_id)
+
+
+_DOW_MAP = {"0": "sun", "1": "mon", "2": "tue", "3": "wed", "4": "thu", "5": "fri", "6": "sat", "7": "sun"}
+
+
+def _translate_dow(field: str) -> str:
+    """Convert Unix cron day-of-week (0/7=Sun, 1=Mon) to APScheduler names (mon..sun).
+
+    APScheduler's CronTrigger uses 0=Monday for numeric DOW, which silently shifts
+    every weekday by one when given Unix-style numbers. Rewrite numeric tokens to
+    English names, which both conventions agree on.
+    """
+    def _tok(tok: str) -> str:
+        # Handle step (*/2), ranges (1-5), lists are handled by outer split
+        if "/" in tok:
+            base, step = tok.split("/", 1)
+            return f"{_tok(base)}/{step}"
+        if "-" in tok:
+            a, b = tok.split("-", 1)
+            return f"{_tok(a)}-{_tok(b)}"
+        if tok in _DOW_MAP:
+            return _DOW_MAP[tok]
+        return tok  # *, already-named (mon/tue/...), etc.
+
+    return ",".join(_tok(t) for t in field.split(","))
+
 
 def _parse_cron(expr: str) -> CronTrigger | None:
-    """Parse a 5-field cron expression into an APScheduler CronTrigger."""
+    """Parse a 5-field Unix-style cron expression into an APScheduler CronTrigger."""
     parts = expr.strip().split()
     if len(parts) != 5:
         return None
@@ -258,7 +386,7 @@ def _parse_cron(expr: str) -> CronTrigger | None:
             hour=parts[1],
             day=parts[2],
             month=parts[3],
-            day_of_week=parts[4],
+            day_of_week=_translate_dow(parts[4]),
         )
     except Exception:
         return None

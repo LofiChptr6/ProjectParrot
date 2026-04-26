@@ -48,7 +48,13 @@ TOOL_DEF = {
                 },
                 "image_url": {
                     "type": "string",
-                    "description": "(image card) URL of the image to display",
+                    "description": (
+                        "(image card) Reference to the image. Prefer an "
+                        "'img:XXXXXXXX' HANDLE from a recent web_search — the "
+                        "handle resolves to a real URL automatically. Raw URLs "
+                        "are accepted for user-supplied images, but never "
+                        "fabricate one."
+                    ),
                 },
                 "duration_sec": {
                     "type": "integer",
@@ -63,11 +69,11 @@ TOOL_DEF = {
 
 async def execute(arguments: dict) -> str:
     """Show an info card in the web frontend."""
-    from bridge.server import _broadcast_to_unity
+    from bridge.server import _broadcast_clients
 
     card_id = f"card_{int(time.time() * 1000)}"
 
-    await _broadcast_to_unity({
+    await _broadcast_clients({
         "type": "ui_command",
         "action": "show_card",
         "card": {

@@ -27,6 +27,7 @@ TOOL_DEF = {
 
 async def execute(arguments: dict) -> str:
     from bridge.server import get_agent_loop
+    from tools.executor import TOOL_USER_ID
 
     loop = get_agent_loop()
     if loop is None:
@@ -36,7 +37,7 @@ async def execute(arguments: dict) -> str:
     if not job_id:
         return "Missing job id."
 
-    removed = await loop.remove_job(job_id)
+    removed = await loop.remove_job(job_id, user_id=TOOL_USER_ID.get())
     if removed:
         return f"Cancelled {job_id}."
-    return f"No job found with id {job_id}."
+    return f"No job found with id {job_id} (or it belongs to another user)."

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Parrot Assistant — Start all services
-# Usage: ./start.sh [all|stt|tts|memory|animation|bridge|stop|end|restart|status]
+# Usage: ./start.sh [all|stt|tts|bridge|stop|end|restart|status]
+#   (memory is in-process via mem0; animation is CSV-driven via fbx_functions —
+#    neither has a standalone service to start.)
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -10,6 +12,11 @@ LOG_DIR="$SCRIPT_DIR/logs"
 CONFIG="$SCRIPT_DIR/config.yaml"
 
 mkdir -p "$PIDS_DIR" "$LOG_DIR"
+
+# External API keys — exported into the environment for services that spawn
+# below, so tools can read them via os.getenv without being committed.
+# Fill in your own key and uncomment (or export it from your shell rc).
+# export POLYGON_API_KEY="your-key-here"
 
 # Read network addresses from config.yaml (single source of truth).
 EXTERNAL_HOST=$(python3 -c "
@@ -94,7 +101,7 @@ stop_all() {
     done
 
     # Second: kill anything still listening on known ports (stale processes / no pidfile)
-    for port in 8000 8001 8002 8003 8004; do
+    for port in 8000 8001 8002 8080; do
         squatter="$(ss -tlnp "sport = :$port" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | head -1 || true)"
         if [ -n "$squatter" ] && kill -0 "$squatter" 2>/dev/null; then
             echo "[port:$port] Killing leftover process $squatter"
@@ -125,21 +132,20 @@ status() {
 case "${1:-all}" in
     all)
         activate_venv
-        start_service memory "memory.service:app" 8003
-        start_service animation "animation.service:app" 8004
-        sleep 2
         start_service stt "stt.service:app" 8001
         start_service tts "tts.service:app" 8002
         echo "  Waiting for STT/TTS models to load..."
         sleep 5
         start_service bridge "bridge.server:app" 8000
+        start_service web "web.app:app" 8080
         echo ""
         echo "All services started.  (external_host=$EXTERNAL_HOST)"
         echo "  Bridge:    http://$EXTERNAL_HOST:8000"
+        echo "  Web:       http://$EXTERNAL_HOST:8080  (dashboard)"
         echo "  STT:       http://$INTERNAL_HOST:8001  (internal)"
         echo "  TTS:       http://$INTERNAL_HOST:8002  (internal)"
-        echo "  Memory:    http://$INTERNAL_HOST:8003  (internal)"
-        echo "  Animation: http://$INTERNAL_HOST:8004  (internal)"
+        echo "  Memory:    in-process (mem0, inside bridge)"
+        echo "  Animation: in-process (fbx_functions CSV, inside bridge)"
         echo ""
         echo "Health check: curl http://$INTERNAL_HOST:8000/health (waiting up to ~10s)"
         for i in {1..10}; do
@@ -159,8 +165,7 @@ case "${1:-all}" in
         ;;
     stt)       activate_venv; start_service stt "stt.service:app" 8001 ;;
     tts)       activate_venv; start_service tts "tts.service:app" 8002 ;;
-    memory)    activate_venv; start_service memory "memory.service:app" 8003 ;;
-    animation) activate_venv; start_service animation "animation.service:app" 8004 ;;
+    web)       activate_venv; start_service web "web.app:app" 8080 ;;
     bridge)
         activate_venv
         start_service bridge "bridge.server:app" 8000
@@ -177,7 +182,7 @@ case "${1:-all}" in
         ;;
     status) status ;;
     *)
-        echo "Usage: $0 {all|stt|tts|memory|animation|bridge|stop|end|restart|status}"
+        echo "Usage: $0 {all|stt|tts|bridge|web|stop|end|restart|status}"
         exit 1
         ;;
 esac

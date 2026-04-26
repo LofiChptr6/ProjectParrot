@@ -132,7 +132,7 @@ async def execute(arguments: dict) -> str:
         return "Missing 'description' (one short sentence)."
 
     try:
-        from bridge.server import get_active_preview, _broadcast_to_unity, unity_clients
+        from bridge.server import get_active_preview, _broadcast_clients, _ws_clients
     except Exception as exc:
         return f"bridge unavailable: {exc}"
 
@@ -204,8 +204,8 @@ async def execute(arguments: dict) -> str:
     # going forward. Audio + decor + html_mods stay as DOM state (they match
     # the new active theme we just wrote). Cache-bust active.css so the
     # browser re-fetches it.
-    await _broadcast_to_unity({"type": "ui_command", "action": "clear_theme_preview"})
-    await _broadcast_to_unity({
+    await _broadcast_clients({"type": "ui_command", "action": "clear_theme_preview"})
+    await _broadcast_clients({
         "type": "ui_command",
         "action": "reload_stylesheets",
         "v": int(time.time()),
@@ -220,5 +220,5 @@ async def execute(arguments: dict) -> str:
         "has_background_image": bool(background_image_url),
         "has_decor": bool(html_decor),
         "html_mods_count": len(html_mods),
-        "clients": len(unity_clients),
+        "clients": len(_ws_clients),
     }, ensure_ascii=False, indent=2)

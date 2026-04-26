@@ -22,12 +22,13 @@ TOOL_DEF = {
 
 async def execute(arguments: dict) -> str:
     from bridge.server import get_agent_loop
+    from tools.executor import TOOL_USER_ID
 
     loop = get_agent_loop()
     if loop is None:
         return "Cron scheduler is not running."
 
-    jobs = loop.list_jobs()
+    jobs = loop.list_jobs(user_id=TOOL_USER_ID.get())
     if not jobs:
         return "No scheduled jobs."
 

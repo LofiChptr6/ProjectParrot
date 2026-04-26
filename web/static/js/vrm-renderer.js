@@ -102,16 +102,32 @@ function initThree() {
     const w = area.clientWidth;
     const h = area.clientHeight;
 
-    // Scene
+    // Scene — transparent so the canvas-area CSS background shows through.
+    // The background photo is applied as a normal 2D CSS image on #canvasArea
+    // (via setSceneBackground below); this avoids the fisheye warp you'd get
+    // from treating a flat photo as an equirectangular 360° texture.
     scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x0f1a30);
+    scene.background = null;
+
+    // Apply saved-or-default background image and tuning to #bgLayer.
+    const savedBg = (() => {
+        try { return localStorage.getItem('parrot.bg'); } catch { return null; }
+    })();
+    const savedStyles = (() => {
+        try {
+            const raw = localStorage.getItem('parrot.bg_settings');
+            return raw ? JSON.parse(raw) : null;
+        } catch { return null; }
+    })();
+    setSceneBackground(savedBg || null);
+    if (savedStyles) setSceneBackgroundStyles(savedStyles);
 
     // Camera
     camera = new THREE.PerspectiveCamera(25, w / h, 0.1, 50);
     camera.position.set(0, 1.25, 3.0);
 
-    // Renderer
-    renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    // Renderer — alpha: true so transparent clear lets CSS background show.
+    renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
     renderer.setSize(w, h);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -168,6 +184,13 @@ function initThree() {
     // Smooth camera tracking: lerp toward ideal position every frame
     const _camLerp = 0.03;  // lower = smoother/slower (0.03 ≈ 0.5s settle)
 
+    // Persistent calibration offset. Ctrl+B calibration writes into this so
+    // manual tweaks survive layout-driven camera changes. Zero = lerp tracks
+    // PanelManager's getIdealCamera() exactly; non-zero = track ideal + off.
+    window._camOffset = window._camOffset || {
+        camX: 0, camY: 0, camZ: 0, tgtX: 0, tgtY: 0, tgtZ: 0,
+    };
+
     function _lerpCam(dt) {
         // Skip if orbit controls are unlocked (user is manually adjusting)
         if (controls.enabled) return;
@@ -180,13 +203,40 @@ function initThree() {
         const ideal = pm.getIdealCamera();
         if (!ideal) return;
 
-        // Lerp camera position and target toward ideal
-        camera.position.x += (ideal.camX - camera.position.x) * _camLerp;
-        camera.position.y += (ideal.camY - camera.position.y) * _camLerp;
-        camera.position.z += (ideal.camZ - camera.position.z) * _camLerp;
-        controls.target.x += (ideal.tgtX - controls.target.x) * _camLerp;
-        controls.target.y += (ideal.tgtY - controls.target.y) * _camLerp;
-        controls.target.z += (ideal.tgtZ - controls.target.z) * _camLerp;
+        const off = window._camOffset;
+        const tCamX = ideal.camX + off.camX;
+        const tCamY = ideal.camY + off.camY;
+        const tCamZ = ideal.camZ + off.camZ;
+        const tTgtX = ideal.tgtX + off.tgtX;
+        const tTgtY = ideal.tgtY + off.tgtY;
+        const tTgtZ = ideal.tgtZ + off.tgtZ;
+
+        // Lerp camera position and target toward (ideal + calibration offset)
+        camera.position.x += (tCamX - camera.position.x) * _camLerp;
+        camera.position.y += (tCamY - camera.position.y) * _camLerp;
+        camera.position.z += (tCamZ - camera.position.z) * _camLerp;
+        controls.target.x += (tTgtX - controls.target.x) * _camLerp;
+        controls.target.y += (tTgtY - controls.target.y) * _camLerp;
+        controls.target.z += (tTgtZ - controls.target.z) * _camLerp;
+
+        // Rotate Mocha so she faces the camera's X/Z position. Without this,
+        // when a panel shifts the camera off-center, Mocha stays pointed at
+        // world origin and perspective twists her shoulders "away" from the
+        // content. Facing the camera means she always reads as turned toward
+        // the viewer (and therefore toward the visible browser center).
+        if (vrm) {
+            const dx = camera.position.x - vrm.scene.position.x;
+            const dz = camera.position.z - vrm.scene.position.z;
+            // Subtle only: scale the full face-the-camera angle by 0.5 so she
+            // tilts partway instead of fully snapping to face the camera.
+            const FACING_STRENGTH = 0.5;
+            const targetRotY = Math.atan2(dx, dz) * FACING_STRENGTH;
+            // Shortest-path lerp for rotation
+            let diff = targetRotY - vrm.scene.rotation.y;
+            while (diff > Math.PI) diff -= 2 * Math.PI;
+            while (diff < -Math.PI) diff += 2 * Math.PI;
+            vrm.scene.rotation.y += diff * _camLerp;
+        }
     }
 
     function loop() {
@@ -358,6 +408,49 @@ function applyEmotion(emotionId) {
         } catch (e) { /* ignore */ }
     }
     currentEmotionPreset = emo.preset;
+}
+
+// ============================================================================
+//  Scene background (equirectangular image)
+// ============================================================================
+
+/**
+ * Swap the background image. Applied as a CSS background on #bgLayer,
+ * which sits behind the transparent canvas (no equirectangular warp, and
+ * filters don't affect Mocha).
+ * @param {string} src URL or data URL
+ */
+function setSceneBackground(src) {
+    const layer = document.getElementById('bgLayer');
+    if (!layer) return;
+    layer.style.backgroundImage = src ? `url("${src.replace(/"/g, '\\"')}")` : 'none';
+}
+
+/**
+ * Apply visual tuning to the background layer.
+ * @param {{fit?:string,posX?:number,posY?:number,blur?:number,brightness?:number}} s
+ *   fit: 'cover' | 'contain' | 'fill' | 'auto'
+ *   posX/posY: 0..100 percent
+ *   blur: pixels (0..20 typical)
+ *   brightness: 0..1 multiplier (1 = normal, 0.5 = half as bright)
+ */
+function setSceneBackgroundStyles(s = {}) {
+    const layer = document.getElementById('bgLayer');
+    if (!layer) return;
+    const fit = s.fit || 'cover';
+    const posX = (s.posX ?? 50);
+    const posY = (s.posY ?? 50);
+    const blur = (s.blur ?? 0);
+    const brightness = (s.brightness ?? 1);
+
+    layer.style.backgroundSize = (fit === 'fill') ? '100% 100%'
+        : (fit === 'auto') ? 'auto' : fit;
+    layer.style.backgroundPosition = `${posX}% ${posY}%`;
+
+    const filters = [];
+    if (blur > 0) filters.push(`blur(${blur}px)`);
+    if (brightness !== 1) filters.push(`brightness(${brightness})`);
+    layer.style.filter = filters.join(' ');
 }
 
 // ============================================================================
@@ -604,6 +697,8 @@ window._setupAnalyser = setupAnalyser;
 window._clearVRM = clearVRM;
 window._loadVRMFromFile = loadVRMFromFile;
 window._loadVRMFromInput = loadVRMFromInput;
+window._setSceneBackground = setSceneBackground;
+window._setSceneBackgroundStyles = setSceneBackgroundStyles;
 
 // Camera & controls access for calibration panel
 window._getCamera = () => camera;

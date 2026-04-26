@@ -50,11 +50,15 @@ TOOL_DEF = {
                 "background_image_url": {
                     "type": "string",
                     "description": (
-                        "URL to a full-page background image (landscape, high-res preferred). "
-                        "When set, the frontend auto-generates 'body { background-image: url(...); "
-                        "background-size: cover; }' plus a 'body::before' dim overlay — you do not "
-                        "write that CSS. Use web_search to find one (pixabay.com / unsplash.com) "
-                        "when the vibe implies an environment (cafe, forest, NYC, space station)."
+                        "Reference to a full-page background image (landscape, high-res preferred). "
+                        "Pass an 'img:XXXXXXXX' HANDLE that came from a recent web_search result — "
+                        "the handle resolves to the real URL automatically, so you never type or "
+                        "memorise the URL itself. Only handles of kind 'img:' are valid here; "
+                        "a 'url:' handle points to a page, not an image. When set, the frontend "
+                        "auto-generates 'body { background-image: url(...); background-size: "
+                        "cover; }' plus a 'body::before' dim overlay — you do not write that CSS. "
+                        "Use web_search (pixabay.com / unsplash.com) when the vibe implies an "
+                        "environment (cafe, forest, NYC, space station) and pick an img: handle."
                     ),
                 },
                 "background_overlay_rgba": {
@@ -144,7 +148,7 @@ async def execute(arguments: dict) -> str:
         return "Nothing to preview — pass at least one of variables, css, background_image_url, html_decor, or html_mods."
 
     try:
-        from bridge.server import _broadcast_to_unity, unity_clients, _active_preview
+        from bridge.server import _broadcast_clients, _ws_clients, _active_preview
     except Exception as exc:
         return f"bridge unavailable: {exc}"
 
@@ -155,7 +159,7 @@ async def execute(arguments: dict) -> str:
     _active_preview["html_decor"] = html_decor
     _active_preview["html_mods"] = list(html_mods)
 
-    await _broadcast_to_unity({
+    await _broadcast_clients({
         "type": "ui_command",
         "action": "apply_theme_preview",
         "variables": variables,
@@ -166,7 +170,7 @@ async def execute(arguments: dict) -> str:
         "html_mods": html_mods,
     })
 
-    clients = len(unity_clients)
+    clients = len(_ws_clients)
     summary = {
         "status": "preview_sent",
         "clients": clients,
