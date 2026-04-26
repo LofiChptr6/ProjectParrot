@@ -1208,14 +1208,16 @@ body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
         height: 100%;
     }
 
-    /* Floating input bar always visible at bottom (above the chat sheet).
-       --kb-offset is 0 normally; jumps to keyboard height when the keyboard
-       opens, which lifts the bar up to sit just above it. */
+    /* Floating input bar always visible at bottom — anchored to the
+       dynamic viewport, not the layout viewport. The trick:
+       (100vh - 100dvh) = keyboard height when keyboard is open, 0 otherwise.
+       So bottom = (keyboard height) + 8px puts the bar 8px above the
+       visible-viewport bottom, regardless of keyboard state. */
     .phone-input-bar {
         display: flex;
         position: fixed;
         left: 8px; right: 8px;
-        bottom: calc(8px + var(--kb-offset, 0px) + env(safe-area-inset-bottom, 0px));
+        bottom: calc(100vh - 100dvh + 8px + env(safe-area-inset-bottom, 0px));
         z-index: 30;
         gap: 8px;
         align-items: center;
@@ -1231,17 +1233,16 @@ body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
        floating bar instead, so the sheet is purely a history viewer. */
     .chat-sidebar .chat-input { display: none; }
 
-    /* ── Chat: bottom half, full width — but lifted above the floating
-           input bar so its bottom edge isn't hidden behind it. Also tracks
-           --kb-offset so when the keyboard opens, the whole chat stack
-           rides up together with the input. ────────────────────────────── */
+    /* ── Chat: bottom half, full width — sits above the floating input
+           bar. Also uses (100vh - 100dvh) so when the keyboard opens, the
+           whole chat stack rides up natively. ───────────────────────────── */
     .chat-sidebar {
         top: auto;
         left: 0; right: 0;
-        bottom: calc(60px + var(--kb-offset, 0px) + env(safe-area-inset-bottom, 0px));
+        bottom: calc(100vh - 100dvh + 60px + env(safe-area-inset-bottom, 0px));
         width: 100vw;
-        height: calc(50vh - 60px);
-        max-height: calc(100vh - 80px - var(--kb-offset, 0px));
+        height: calc(50dvh - 60px);
+        max-height: calc(100dvh - 80px);
         border-left: none;
         border-top: 1px solid var(--border);
         border-top-left-radius: 16px;
