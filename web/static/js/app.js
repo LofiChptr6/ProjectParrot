@@ -657,18 +657,23 @@ async function refreshAccountState() {
  */
 function setupAccountTab() {
     // ── Sub-tab toggle (Sign Up / Sign In) ────────────────────────────
-    document.querySelectorAll('.acct-subtab').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const target = btn.dataset.acct;
-            document.querySelectorAll('.acct-subtab').forEach(b =>
-                b.classList.toggle('active', b === btn));
-            document.querySelectorAll('.acct-pane').forEach(p =>
-                p.style.display = (p.dataset.acctPane === target ? '' : 'none'));
-            // Clear any stale error from the other pane
-            ['acctSignupError', 'acctSigninError'].forEach(id => {
-                const el = document.getElementById(id);
-                if (el) el.style.display = 'none';
-            });
+    // Use event delegation on the document so this keeps working even if the
+    // Account modal DOM gets re-rendered, and so iOS Safari's touch events
+    // reliably reach the handler (direct .addEventListener on a <button>
+    // inside a <form> can be missed if the form's submit fires first).
+    document.addEventListener('click', (ev) => {
+        const btn = ev.target.closest('.acct-subtab');
+        if (!btn) return;
+        ev.preventDefault();   // belt-and-suspenders against form submit
+        const target = btn.dataset.acct;
+        document.querySelectorAll('.acct-subtab').forEach(b =>
+            b.classList.toggle('active', b === btn));
+        document.querySelectorAll('.acct-pane').forEach(p =>
+            p.style.display = (p.dataset.acctPane === target ? '' : 'none'));
+        // Clear any stale error from the other pane
+        ['acctSignupError', 'acctSigninError'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.style.display = 'none';
         });
     });
 
