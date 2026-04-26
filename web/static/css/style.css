@@ -1175,12 +1175,27 @@ body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
  */
 @media (orientation: portrait) and (max-width: 900px), (max-width: 600px) {
 
-    /* Floating input bar always visible at bottom (above the chat sheet). */
+    /* Lock the page so iOS Safari can't auto-scroll the layout up when the
+       soft keyboard opens. Without this, tapping the input pushes Mocha's
+       head off-screen. The page is "fixed" — fixed-position elements stay
+       attached to the layout viewport — and we move only the input bar via
+       the --kb-offset CSS var (set in app.js by the visualViewport listener). */
+    html, body {
+        position: fixed;
+        inset: 0;
+        overflow: hidden;
+        width: 100%;
+        height: 100%;
+    }
+
+    /* Floating input bar always visible at bottom (above the chat sheet).
+       --kb-offset is 0 normally; jumps to keyboard height when the keyboard
+       opens, which lifts the bar up to sit just above it. */
     .phone-input-bar {
         display: flex;
         position: fixed;
         left: 8px; right: 8px;
-        bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+        bottom: calc(8px + var(--kb-offset, 0px) + env(safe-area-inset-bottom, 0px));
         z-index: 30;
         gap: 8px;
         align-items: center;
@@ -1190,25 +1205,28 @@ body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
         border: 1px solid var(--border);
         border-radius: 999px;
         box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+        transition: bottom 180ms ease;
     }
     /* Hide the chat panel's built-in input row — typing is done via the
        floating bar instead, so the sheet is purely a history viewer. */
     .chat-sidebar .chat-input { display: none; }
 
     /* ── Chat: bottom half, full width — but lifted above the floating
-           input bar so its bottom edge isn't hidden behind it ─────────── */
+           input bar so its bottom edge isn't hidden behind it. Also tracks
+           --kb-offset so when the keyboard opens, the whole chat stack
+           rides up together with the input. ────────────────────────────── */
     .chat-sidebar {
         top: auto;
         left: 0; right: 0;
-        bottom: calc(60px + env(safe-area-inset-bottom, 0px));
+        bottom: calc(60px + var(--kb-offset, 0px) + env(safe-area-inset-bottom, 0px));
         width: 100vw;
         height: calc(50vh - 60px);
-        max-height: calc(50vh - 60px);
+        max-height: calc(100vh - 80px - var(--kb-offset, 0px));
         border-left: none;
         border-top: 1px solid var(--border);
-        /* Round the top corners so it reads as a sheet over Mocha */
         border-top-left-radius: 16px;
         border-top-right-radius: 16px;
+        transition: bottom 180ms ease;
     }
     /* Collapse button repositions slightly so it's reachable with a thumb */
     .chat-collapse-btn {

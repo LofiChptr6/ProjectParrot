@@ -589,6 +589,36 @@ function initPresenceClaim() {
 }
 
 // ============================================================================
+//  iOS keyboard tracking — keep Mocha visible when the soft keyboard opens
+// ============================================================================
+/*
+ * iOS Safari shifts the entire layout viewport up when the soft keyboard
+ * appears, hiding the top half of the page (Mocha's face). The CSS in
+ * style.css locks html/body with position:fixed so iOS can't auto-scroll
+ * us. This listener uses the visualViewport API to measure how tall the
+ * keyboard is, and sets --kb-offset on the document root. The CSS bottom:
+ * calc(... + var(--kb-offset)) on .phone-input-bar (and .chat-sidebar)
+ * lifts only those elements above the keyboard while Mocha stays put.
+ */
+function initKeyboardTracker() {
+    if (!window.visualViewport) return;  // Pre-iOS 13 / older browsers
+    const vv = window.visualViewport;
+
+    function update() {
+        // visualViewport.height shrinks when keyboard is up.
+        // visualViewport.offsetTop is non-zero if Safari decided to scroll
+        // (shouldn't happen with our position:fixed lock, but include it).
+        const offset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+        document.documentElement.style.setProperty('--kb-offset', offset + 'px');
+        document.body.classList.toggle('keyboard-open', offset > 50);
+    }
+
+    vv.addEventListener('resize', update);
+    vv.addEventListener('scroll', update);
+    update();
+}
+
+// ============================================================================
 //  Quota cap UX — refusal toast + Account tab nudge
 // ============================================================================
 
@@ -2642,6 +2672,7 @@ async function init() {
     setupGlobalChat();
     setupAccountTab();
     initPresenceClaim();
+    initKeyboardTracker();
 
     // Text input enter key
     if (textInput) {
