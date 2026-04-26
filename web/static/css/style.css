@@ -92,16 +92,18 @@ body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
 /* Layer 1: 3D canvas fills entire viewport (always fullscreen)           */
 /* Layer 2: Chat, panels, modals float on top as overlays                 */
 
-/* `dvh` = dynamic viewport height — automatically shrinks when the iOS soft
- * keyboard opens. The layout, canvas-area, and Mocha all repaint into the
- * smaller visible area, so the keyboard simply takes back the bottom of the
- * viewport without iOS having to scroll Mocha out of view. Fall back to vh
- * for ancient browsers. */
+/* Layout height tracks the VISIBLE viewport directly via a JS-managed
+ * --vvh variable (set from window.visualViewport.height). iOS Safari does
+ * NOT shrink dvh when the soft keyboard opens — only when the URL bar
+ * collapses — so dvh alone leaves Mocha + the input bar covered by the
+ * keyboard. visualViewport.height IS reported correctly across iOS 13+,
+ * including the buggy iOS 26 versions. Fallbacks: dvh, then vh. */
 .main-layout {
     position: relative;
     width: 100vw;
-    height: 100vh;        /* fallback */
-    height: 100dvh;
+    height: 100vh;                  /* fallback */
+    height: 100dvh;                 /* better fallback */
+    height: var(--vvh, 100dvh);     /* JS-set, exact visible viewport */
     overflow: hidden;
 }
 

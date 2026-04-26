@@ -604,29 +604,45 @@ function initKeyboardTracker() {
     if (!window.visualViewport) return;  // Pre-iOS 13 / older browsers
     const vv = window.visualViewport;
 
-    // The canvas is sized in CSS via 100dvh, which natively shrinks when
-    // the iOS keyboard opens — Mocha re-frames into the visible area
-    // automatically. We only need this listener to drive --kb-offset so
-    // the floating input bar lifts above the keyboard.
+    // Set --vvh = window.visualViewport.height (the actual visible area
+    // including the keyboard subtraction on iOS). Used by .main-layout in
+    // CSS to size itself precisely, so the flex column reflows correctly
+    // when the keyboard opens. iOS Safari's dvh unit alone doesn't track
+    // the keyboard — visualViewport does.
     function update() {
+        const root = document.documentElement;
+        root.style.setProperty('--vvh', vv.height + 'px');
         const kb = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
-        document.documentElement.style.setProperty('--kb-offset', kb + 'px');
+        root.style.setProperty('--kb-offset', kb + 'px');
         document.body.classList.toggle('keyboard-open', kb > 50);
     }
 
     vv.addEventListener('resize', update);
     vv.addEventListener('scroll', update);
+    window.addEventListener('resize', update);   // orientation change, etc.
     update();
 
-    // Pin scroll if iOS tries to drift it on focus.
+    // Pin scroll if iOS tries to drift it on focus, and re-run sizing
+    // afterwards in case visualViewport changed.
     function _pinScroll() {
         if (window.scrollY !== 0 || window.scrollX !== 0) {
             window.scrollTo(0, 0);
         }
+        update();
     }
     window.addEventListener('scroll', _pinScroll, { passive: true });
     document.addEventListener('focusin', () => {
-        requestAnimationFrame(() => requestAnimationFrame(_pinScroll));
+        // Defer past iOS's auto-scroll-into-view, then re-measure twice
+        // (some iOS versions report stale values for one frame).
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+            _pinScroll();
+            requestAnimationFrame(update);
+        }));
+    });
+    document.addEventListener('focusout', () => {
+        // After the keyboard dismisses, iOS sometimes reports stale
+        // visualViewport.height for ~100ms. Re-measure a few times.
+        for (const ms of [50, 150, 300]) setTimeout(update, ms);
     });
 }
 
