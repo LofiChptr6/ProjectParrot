@@ -605,23 +605,40 @@ function initKeyboardTracker() {
     const vv = window.visualViewport;
     const canvasArea = document.getElementById('canvasArea');
 
+    // Detect the phone breakpoint live (so orientation flips work).
+    function _isPhone() {
+        return window.matchMedia(
+            '(orientation: portrait) and (max-width: 900px), (max-width: 600px)'
+        ).matches;
+    }
+
     function update() {
-        // Keyboard height = whatever the layout viewport has that the
-        // visual viewport doesn't.
+        // Keyboard height = layout viewport - visible viewport.
         const kb = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
         document.documentElement.style.setProperty('--kb-offset', kb + 'px');
         document.body.classList.toggle('keyboard-open', kb > 50);
 
-        // iOS Safari sometimes scrolls the layout viewport up to bring the
-        // focused input into view (vv.offsetTop > 0 when this happens).
-        // Counter-translate the canvas DOWN by that amount so Mocha stays
-        // pinned to the visible area regardless of what Safari does.
-        if (canvasArea) {
-            if (vv.offsetTop > 0) {
-                canvasArea.style.transform = `translateY(${vv.offsetTop}px)`;
-            } else {
-                canvasArea.style.transform = '';
-            }
+        if (!canvasArea) return;
+
+        if (_isPhone() && (kb > 50 || vv.offsetTop > 0)) {
+            // Phone with keyboard up: actively size + position the canvas to
+            // EXACTLY match the visible viewport. Override the inset:0
+            // styling so iOS can't shift Mocha out of view, regardless of
+            // whether it does the shift via offsetTop, layout scroll, or
+            // some private behavior we can't observe directly.
+            canvasArea.style.position = 'fixed';
+            canvasArea.style.top    = vv.offsetTop + 'px';
+            canvasArea.style.left   = vv.offsetLeft + 'px';
+            canvasArea.style.width  = vv.width + 'px';
+            canvasArea.style.height = vv.height + 'px';
+            canvasArea.style.right  = 'auto';
+            canvasArea.style.bottom = 'auto';
+        } else {
+            // Reset to the CSS-driven full-viewport positioning.
+            canvasArea.style.position = '';
+            canvasArea.style.top = canvasArea.style.left = '';
+            canvasArea.style.right = canvasArea.style.bottom = '';
+            canvasArea.style.width = canvasArea.style.height = '';
         }
     }
 
@@ -629,12 +646,12 @@ function initKeyboardTracker() {
     vv.addEventListener('scroll', update);
     update();
 
-    // iOS Safari belt-and-suspenders: snap scroll to 0 whenever it drifts.
+    // Belt-and-suspenders: snap scroll to 0 + re-run the layout when iOS
+    // tries to scroll the document on focus.
     function _pinScroll() {
         if (window.scrollY !== 0 || window.scrollX !== 0) {
             window.scrollTo(0, 0);
         }
-        // Also re-run the offset compensation in case scroll changed offsetTop.
         update();
     }
     window.addEventListener('scroll', _pinScroll, { passive: true });
@@ -642,7 +659,7 @@ function initKeyboardTracker() {
         requestAnimationFrame(() => requestAnimationFrame(_pinScroll));
     });
     document.addEventListener('focusout', () => {
-        requestAnimationFrame(_pinScroll);
+        requestAnimationFrame(() => requestAnimationFrame(update));
     });
 }
 
