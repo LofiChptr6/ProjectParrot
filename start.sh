@@ -64,9 +64,17 @@ start_service() {
         sleep 1
     fi
 
+    # Auto-load .env so tools that read os.environ (BRAVE_API_KEY,
+    # POLYGON_API_KEY, ANTHROPIC_API_KEY, etc.) get their values without the
+    # caller having to source it manually first.
+    local env_arg=()
+    if [ -f "$SCRIPT_DIR/.env" ]; then
+        env_arg=(--env-file "$SCRIPT_DIR/.env")
+    fi
+
     echo "[$name] Starting on port $port..."
     cd "$SCRIPT_DIR"
-    python -m uvicorn "$module" --host 0.0.0.0 --port "$port" &> "$logfile" &
+    python -m uvicorn "$module" --host 0.0.0.0 --port "$port" "${env_arg[@]}" &> "$logfile" &
     local pid=$!
     echo "$pid" > "$pidfile"
     echo "[$name] Started (PID $pid) — log: $logfile"
@@ -167,8 +175,12 @@ case "${1:-all}" in
     tts)       activate_venv; start_service tts "tts.service:app" 8002 ;;
     web)       activate_venv; start_service web "web.app:app" 8080 ;;
     bridge)
+        # Restart the bridge AND ensure the webapp is up. Cloudflare's tunnel
+        # routes to port 8080 (the webapp), so leaving web dead while only
+        # bridge runs gives a 502 to anyone hitting the public hostname.
         activate_venv
         start_service bridge "bridge.server:app" 8000
+        start_service web "web.app:app" 8080
         echo ""
         echo "Dashboard: http://$EXTERNAL_HOST:8000/monitor"
         ;;
