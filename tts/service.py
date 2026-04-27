@@ -54,6 +54,12 @@ class SynthRequest(BaseModel):
     # user's active voice from data/users/{uid}/voices/. Adds zero latency
     # — F5-TTS already reads the ref file fresh on every infer() call.
     ref_audio_path: str | None = None
+    # Optional per-call reference TEXT — what's spoken in ref_audio. When
+    # provided, F5-TTS skips its in-process Whisper ASR step entirely.
+    # The bridge supplies this from a sidecar .txt next to the voice file
+    # so per-user voices don't need TTS-side transcription on every cold
+    # start (which currently breaks when torchcodec can't load).
+    ref_text: str | None = None
     # Optional per-call cfg_strength override. When None, uses the server's
     # config.yaml `tts.cfg_strength`. Higher → more matches reference
     # (calmer, less prosody variation). Lower → more free (more swings).
@@ -136,11 +142,14 @@ async def synthesize(req: SynthRequest):
     # Per-call voice wins; fall back to the global config default.
     custom_ref = _resolve_per_call_ref(req.ref_audio_path)
     ref_audio = custom_ref or _get_reference_audio()
-    # ref_text is only correct for the GLOBAL voice. If the caller supplies a
-    # custom voice, leave ref_text empty so F5-TTS runs Whisper ASR on it
-    # (cached internally per file by f5_tts.infer.utils_infer._ref_text_cache,
-    # so only the first call with a new voice pays the ASR cost).
-    if custom_ref:
+    # ref_text resolution priority:
+    #   1. Per-call ref_text (caller supplied alongside ref_audio_path)
+    #   2. Global config.tts.reference_text (only valid when no custom voice)
+    #   3. Empty string → F5-TTS runs in-process Whisper ASR (slow, fragile;
+    #      breaks if torchcodec can't load — that's why path 1 exists).
+    if req.ref_text and req.ref_text.strip():
+        ref_text = req.ref_text.strip()
+    elif custom_ref:
         ref_text = ""
     else:
         ref_text = (config.get("reference_text") or "").strip()

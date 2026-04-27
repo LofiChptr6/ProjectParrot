@@ -1474,6 +1474,12 @@ async def _synthesize(text: str, user_id: str | None = None) -> Optional[bytes]:
     voice_path = _user_active_voice_path(user_id)
     if voice_path:
         payload["ref_audio_path"] = voice_path
+        # Send the ref text alongside so F5-TTS skips its in-process Whisper
+        # step (which currently breaks under torchcodec lib mismatch). The
+        # sidecar is created on first use and reused forever after.
+        ref_text = await _voice_ref_text(voice_path)
+        if ref_text:
+            payload["ref_text"] = ref_text
     try:
         resp = await http.post(
             f"{config['tts_url']}/synthesize",
@@ -2144,6 +2150,51 @@ def _list_assets(user_id: str, kind: str) -> list[dict]:
     return out
 
 
+async def _voice_ref_text(voice_path: str | None) -> str | None:
+    """Return the reference text for a per-user voice file.
+
+    Reads a sidecar `<voice>.txt` next to the WAV. If missing, transcribes
+    the voice via the STT service and writes the sidecar (best-effort —
+    a failure here just means TTS will have to transcribe in-process,
+    which currently breaks under broken torchcodec). Caching by sidecar
+    means we only call STT once per voice, ever.
+    """
+    if not voice_path:
+        return None
+    p = Path(voice_path)
+    if not p.is_file():
+        return None
+    sidecar = p.with_suffix(p.suffix + ".txt")
+    if sidecar.is_file():
+        try:
+            text = sidecar.read_text(encoding="utf-8").strip()
+            if text:
+                return text
+        except Exception as exc:
+            log.debug("voice sidecar read failed for %s: %s", p.name, exc)
+
+    # Lazy transcribe via STT — Faster-Whisper, no torchcodec dependency.
+    try:
+        with p.open("rb") as fh:
+            files = {"file": (p.name, fh, "audio/wav")}
+            resp = await http.post(f"{config['stt_url']}/transcribe", files=files)
+        if resp.status_code != 200:
+            log.warning("voice transcribe HTTP %s for %s", resp.status_code, p.name)
+            return None
+        text = (resp.json().get("text") or "").strip()
+        if not text:
+            return None
+        try:
+            sidecar.write_text(text, encoding="utf-8")
+        except Exception as exc:
+            log.debug("voice sidecar write failed for %s: %s", p.name, exc)
+        log.info("Transcribed voice %s -> %s", p.name, text[:80])
+        return text
+    except Exception as exc:
+        log.warning("voice transcribe failed for %s: %s", p.name, exc)
+        return None
+
+
 def _user_active_voice_path(user_id: str | None) -> str | None:
     """Return absolute path to the user's active voice file, or None.
 
@@ -2262,6 +2313,15 @@ async def user_upload_voice(request: Request, file: UploadFile = File(...), toke
     _ensure_user_library(user_id)
     dest = _user_lib_dir(user_id, "voices") / raw_name
     dest.write_bytes(data)
+
+    # Eagerly transcribe the new clip so TTS doesn't have to run Whisper
+    # ASR in-process (which breaks under torchcodec lib mismatch). The
+    # sidecar persists across TTS restarts. Best-effort — a failure here
+    # falls back to lazy transcription on first synthesis.
+    try:
+        await _voice_ref_text(str(dest))
+    except Exception as exc:
+        log.debug("eager voice transcribe failed for %s: %s", raw_name, exc)
 
     active = _read_active(user_id)
     if not active.get("voice"):
