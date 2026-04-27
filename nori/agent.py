@@ -108,10 +108,21 @@ _NORI_TOOL_NAMES = [
     # than yfinance-based get_stock_data. Nori-only; Mocha routes via ask_nori.
     "polygon_prev_close", "polygon_bars", "polygon_snapshot",
     "polygon_ticker_details", "polygon_ticker_news", "polygon_market_status",
-    # Personalized live trading desk briefing — proxies opus_trading MCP.
-    # Use this (NOT polygon/get_stock_data) whenever the user asks about
-    # THEIR portfolio, P&L, positions, or "how's the desk doing".
+    # Personalized live trading — proxies opus_trading MCP. Use these
+    # (NOT polygon / get_stock_data / web_search) for ANY question that
+    # sounds personal/financial about the user. See nori/soul.md for the
+    # routing matrix from question phrasing → tool.
     "get_trading_briefing",
+    "get_position_dossier",
+    "get_agent_overview",
+    "get_pnl_attribution",
+    "get_trade_activity",
+    "get_risk_overview",
+    "get_agent_disagreement",
+    "get_position_history",
+    "get_changes_since",
+    "get_upcoming_catalysts",
+    "get_manual_overrides",
 ]
 
 # Lazy-initialized LLM client (Nori's own instance)

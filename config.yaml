@@ -235,8 +235,20 @@ tools:
     - show_weather
     # Save the user's preferred name once they introduce themselves
     - set_display_name
-    # Trading desk briefing (proxies opus_trading MCP — read-only)
+    # Personalized trading desk (proxies opus_trading MCP — read-only).
+    # Primary path is via ask_nori; listed here so Mocha can also call
+    # them in Pass 2 when she's confident which tool fits.
     - get_trading_briefing
+    - get_position_dossier
+    - get_agent_overview
+    - get_pnl_attribution
+    - get_trade_activity
+    - get_risk_overview
+    - get_agent_disagreement
+    - get_position_history
+    - get_changes_since
+    - get_upcoming_catalysts
+    - get_manual_overrides
   working_dir: /home/tianyizhang/AI Projects/ProjectParrot
   max_rounds: 5
   timeout: 120  # increased: Nori may need time for multi-step research
