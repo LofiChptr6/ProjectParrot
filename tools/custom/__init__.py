@@ -29,6 +29,18 @@ def load_custom_tools() -> tuple[dict[str, dict], dict[str, Callable]]:
     definitions: dict[str, dict] = {}
     executors: dict[str, Callable] = {}
 
+    # Underscore-prefixed modules are shared helpers (e.g. _opus_proxy).
+    # The tool files import from them with `from tools.custom._foo import …`.
+    # On hot-reload, Python keeps the original module cached, so changes to
+    # helpers wouldn't take effect. Reload them first.
+    import sys as _sys
+    for _mod_name in list(_sys.modules):
+        if _mod_name.startswith("tools.custom._"):
+            try:
+                importlib.reload(_sys.modules[_mod_name])
+            except Exception as exc:
+                log.warning("Failed to reload helper '%s': %s", _mod_name, exc)
+
     for finder, name, ispkg in pkgutil.iter_modules([str(CUSTOM_DIR)]):
         if name.startswith("_"):
             continue
