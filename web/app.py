@@ -77,14 +77,25 @@ app.add_middleware(CacheControlMiddleware)
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
+# index.html and login.html bootstrap every other resource — if the
+# browser caches a stale copy, all the ?v=… cache-busters on JS/CSS
+# inside it become stale too. Force fresh fetch on every visit so a
+# deploy is always picked up by a single Ctrl+R.
+_NO_CACHE_HEADERS = {
+    "Cache-Control": "no-cache, no-store, must-revalidate",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
+
+
 @app.get("/")
 async def index():
-    return FileResponse(STATIC_DIR / "index.html")
+    return FileResponse(STATIC_DIR / "index.html", headers=_NO_CACHE_HEADERS)
 
 
 @app.get("/login")
 async def login_page():
-    return FileResponse(STATIC_DIR / "login.html")
+    return FileResponse(STATIC_DIR / "login.html", headers=_NO_CACHE_HEADERS)
 
 
 @app.get("/api/default-model")

@@ -2558,6 +2558,34 @@ function setupAdminButtons() {
     if (btnTTSProc) btnTTSProc.addEventListener('click',  () => _restartService('tts', svcStatusEl));
     if (btnBoth)    btnBoth.addEventListener('click',     () => _restartService('all', svcStatusEl));
 
+    // Hard reload — clears anything the page can clear from JS (service
+    // workers, Cache Storage), then reloads with a cache-buster query so
+    // the HTML and JS bundle bypass the disk cache. The browser's HTTP
+    // cache itself is not clearable from JS (security) — the cache-buster
+    // ?_=<timestamp> on the reload URL is what actually forces fresh JS.
+    const btnHardReload = document.getElementById('btnHardReload');
+    if (btnHardReload) {
+        btnHardReload.addEventListener('click', async () => {
+            const status = document.getElementById('hardReloadStatus');
+            btnHardReload.disabled = true;
+            if (status) status.textContent = 'Clearing caches…';
+            try {
+                if ('serviceWorker' in navigator) {
+                    const regs = await navigator.serviceWorker.getRegistrations();
+                    await Promise.all(regs.map(r => r.unregister()));
+                }
+                if ('caches' in window) {
+                    const keys = await caches.keys();
+                    await Promise.all(keys.map(k => caches.delete(k)));
+                }
+            } catch (e) {
+                console.warn('hard-reload cleanup error (continuing):', e);
+            }
+            const sep = location.search ? '&' : '?';
+            location.replace(location.pathname + location.search + sep + '_=' + Date.now() + location.hash);
+        });
+    }
+
     // Clear memory — windowed (1h / 3h / 1d / 1w / all). Always wipes
     // Mocha's short-term ring buffer; "all" also wipes mem0 facts + diary.
     // Local UI (chat panels, thinking log) clears on success.
