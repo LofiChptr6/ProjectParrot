@@ -147,6 +147,27 @@ async def execute_tool(name: str, arguments: dict) -> str:
         except Exception:
             pass
 
+    # External-tool panel protocol: if the result is a JSON envelope with
+    # __panel__, broadcast it as a ui_command and let the bridge render it.
+    if _ok and isinstance(result, str) and result.startswith("{"):
+        try:
+            env = json.loads(result)
+            if isinstance(env, dict) and env.get("__panel__"):
+                from bridge.server import _broadcast_clients, _set_open_modal
+                payload = env.get("__payload__") or {}
+                await _broadcast_clients({
+                    "type": "ui_command",
+                    "action": env["__panel__"],
+                    "presentation": payload,
+                })
+                if env["__panel__"] == "create_presentation":
+                    _set_open_modal("presentation", {
+                        "id": payload.get("id"),
+                        "title": payload.get("title"),
+                    })
+        except (json.JSONDecodeError, TypeError):
+            pass
+
     return result
 
 

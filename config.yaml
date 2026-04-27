@@ -235,6 +235,8 @@ tools:
     - show_weather
     # Save the user's preferred name once they introduce themselves
     - set_display_name
+    # Trading desk briefing (proxies opus_trading MCP — read-only)
+    - get_trading_briefing
   working_dir: /home/tianyizhang/AI Projects/ProjectParrot
   max_rounds: 5
   timeout: 120  # increased: Nori may need time for multi-step research
