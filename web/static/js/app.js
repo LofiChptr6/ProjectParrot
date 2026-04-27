@@ -124,18 +124,18 @@ function wsSend(obj) {
     }
 }
 
+// Always go through the page's own host. The web app (web/app.py) proxies
+// /ws/live, /ws/monitor, and /api/* to the bridge on its internal port —
+// so the browser never needs to know which port the bridge listens on, and
+// public deployments behind a reverse proxy (Cloudflare tunnel, nginx, etc.)
+// work the same as direct LAN access.
 function _bridgeWsUrl(path) {
-    if (location.protocol === 'https:') {
-        return `wss://${location.host}${path}`;
-    }
-    return `ws://${bridgeHost}:${bridgePort}${path}`;
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    return `${proto}://${location.host}${path}`;
 }
 
 function _bridgeHttpUrl(path) {
-    if (location.protocol === 'https:') {
-        return `https://${location.host}${path}`;
-    }
-    return `http://${bridgeHost}:${bridgePort}${path}`;
+    return `${location.protocol}//${location.host}${path}`;
 }
 
 // ============================================================================
@@ -391,6 +391,21 @@ function scheduleMonitorReconnect() {
         connectMonitor();
     }, 3000);
 }
+
+// User-triggered reconnect — bound to the status dot. Cancels pending
+// backoff timers and reopens both sockets immediately.
+function forceReconnect() {
+    if (reconnectLiveTimer)    { clearTimeout(reconnectLiveTimer);    reconnectLiveTimer = null; }
+    if (reconnectMonitorTimer) { clearTimeout(reconnectMonitorTimer); reconnectMonitorTimer = null; }
+    try { if (wsLive)    wsLive.close(); }    catch (e) {}
+    try { if (wsMonitor) wsMonitor.close(); } catch (e) {}
+    wsLive = null;
+    wsMonitor = null;
+    setStatus('disconnected', 'Reconnecting…');
+    connectLive();
+    connectMonitor();
+}
+window.forceReconnect = forceReconnect;
 
 // ============================================================================
 //  Message handling — /ws/live
@@ -2738,7 +2753,16 @@ async function init() {
         if (!phoneInput) return;
         const text = phoneInput.value.trim();
         if (!text) return;
-        if (!wsLive || wsLive.readyState !== WebSocket.OPEN) return;
+        if (!wsLive || wsLive.readyState !== WebSocket.OPEN) {
+            // Visible signal that the message couldn't be sent — flash the
+            // status dot and prompt the user to click it to reconnect.
+            if (statusDot) {
+                statusDot.classList.add('disconnected-flash');
+                setTimeout(() => statusDot.classList.remove('disconnected-flash'), 1500);
+            }
+            setStatus('disconnected', 'Disconnected — click the dot to reconnect');
+            return;
+        }
         ensureAudioCtx();
         wsSend({ type: 'user_input', text });
         appendChat('user', text);
@@ -2762,7 +2786,16 @@ async function init() {
         });
     }
 
-    // 5. Bootstrap active theme's non-CSS assets (background image is in
+    // 5. Make the status dot a one-click reconnect affordance. If the WS
+    //    drops (bridge restart, tunnel hiccup, network blip), clicking the
+    //    dot bypasses the 3 s backoff and tries to reconnect immediately.
+    if (statusDot) {
+        statusDot.title = 'Click to reconnect';
+        statusDot.style.cursor = 'pointer';
+        statusDot.addEventListener('click', forceReconnect);
+    }
+
+    // 6. Bootstrap active theme's non-CSS assets (background image is in
     //    active.css; audio/decor/html_mods are in active.json).
     bootstrapActiveTheme();
 
