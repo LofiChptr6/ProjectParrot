@@ -97,9 +97,9 @@
 
     async function captureAndReply(requestId) {
         if (!requestId) return;
-        const bridge = location.protocol === 'https:'
-            ? `https://${location.host}`
-            : `http://${window.bridgeHost}:${window.bridgePort}`;
+        // Webapp proxies /admin/* to the bridge — use page host so this
+        // works on direct LAN, Cloudflare tunnel, and any reverse proxy.
+        const bridge = `${location.protocol}//${location.host}`;
         try {
             const b64 = await capturePage();
             await fetch(bridge + '/admin/theme/screenshot-reply', {

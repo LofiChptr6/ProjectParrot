@@ -1071,12 +1071,10 @@
     }
 
     function _bridgeUrl(path) {
-        if (location.protocol === 'https:') {
-            return `https://${location.host}${path}`;
-        }
-        const host = window.bridgeHost || location.hostname;
-        const port = window.bridgePort || location.port;
-        return `http://${host}:${port}${path}`;
+        // Always go through the page host. The webapp proxies /api/* to
+        // the bridge, so this works for direct LAN, Cloudflare tunnel,
+        // and any reverse proxy.
+        return `${location.protocol}//${location.host}${path}`;
     }
 
     async function _loadCandleData(container, symbol, period, interval) {
