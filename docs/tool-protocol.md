@@ -17,13 +17,42 @@ There are two integration paths depending on where the tool lives:
 
 ---
 
+## How Mocha presents slides
+
+Understanding this before designing a payload matters.
+
+Mocha's narration is split into **speech segments** — short sentence-chunks the LLM produces. The frontend advances slides proportionally as segments play:
+
+```
+segment 0/6 → slide 0
+segment 2/6 → slide 1
+segment 4/6 → slide 2
+```
+
+This means **slide count should match the number of narration beats**. A 3-slide deck works best when Mocha has roughly 3 things to say. She never manually clicks Next — slides advance as she speaks.
+
+To make this precise, each slide carries its own `narration` field. The tool author writes what Mocha should say for that slide; the bridge assembles them into the ordered speech segment list. One narration beat = one slide turn.
+
+```jsonc
+// Each slide says what Mocha speaks while it is visible
+{
+  "type": "multi_chart",
+  "narration": "NVDA is up 3% today on heavy volume, TSLA pulled back after the open.",
+  "symbols": ["NVDA", "TSLA"]
+}
+```
+
+If `narration` is omitted on a slide, Mocha may ad-lib based on context or skip that slide in her speech.
+
+---
+
 ## Path 1 — Internal Tool
 
-Internal tools call `_broadcast_clients` directly. The tool's string return value is what Mocha speaks; the panel appears asynchronously on the user's screen.
+Internal tools call `_broadcast_clients` directly. The tool's string return value is what Mocha speaks for the overall summary; per-slide narration is embedded in the slide objects.
 
 ```python
 """Custom tool: my_tool."""
-from bridge.server import _broadcast_clients, _set_open_modal
+from bridge.server import _broadcast_clients
 
 TOOL_DEF = {
     "type": "function",
@@ -43,145 +72,266 @@ TOOL_DEF = {
 async def execute(arguments: dict) -> str:
     topic = arguments["topic"]
 
-    # Build the panel payload (see Panel Types below)
-    payload = { ... }
-
     await _broadcast_clients({
         "type": "ui_command",
-        "action": "create_presentation",   # or show_card, show_weather, etc.
-        "presentation": payload,           # field name matches the action (see below)
+        "action": "create_presentation",
+        "presentation": {
+            "id": f"pres_{int(__import__('time').time() * 1000)}",
+            "title": topic,
+            "slides": [
+                {
+                    "type": "multi_chart",
+                    "narration": "First slide, Mocha says this.",
+                    "symbols": ["AAPL", "NVDA", "TSLA"],
+                },
+                {
+                    "type": "chart",
+                    "narration": "Second slide, Mocha says this.",
+                    "chart_type": "line",
+                    "labels": ["Mon", "Tue", "Wed", "Thu", "Fri"],
+                    "datasets": [{"label": "Portfolio", "data": [100, 102, 101, 104, 107]}],
+                },
+            ],
+        },
     })
 
-    # What Mocha will say out loud
-    return f"Here's what I found on {topic}."
+    return f"Here's the breakdown on {topic}."
 ```
 
-Hot-reload after adding: `POST http://127.0.0.1:8000/admin/reload-tools`
+Hot-reload without restart: `POST http://127.0.0.1:8000/admin/reload-tools`
 
 ---
 
 ## Path 2 — External Tool (MCP / other repo)
 
-External tools cannot import bridge internals. Instead, they return a JSON string with a top-level `__panel__` key. The bridge executor detects this key and broadcasts the appropriate `ui_command` automatically.
+External tools return a JSON string with a top-level `__panel__` key. The bridge executor detects it and broadcasts the `ui_command` automatically.
 
 **Return format:**
 ```json
 {
-  "__panel__": "<panel_type>",
-  "__narration__": "What Mocha should say about this result.",
-  "__payload__": { ... panel-specific fields ... }
+  "__panel__": "create_presentation",
+  "__payload__": { ... full presentation object ... }
 }
 ```
 
-- `__panel__`: one of the panel types listed below  
-- `__narration__`: plain text; the bridge forwards this as Mocha's spoken response  
-- `__payload__`: the full panel payload object (same schema as the internal broadcast)
+- `__panel__`: panel action name (see Panel Types below)
+- `__payload__`: the complete payload — same schema as the internal broadcast
+- No separate `__narration__` needed: each slide carries its own `narration` field; the bridge assembles them into Mocha's speech in order
 
-**Example — opus trading sending a chart:**
+**Example — opus trading daily briefing:**
 ```json
 {
   "__panel__": "create_presentation",
-  "__narration__": "Here's your portfolio summary for today.",
   "__payload__": {
     "id": "pres_portfolio_20260427",
-    "title": "Portfolio — Apr 27",
+    "title": "Daily Briefing — Apr 27",
     "slides": [
       {
         "type": "stat_row",
+        "narration": "Your portfolio gained 2.3% today, led by NVDA which added $1,840.",
         "title": "Today's P&L",
         "stats": [
-          {"label": "Total", "value": "+$4,210", "delta": "+2.3%"},
-          {"label": "Largest winner", "value": "NVDA +$1,840"}
+          { "label": "Total", "value": "+$4,210", "delta": "+2.3%" },
+          { "label": "Largest winner", "value": "NVDA +$1,840" },
+          { "label": "Largest loser", "value": "TSLA −$320" }
         ]
       },
       {
+        "type": "multi_chart",
+        "narration": "Here are your top three positions for today. NVDA broke out above resistance.",
+        "title": "Top positions",
+        "symbols": [
+          { "symbol": "NVDA", "price": 875.32, "change": 3.1 },
+          { "symbol": "TSLA", "price": 248.90, "change": -0.8 },
+          { "symbol": "AAPL", "price": 212.50, "change": 1.2 }
+        ],
+        "default_period": "1d"
+      },
+      {
         "type": "chart",
+        "narration": "Your equity curve stayed above the morning low and closed near the high of day.",
         "title": "Equity curve",
         "chart_type": "line",
-        "labels": ["09:30", "10:00", "10:30", "..."],
-        "datasets": [{"label": "Portfolio", "data": [100000, 101200, 102400]}]
+        "labels": ["09:30", "10:00", "10:30", "11:00", "12:00", "13:00", "14:00", "15:00", "15:30"],
+        "datasets": [{ "label": "Portfolio ($)", "data": [200000, 201200, 200800, 202400, 203100, 203800, 204100, 204500, 204210] }]
       }
     ]
   }
 }
 ```
 
-> **Note:** The bridge-side detection of `__panel__` is the contract. If this bridge-side handling is not yet implemented for a given panel type, add it in `tools/executor.py` → `execute_tool()` post-dispatch block.
+> **Bridge-side:** detection of `__panel__` lives in `tools/executor.py` → `execute_tool()` post-dispatch block. If a new panel type is added, wire it there.
 
 ---
 
-## Panel Types
+## Slide Types
 
-### `create_presentation` — Slides panel
+All slides live inside `presentation.slides[]`. Every slide may carry a `narration` string — what Mocha says while that slide is visible.
 
-A floating panel with multiple slides. Navigation arrows appear automatically.
+---
 
-```json
+### `title` — Cover slide
+
+```jsonc
 {
-  "type": "ui_command",
-  "action": "create_presentation",
-  "presentation": {
-    "id": "pres_<timestamp>",
-    "title": "Panel title shown in header",
-    "slides": [ ... ],
-    "auto_advance_sec": 0
-  }
+  "type": "title",
+  "narration": "Let me walk you through today's market snapshot.",
+  "title": "Market Snapshot",
+  "subtitle": "Apr 27, 2026"       // optional
 }
 ```
 
-**Slide types:**
+---
+
+### `stat_row` — Key metrics
+
+Vertical list of labeled values, each with an optional delta badge.
 
 ```jsonc
-// Title slide
-{ "type": "title", "title": "Main heading", "subtitle": "Optional subtext" }
-
-// Stat row (key metrics, one per row)
 {
   "type": "stat_row",
-  "title": "Section label",
+  "narration": "Revenue hit a record $25.1 billion, up 3.3% from last quarter.",
+  "title": "Q1 Results",
   "stats": [
-    { "label": "Revenue", "value": "$25.1B", "delta": "+3.3%" }
+    { "label": "Revenue",  "value": "$25.1B", "delta": "+3.3%" },
+    { "label": "Net income","value": "$6.9B",  "delta": "+8.1%" },
+    { "label": "EPS",       "value": "$2.27",  "delta": "+7.6%" }
   ]
 }
+```
 
-// Chart (Chart.js)
+---
+
+### `chart` — XY time-series / bar / pie
+
+Rendered with Chart.js. Supply raw `labels` + `datasets` arrays — the tool author controls the data, not the bridge.
+
+```jsonc
 {
   "type": "chart",
-  "title": "Chart heading",
-  "chart_type": "line",          // line | bar | pie | doughnut
-  "labels": ["Q1", "Q2", "Q3"],
+  "narration": "The equity curve stayed above the morning low all day.",
+  "title": "Equity curve",
+  "chart_type": "line",            // line | bar | pie | doughnut
+  "labels": ["09:30", "10:00", "10:30", "11:00"],
   "datasets": [
-    { "label": "Series name", "data": [22.5, 23.6, 24.3] }
-  ]
-}
-
-// News feed
-{
-  "type": "news_feed",
-  "articles": [
     {
-      "title": "Headline",
-      "snippet": "First 2 sentences.",
-      "source": "reuters.com",
-      "date": "2 hours ago",
-      "url": "url:HANDLE",        // opaque handle, resolved by bridge
-      "thumbnail": "img:HANDLE"   // opaque handle, resolved by bridge
+      "label": "Portfolio ($)",
+      "data": [200000, 201200, 200800, 202400]
     }
   ]
 }
+```
 
-// Markdown / freeform text
-{ "type": "markdown", "title": "Section", "content": "## Heading\n\nBody text." }
+Multiple datasets on one chart are supported — add more objects to `datasets`.
 
-// Image
-{ "type": "image", "title": "Caption", "url": "img:HANDLE" }
+---
+
+### `candlestick` — Single OHLCV chart
+
+Live candlestick chart fetched from the bridge's `/api/stock-chart` endpoint. Uses Lightweight Charts.
+
+```jsonc
+{
+  "type": "candlestick",
+  "narration": "NVDA broke above resistance at $860 around noon.",
+  "title": "NVDA",
+  "symbol": "NVDA",
+  "default_period": "1d"          // 1d | 5d | 1mo | 3mo | 6mo | 1y
+}
 ```
 
 ---
 
-### `show_card` — Compact info card
+### `multi_chart` — Multiple candlesticks on one slide
 
-A small floating card, useful for a single metric or quote.
+Several mini candlestick charts stacked vertically with a shared timeframe bar. This is the right type when showing 2–4 symbols at once on a single slide.
+
+```jsonc
+{
+  "type": "multi_chart",
+  "narration": "NVDA leads the group. TSLA pulled back after the open. AAPL is quietly grinding higher.",
+  "title": "Watchlist",
+  "symbols": [
+    { "symbol": "NVDA", "price": 875.32, "change": 3.1 },
+    { "symbol": "TSLA", "price": 248.90, "change": -0.8 },
+    { "symbol": "AAPL", "price": 212.50, "change": 1.2 }
+  ],
+  "default_period": "1d"
+}
+```
+
+`symbols` can also be a plain string array if price/change are not available:
+```json
+{ "symbols": ["NVDA", "TSLA", "AAPL"] }
+```
+
+---
+
+### `image` — Static image
+
+```jsonc
+{
+  "type": "image",
+  "narration": "Here's the annotated chart from this morning.",
+  "title": "Morning setup",
+  "url": "img:HANDLE"             // opaque handle resolved by bridge; or plain https:// URL
+}
+```
+
+---
+
+### `news_feed` — Article list
+
+```jsonc
+{
+  "type": "news_feed",
+  "narration": "Markets reacted to three headlines this morning.",
+  "articles": [
+    {
+      "title": "Fed holds rates steady",
+      "snippet": "The Federal Reserve held rates at 4.25% in a unanimous vote.",
+      "source": "reuters.com",
+      "date": "2 hours ago",
+      "url": "url:HANDLE",
+      "thumbnail": "img:HANDLE"   // optional
+    }
+  ]
+}
+```
+
+---
+
+### `markdown` — Freeform text
+
+```jsonc
+{
+  "type": "markdown",
+  "narration": "Here are the key risks I flagged for this position.",
+  "title": "Risk summary",
+  "content": "## Downside risks\n\n- Earnings miss possible\n- Sector rotation underway"
+}
+```
+
+---
+
+### `bullets` — Simple bullet list
+
+```jsonc
+{
+  "type": "bullets",
+  "narration": "Three things to watch today.",
+  "title": "Watch list",
+  "items": ["Fed speaker at 14:00", "NVDA earnings after close", "VIX above 20"]
+}
+```
+
+---
+
+## Other Panel Types
+
+### `show_card` — Compact floating card
+
+For a single metric or a small set of stats, without needing a full presentation.
 
 ```json
 {
@@ -189,23 +339,25 @@ A small floating card, useful for a single metric or quote.
   "action": "show_card",
   "card": {
     "id": "card_<timestamp>",
-    "card_type": "stat",          // stat | info | quote | image
+    "card_type": "stat",
     "title": "NVDA",
     "value": "$875.32",
     "fields": [
-      { "label": "Change", "value": "+2.3%" },
-      { "label": "Volume", "value": "42.1M" }
+      { "label": "Change", "value": "+3.1%" },
+      { "label": "Volume", "value": "52.3M" }
     ],
-    "duration_sec": 0             // 0 = stays until dismissed
+    "duration_sec": 0
   }
 }
 ```
+
+`card_type`: `stat` | `info` | `quote` | `image`
 
 ---
 
 ### `show_weather` — Weather panel
 
-Immediate (bypasses the speech queue — appears as soon as received).
+Immediate — bypasses the speech queue, appears before Mocha starts speaking.
 
 ```json
 {
@@ -213,20 +365,9 @@ Immediate (bypasses the speech queue — appears as soon as received).
   "action": "show_weather",
   "payload": {
     "location": "Tokyo, Japan",
-    "current": {
-      "temp_c": 18,
-      "feels_c": 16,
-      "humidity": 72,
-      "wind_kph": 12,
-      "wmo": 51,
-      "label": "Light rain"
-    },
-    "hourly": [
-      { "time": "15:00", "temp_c": 18, "wmo": 51 }
-    ],
-    "forecast": [
-      { "date": "2026-04-28", "high_c": 22, "low_c": 18, "wmo": 51, "label": "Rain", "precip_mm": 2.5 }
-    ],
+    "current": { "temp_c": 18, "feels_c": 16, "humidity": 72, "wind_kph": 12, "wmo": 51, "label": "Light rain" },
+    "hourly":   [{ "time": "15:00", "temp_c": 18, "wmo": 51 }],
+    "forecast": [{ "date": "2026-04-28", "high_c": 22, "low_c": 18, "wmo": 51, "label": "Rain", "precip_mm": 2.5 }],
     "sunrise": "06:12",
     "sunset": "18:45",
     "bg_class": "rain"
@@ -234,34 +375,34 @@ Immediate (bypasses the speech queue — appears as soon as received).
 }
 ```
 
-`bg_class` drives the animated background: `clear` `cloudy` `rain` `snow` `fog` `thunder`
+`bg_class`: `clear` | `cloudy` | `rain` | `snow` | `fog` | `thunder`
 
 ---
 
 ### `show_notification` — Toast
-
-Ephemeral overlay, auto-dismisses.
 
 ```json
 {
   "type": "ui_command",
   "action": "show_notification",
   "message": "Sync complete.",
-  "level": "info"               // info | success | warning | error
+  "level": "info"
 }
 ```
+
+`level`: `info` | `success` | `warning` | `error`
 
 ---
 
 ### `show_diary` — Diary modal
 
-Immediate. Opens Mocha's diary to a specific date.
+Immediate.
 
 ```json
 {
   "type": "ui_command",
   "action": "show_diary",
-  "date": "2026-04-27"          // ISO date; omit for today
+  "date": "2026-04-27"
 }
 ```
 
@@ -269,36 +410,44 @@ Immediate. Opens Mocha's diary to a specific date.
 
 ## Routing & Timing
 
-The frontend UIOrchestrator (`web/static/js/ui-orchestrator.js`) controls when panels appear:
+The frontend `UIOrchestrator` (`web/static/js/ui-orchestrator.js`) controls when panels appear:
 
-- **Immediate actions** — `show_weather`, `show_diary`: panel opens as soon as the message arrives, before Mocha starts speaking.
-- **Queued actions** — everything else: panel opens at the moment Mocha begins speaking the segment that references it.
+- **Immediate** — `show_weather`, `show_diary`: panel opens on arrival, before speech starts.
+- **Queued** — everything else: panel opens the moment Mocha begins speaking the first segment.
 
-This prevents panels from appearing during Nori's research phase while the user is waiting.
+Slide advances happen automatically inside `onSegmentPlay()` in `presentation.js`. Segment index is mapped proportionally to slide index — Mocha does not send explicit "go to slide N" commands. This is why per-slide `narration` matters: it determines how many speech segments are created, which determines the pacing.
 
 ---
 
-## Adding a New Panel Type
+## Adding a New Slide Type
 
-1. **Define the payload schema** in this file under a new `### show_<name>` section.
-2. **Add a new HTML panel** in `web/static/index.html` following the `.pres-header` pattern.
-3. **Register it with PanelManager** in your JS module: `PanelManager.registerPanel('myPanel', el, defaultRect)`.
-4. **Add the action to UIOrchestrator** (`_deliverUiCommand`) — decide immediate vs queued.
-5. **Add the renderer** in your JS module.
-6. **Add the internal tool** in `tools/custom/my_tool.py` using Path 1, or document the external schema for Path 2.
-7. If it should be immediate, add the action name to the `IMMEDIATE_ACTIONS` set in `ui-orchestrator.js`.
+1. Define the schema here under a new `### <type>` heading with a `narration` field.
+2. Add a `case '<type>': renderXxxSlide(slide)` in `presentation.js` → `renderSlide()`.
+3. Implement `renderXxxSlide(slide)` — append DOM into `presSlide`.
+4. If the slide hosts a chart library (Chart.js, Lightweight Charts), destroy the instance on slide change to avoid canvas leaks.
+
+## Adding a New Panel Type (not a slide)
+
+1. Define the schema here under a new `### show_<name>` heading.
+2. Add HTML in `web/static/index.html` using the `.pres-header` pattern.
+3. Register with PanelManager: `PanelManager.registerPanel('myPanel', el, defaultRect)`.
+4. Add the action to `UIOrchestrator._deliverUiCommand()`. Decide: immediate or queued?
+5. Add the renderer in your JS module.
+6. Wire the tool in `tools/custom/` (Path 1) or document the `__panel__` envelope (Path 2).
 
 ---
 
 ## Quick reference for agents
 
-When building a tool that reports to Mocha, pick the smallest panel type that fits:
-
-| Data shape | Use |
-|-----------|-----|
-| Single number or metric | `show_card` (stat) |
-| 2–5 metrics | `show_card` (stat, with fields) |
-| Multiple sections or charts | `create_presentation` |
-| Weather data | `show_weather` |
-| One-liner status update | `show_notification` |
-| Rich freeform content | `create_presentation` with `markdown` slides |
+| Data shape | Panel type | Slide type |
+|-----------|-----------|-----------|
+| Single metric | `show_card` | — |
+| 2–5 metrics | `show_card` (with `fields`) | — |
+| 2–4 symbols, candlesticks | `create_presentation` | `multi_chart` |
+| 1 symbol deep-dive | `create_presentation` | `candlestick` |
+| Raw XY time series | `create_presentation` | `chart` |
+| Mix of metrics + charts | `create_presentation` | `stat_row` + `chart` slides |
+| News / articles | `create_presentation` | `news_feed` |
+| Freeform analysis | `create_presentation` | `markdown` or `bullets` |
+| Weather | `show_weather` | — |
+| One-liner update | `show_notification` | — |
