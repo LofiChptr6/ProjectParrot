@@ -164,6 +164,18 @@ External tools return a JSON string with a top-level `__panel__` key. The bridge
 
 ---
 
+## Slide rules every envelope must follow
+
+These apply to **any** tool returning a `create_presentation` envelope — internal or external (MCP).
+
+1. **NO COVER / TITLE-ONLY SLIDES.** Do not start with a `title` slide whose only content is a heading and subtitle. The panel header already shows the title. Cover slides waste a slide tick — Mocha advances through them with nothing useful on screen and the user sees a blank-ish page while she's mid-sentence. Start with the actual data — `stat_row`, `chart`, `multi_chart`, `bullets`, `markdown`, whatever — and put context in the `narration` field. The `title` slide type still exists for rare cases (e.g. dramatic pause), but the **default is no cover**.
+
+2. **Each slide must carry meaningful content.** A slide with only a `narration` and no body content is a wasted tick. If you only have one beat to communicate, return a single information-rich slide, not two thin ones.
+
+3. **Slide count should match narration beats.** Mocha advances slides proportionally as she speaks: `slide_index = floor(segment_offset / remaining_segments * slide_count)`. So 4 slides + 8 narration sentences = each slide plays for ~2 sentences. Don't ship 10 slides with 3 sentences of total narration — most slides will flash by.
+
+4. **Each slide should set its own `narration`** when the tool wants control of what Mocha says about it. Otherwise Mocha may ad-lib or skip.
+
 ## Slide Types
 
 All slides live inside `presentation.slides[]`. Every slide may carry a `narration` string — what Mocha says while that slide is visible.

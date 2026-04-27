@@ -94,9 +94,20 @@
         if (!state.presentation || !state.presenting) return;
         const slideCount = state.presentation.slides.length;
         if (slideCount <= 1) return;
-        // Map speech segment index to slide index proportionally
+
+        // The panel may open mid-stream — e.g. tool calls take a few seconds
+        // and meanwhile Mocha has already spoken several "let me check"
+        // segments. Without an offset, the first onSegmentPlay after the
+        // panel opens would compute a high segIndex/totalSegments ratio
+        // and jump straight to the last slide. Lock in the segment index
+        // at panel-open time and map progress relative to it.
+        if (state.presentStartSegIndex == null) {
+            state.presentStartSegIndex = segIndex;
+        }
+        const segOffset    = Math.max(0, segIndex - state.presentStartSegIndex);
+        const segRemaining = Math.max(1, totalSegments - state.presentStartSegIndex);
         const targetSlide = Math.min(
-            Math.floor((segIndex / Math.max(totalSegments, 1)) * slideCount),
+            Math.floor((segOffset / segRemaining) * slideCount),
             slideCount - 1
         );
         if (targetSlide !== state.currentSlide) {
@@ -737,6 +748,7 @@
 
         state.presentation = data;
         state.currentSlide = 0;
+        state.presentStartSegIndex = null;  // locked on first onSegmentPlay
 
         presTitle.textContent = data.title || 'Presentation';
         panel.classList.add('active');
