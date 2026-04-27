@@ -123,54 +123,57 @@
             </div>
         </div>
 
-        <!-- ── Weather modal (iPhone Weather-style with animated bg) ─────── -->
+        <!-- ── Weather panel (matches presentation-panel sizing/dragging) ── -->
         <div class="weather-modal hidden" id="weatherModal" aria-hidden="true">
-            <div class="weather-card-wrap">
-                <div class="weather-bg" id="weatherBg" data-condition="sunny">
-                    <div class="wx-fx wx-fx-sun"></div>
-                    <div class="wx-fx wx-fx-clouds"></div>
-                    <div class="wx-fx wx-fx-rain"></div>
-                    <div class="wx-fx wx-fx-snow"></div>
-                    <div class="wx-fx wx-fx-fog"></div>
-                    <div class="wx-fx wx-fx-lightning"></div>
+            <div class="weather-bg" id="weatherBg" data-condition="sunny">
+                <div class="wx-fx wx-fx-sun"></div>
+                <div class="wx-fx wx-fx-clouds"></div>
+                <div class="wx-fx wx-fx-rain"></div>
+                <div class="wx-fx wx-fx-snow"></div>
+                <div class="wx-fx wx-fx-fog"></div>
+                <div class="wx-fx wx-fx-lightning"></div>
+            </div>
+            <header class="pres-header weather-pres-header">
+                <span class="pres-title" id="weatherTitle">Weather</span>
+                <div class="pres-nav">
+                    <button class="pres-nav-btn pres-close-btn" id="weatherClose"
+                            title="Close" aria-label="Close">&times;</button>
                 </div>
-                <div class="weather-panel">
-                    <button class="weather-close" id="weatherClose" aria-label="Close">&times;</button>
+            </header>
+            <div class="weather-panel">
+                <header class="weather-header">
+                    <div class="weather-location" id="weatherLocation">—</div>
+                    <div class="weather-temp" id="weatherTemp">—°</div>
+                    <div class="weather-condition" id="weatherCondition">—</div>
+                    <div class="weather-feels" id="weatherFeels">Feels like —°</div>
+                </header>
 
-                    <header class="weather-header">
-                        <div class="weather-location" id="weatherLocation">—</div>
-                        <div class="weather-temp" id="weatherTemp">—°</div>
-                        <div class="weather-condition" id="weatherCondition">—</div>
-                        <div class="weather-feels" id="weatherFeels">Feels like —°</div>
-                    </header>
+                <div class="weather-card">
+                    <div class="weather-card-title">HOURLY FORECAST</div>
+                    <div class="weather-hourly" id="weatherHourly"></div>
+                </div>
 
-                    <div class="weather-card">
-                        <div class="weather-card-title">HOURLY FORECAST</div>
-                        <div class="weather-hourly" id="weatherHourly"></div>
+                <div class="weather-card">
+                    <div class="weather-card-title">7-DAY FORECAST</div>
+                    <div class="weather-forecast" id="weatherForecast"></div>
+                </div>
+
+                <div class="weather-meta">
+                    <div class="weather-meta-cell">
+                        <div class="weather-meta-label">SUNRISE</div>
+                        <div class="weather-meta-value" id="weatherSunrise">—</div>
                     </div>
-
-                    <div class="weather-card">
-                        <div class="weather-card-title">7-DAY FORECAST</div>
-                        <div class="weather-forecast" id="weatherForecast"></div>
+                    <div class="weather-meta-cell">
+                        <div class="weather-meta-label">SUNSET</div>
+                        <div class="weather-meta-value" id="weatherSunset">—</div>
                     </div>
-
-                    <div class="weather-meta">
-                        <div class="weather-meta-cell">
-                            <div class="weather-meta-label">SUNRISE</div>
-                            <div class="weather-meta-value" id="weatherSunrise">—</div>
-                        </div>
-                        <div class="weather-meta-cell">
-                            <div class="weather-meta-label">SUNSET</div>
-                            <div class="weather-meta-value" id="weatherSunset">—</div>
-                        </div>
-                        <div class="weather-meta-cell">
-                            <div class="weather-meta-label">HUMIDITY</div>
-                            <div class="weather-meta-value" id="weatherHumidity">—</div>
-                        </div>
-                        <div class="weather-meta-cell">
-                            <div class="weather-meta-label">WIND</div>
-                            <div class="weather-meta-value" id="weatherWind">—</div>
-                        </div>
+                    <div class="weather-meta-cell">
+                        <div class="weather-meta-label">HUMIDITY</div>
+                        <div class="weather-meta-value" id="weatherHumidity">—</div>
+                    </div>
+                    <div class="weather-meta-cell">
+                        <div class="weather-meta-label">WIND</div>
+                        <div class="weather-meta-value" id="weatherWind">—</div>
                     </div>
                 </div>
             </div>

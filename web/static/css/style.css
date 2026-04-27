@@ -1838,31 +1838,33 @@ body.mocha-away .mocha-away-pill { display: block; }
  *   driving which .wx-fx-* layer is visible.
  *   .weather-panel sits above with translucent dark cards.
  */
-/* Backdrop is fixed full-screen; the weather card itself is centered and
-   sized like an iPhone Weather widget. On phone the card grows to use most
-   of the visible viewport. */
+/* Floating panel — same sizing/positioning shape as .presentation-panel
+   so it sits next to Mocha instead of taking over the screen. No backdrop
+   overlay (Mocha stays interactive). Draggable + resizable via PanelManager
+   (registered in weather.js). */
 .weather-modal {
-    position: fixed; inset: 0; z-index: 150;
-    display: flex; align-items: center; justify-content: center;
-    padding: 24px;
-    background: rgba(0, 0, 0, 0.55);
-    backdrop-filter: blur(6px);
-    animation: wx-fade-in 220ms ease-out;
-}
-.weather-modal.hidden { display: none; }
-/* The actual card — clips the animated bg via overflow:hidden. */
-.weather-card-wrap {
-    position: relative;
-    width: min(420px, 96vw);
-    max-height: min(720px, 92vh);
-    border-radius: 22px;
+    position: fixed; top: 8px; right: 368px; bottom: 8px;
+    width: 45%; max-width: 600px; min-width: 320px;
+    /* panel-manager.js autoLayout overrides for narrow viewports */
+    background: rgba(18, 21, 28, 0.95);
+    backdrop-filter: blur(16px);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    z-index: 10;
     overflow: hidden;
-    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+    display: flex; flex-direction: column;
     animation: wx-pop 220ms cubic-bezier(0.34, 1.56, 0.64, 1);
 }
+.weather-modal.hidden { display: none; }
 @keyframes wx-pop {
-    from { transform: scale(0.92); opacity: 0; }
+    from { transform: scale(0.96); opacity: 0; }
     to   { transform: scale(1); opacity: 1; }
+}
+.weather-pres-header {
+    position: relative;       /* sits above the animated bg */
+    z-index: 2;
+    background: rgba(18, 21, 28, 0.85);
+    backdrop-filter: blur(8px);
 }
 @keyframes wx-fade-in { from { opacity: 0; } to { opacity: 1; } }
 
@@ -2003,28 +2005,16 @@ body.mocha-away .mocha-away-pill { display: block; }
     96%           { opacity: 0; }
 }
 
-/* Panel layout — fits inside .weather-card-wrap (the rounded card). */
+/* Panel layout — flex child of .weather-modal, fills space under the header. */
 .weather-panel {
     position: relative; z-index: 1;
-    width: 100%;
-    height: 100%;
-    padding: 18px 18px 22px;
+    flex: 1 1 auto;
+    min-height: 0;            /* allow shrink inside flex */
+    padding: 14px 18px 18px;
     color: #fff;
     overflow-y: auto;
     text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
 }
-.weather-close {
-    position: absolute; top: 10px; right: 12px;
-    background: rgba(255, 255, 255, 0.18);
-    color: #fff; border: none; cursor: pointer;
-    width: 28px; height: 28px; border-radius: 50%;
-    font-size: 18px; line-height: 1;
-    -webkit-appearance: none; appearance: none;
-    backdrop-filter: blur(8px);
-    transition: background 150ms ease;
-    z-index: 2;
-}
-.weather-close:hover { background: rgba(255, 255, 255, 0.32); }
 
 .weather-header { text-align: center; padding: 14px 0 10px; }
 .weather-location {
@@ -2116,11 +2106,16 @@ body.mocha-away .mocha-away-pill { display: block; }
 
 .wx-empty { font-size: 12px; opacity: 0.6; padding: 6px 0; }
 
-/* Phone tweaks — let the card take more of the visible viewport. */
+/* Phone tweaks — let the panel reflow into the bottom-right "narrow mode"
+   like the presentation panel. autoLayout in panel-manager.js targets
+   .panel-narrow-mode but weather isn't auto-routed there yet, so keep
+   width/positioning override here. */
 @media (max-width: 600px), (orientation: portrait) and (max-width: 900px) {
-    .weather-modal { padding: 12px; }
-    .weather-card-wrap { width: 100%; max-height: 92vh; max-height: 92dvh; }
-    .weather-panel { padding: 14px 14px 18px; }
+    .weather-modal {
+        top: 30%; right: 8px; bottom: 8px; left: auto;
+        width: calc(100vw - 16px); max-width: none;
+    }
+    .weather-panel { padding: 12px 14px 16px; }
     .weather-temp { font-size: 56px; }
     .weather-location { font-size: 18px; }
     .wx-day { grid-template-columns: 60px 30px 28px 1fr 28px; gap: 8px; }

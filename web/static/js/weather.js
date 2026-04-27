@@ -38,13 +38,18 @@
         els.wind      = _q('weatherWind');
 
         els.close.addEventListener('click', close);
-        // Backdrop click — but not clicks on the panel itself.
-        els.modal.addEventListener('click', (e) => {
-            if (e.target === els.modal) close();
-        });
         document.addEventListener('keydown', (e) => {
             if (state.open && e.key === 'Escape') close();
         });
+
+        // Register with PanelManager so the user can drag/resize it
+        // exactly like the presentation panel. autoLayout will reposition
+        // on viewport resize / chat sidebar toggle.
+        if (window.PanelManager && typeof window.PanelManager.registerPanel === 'function') {
+            window.PanelManager.registerPanel('weather', els.modal, {
+                top: 8, right: 8, bottom: 8, width: '45%',
+            });
+        }
     }
 
     // Open-Meteo WMO weather code → emoji glyph (cheap, language-free icon).
