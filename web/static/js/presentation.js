@@ -1027,8 +1027,8 @@
         header.className = 'candle-header';
         header.innerHTML = `
             <span class="candle-symbol">${escHtml(slide.symbol || '')}</span>
-            ${slide.price ? `<span class="candle-price">$${slide.price}</span>` : ''}
-            ${slide.change ? `<span class="candle-change ${slide.change >= 0 ? 'up' : 'down'}">${slide.change >= 0 ? '+' : ''}${slide.change}%</span>` : ''}
+            ${slide.price != null ? `<span class="candle-price">${_fmtPrice(slide.price)}</span>` : ''}
+            ${slide.change != null ? `<span class="candle-change ${_changeDir(slide.change)}">${_fmtChange(slide.change)}</span>` : ''}
             ${slide.title && slide.title !== slide.symbol ? `<span class="candle-name">${escHtml(slide.title)}</span>` : ''}
         `;
         wrap.appendChild(header);
@@ -1216,8 +1216,8 @@
             const header = document.createElement('div');
             header.className = 'multi-chart-header';
             header.innerHTML = `<span class="candle-symbol">${escHtml(sym)}</span>`
-                + (price != null ? ` <span class="candle-price">$${price}</span>` : '')
-                + (change != null ? ` <span class="candle-change ${change >= 0 ? 'up' : 'down'}">${change >= 0 ? '+' : ''}${change}%</span>` : '');
+                + (price  != null ? ` <span class="candle-price">${_fmtPrice(price)}</span>` : '')
+                + (change != null ? ` <span class="candle-change ${_changeDir(change)}">${_fmtChange(change)}</span>` : '');
             row.appendChild(header);
 
             const chartEl = document.createElement('div');
@@ -1489,6 +1489,29 @@
     function escAttr(str) {
         return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;')
                   .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    // Price/change values may arrive as raw numbers (875.32, 3.1) OR as
+    // already-formatted strings (e.g. "$875.32", "+3.1%", or "-1.23%")
+    // when the upstream tool resolved a num: handle. Don't double-prefix.
+    function _fmtPrice(v) {
+        if (typeof v === 'string') {
+            const s = v.trim();
+            return escHtml(s.startsWith('$') || s.startsWith('-$') || s.startsWith('+$') ? s : '$' + s);
+        }
+        return '$' + v;
+    }
+    function _fmtChange(v) {
+        if (typeof v === 'string') {
+            const s = v.trim();
+            return escHtml(s.endsWith('%') ? s : s + '%');
+        }
+        return (v >= 0 ? '+' : '') + v + '%';
+    }
+    function _changeDir(v) {
+        if (typeof v === 'number') return v >= 0 ? 'up' : 'down';
+        if (typeof v === 'string') return v.trim().startsWith('-') ? 'down' : 'up';
+        return 'up';
     }
 
     // ========================================================================

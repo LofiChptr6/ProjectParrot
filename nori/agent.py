@@ -108,6 +108,10 @@ _NORI_TOOL_NAMES = [
     # than yfinance-based get_stock_data. Nori-only; Mocha routes via ask_nori.
     "polygon_prev_close", "polygon_bars", "polygon_snapshot",
     "polygon_ticker_details", "polygon_ticker_news", "polygon_market_status",
+    # Personalized live trading desk briefing — proxies opus_trading MCP.
+    # Use this (NOT polygon/get_stock_data) whenever the user asks about
+    # THEIR portfolio, P&L, positions, or "how's the desk doing".
+    "get_trading_briefing",
 ]
 
 # Lazy-initialized LLM client (Nori's own instance)
