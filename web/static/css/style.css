@@ -1838,15 +1838,32 @@ body.mocha-away .mocha-away-pill { display: block; }
  *   driving which .wx-fx-* layer is visible.
  *   .weather-panel sits above with translucent dark cards.
  */
+/* Backdrop is fixed full-screen; the weather card itself is centered and
+   sized like an iPhone Weather widget. On phone the card grows to use most
+   of the visible viewport. */
 .weather-modal {
     position: fixed; inset: 0; z-index: 150;
-    display: flex; align-items: stretch; justify-content: center;
-    background: rgba(0, 0, 0, 0.4);
-    backdrop-filter: blur(2px);
-    overflow: hidden;
+    display: flex; align-items: center; justify-content: center;
+    padding: 24px;
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(6px);
     animation: wx-fade-in 220ms ease-out;
 }
 .weather-modal.hidden { display: none; }
+/* The actual card — clips the animated bg via overflow:hidden. */
+.weather-card-wrap {
+    position: relative;
+    width: min(420px, 96vw);
+    max-height: min(720px, 92vh);
+    border-radius: 22px;
+    overflow: hidden;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+    animation: wx-pop 220ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@keyframes wx-pop {
+    from { transform: scale(0.92); opacity: 0; }
+    to   { transform: scale(1); opacity: 1; }
+}
 @keyframes wx-fade-in { from { opacity: 0; } to { opacity: 1; } }
 
 /* Background layer + condition-specific FX */
@@ -1986,57 +2003,57 @@ body.mocha-away .mocha-away-pill { display: block; }
     96%           { opacity: 0; }
 }
 
-/* Panel layout */
+/* Panel layout — fits inside .weather-card-wrap (the rounded card). */
 .weather-panel {
     position: relative; z-index: 1;
-    width: min(560px, 100%);
-    margin: auto 0;
-    max-height: 100dvh;
-    padding: 28px 24px 32px;
+    width: 100%;
+    height: 100%;
+    padding: 18px 18px 22px;
     color: #fff;
     overflow-y: auto;
     text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
 }
 .weather-close {
-    position: absolute; top: 14px; right: 18px;
-    background: rgba(255, 255, 255, 0.15);
+    position: absolute; top: 10px; right: 12px;
+    background: rgba(255, 255, 255, 0.18);
     color: #fff; border: none; cursor: pointer;
-    width: 32px; height: 32px; border-radius: 50%;
-    font-size: 22px; line-height: 1;
+    width: 28px; height: 28px; border-radius: 50%;
+    font-size: 18px; line-height: 1;
     -webkit-appearance: none; appearance: none;
     backdrop-filter: blur(8px);
     transition: background 150ms ease;
+    z-index: 2;
 }
-.weather-close:hover { background: rgba(255, 255, 255, 0.28); }
+.weather-close:hover { background: rgba(255, 255, 255, 0.32); }
 
-.weather-header { text-align: center; padding: 24px 0 18px; }
+.weather-header { text-align: center; padding: 14px 0 10px; }
 .weather-location {
-    font-size: 28px; font-weight: 400; letter-spacing: -0.01em;
-    margin-bottom: 4px;
+    font-size: 22px; font-weight: 400; letter-spacing: -0.01em;
+    margin-bottom: 2px;
 }
 .weather-temp {
-    font-size: 88px; font-weight: 200; letter-spacing: -0.04em;
-    line-height: 1; margin: 4px 0;
+    font-size: 64px; font-weight: 200; letter-spacing: -0.04em;
+    line-height: 1; margin: 2px 0;
 }
 .weather-condition {
-    font-size: 18px; font-weight: 400; opacity: 0.92;
-    margin-bottom: 4px;
+    font-size: 15px; font-weight: 400; opacity: 0.92;
+    margin-bottom: 2px;
 }
-.weather-feels { font-size: 14px; opacity: 0.78; }
+.weather-feels { font-size: 12px; opacity: 0.78; }
 
 .weather-card {
     background: rgba(255, 255, 255, 0.14);
     border: 1px solid rgba(255, 255, 255, 0.18);
-    border-radius: 14px;
-    padding: 14px 14px 16px;
-    margin-top: 14px;
+    border-radius: 12px;
+    padding: 10px 12px 12px;
+    margin-top: 10px;
     backdrop-filter: blur(10px);
 }
 .weather-card-title {
-    font-size: 11px; font-weight: 600; letter-spacing: 0.08em;
+    font-size: 10px; font-weight: 600; letter-spacing: 0.08em;
     opacity: 0.7;
-    padding-bottom: 10px; border-bottom: 1px solid rgba(255, 255, 255, 0.15);
-    margin-bottom: 12px;
+    padding-bottom: 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+    margin-bottom: 10px;
 }
 
 /* Hourly strip — horizontal scroll */
@@ -2047,27 +2064,27 @@ body.mocha-away .mocha-away-pill { display: block; }
 }
 .weather-hourly::-webkit-scrollbar { display: none; }
 .wx-hour {
-    flex: 0 0 auto; width: 48px;
-    text-align: center; padding: 6px 0;
+    flex: 0 0 auto; width: 38px;
+    text-align: center; padding: 4px 0;
 }
-.wx-hour-time { font-size: 12px; opacity: 0.78; }
-.wx-hour-icon { font-size: 22px; margin: 6px 0 4px; }
-.wx-hour-temp { font-size: 16px; font-weight: 500; }
+.wx-hour-time { font-size: 11px; opacity: 0.78; }
+.wx-hour-icon { font-size: 18px; margin: 4px 0 2px; }
+.wx-hour-temp { font-size: 13px; font-weight: 500; }
 
 /* 7-day forecast list */
-.weather-forecast { display: flex; flex-direction: column; gap: 4px; }
+.weather-forecast { display: flex; flex-direction: column; gap: 2px; }
 .wx-day {
     display: grid;
-    grid-template-columns: 70px 36px 32px 1fr 32px;
-    align-items: center; gap: 10px;
-    padding: 8px 4px;
+    grid-template-columns: 56px 28px 26px 1fr 28px;
+    align-items: center; gap: 8px;
+    padding: 5px 2px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 .wx-day:last-child { border-bottom: none; }
-.wx-day-name { font-size: 15px; }
-.wx-day-icon { font-size: 20px; text-align: center; }
-.wx-day-low  { font-size: 14px; opacity: 0.65; text-align: right; }
-.wx-day-high { font-size: 14px; text-align: right; }
+.wx-day-name { font-size: 13px; }
+.wx-day-icon { font-size: 16px; text-align: center; }
+.wx-day-low  { font-size: 12px; opacity: 0.65; text-align: right; }
+.wx-day-high { font-size: 12px; text-align: right; }
 .wx-day-bar {
     height: 4px; border-radius: 2px;
     background: rgba(255, 255, 255, 0.18);
@@ -2082,28 +2099,30 @@ body.mocha-away .mocha-away-pill { display: block; }
 /* Sunrise/sunset/humidity/wind 2x2 grid */
 .weather-meta {
     display: grid; grid-template-columns: 1fr 1fr;
-    gap: 10px; margin-top: 14px;
+    gap: 8px; margin-top: 10px;
 }
 .weather-meta-cell {
     background: rgba(255, 255, 255, 0.14);
     border: 1px solid rgba(255, 255, 255, 0.18);
-    border-radius: 12px;
-    padding: 12px 14px;
+    border-radius: 10px;
+    padding: 8px 10px;
     backdrop-filter: blur(10px);
 }
 .weather-meta-label {
-    font-size: 11px; letter-spacing: 0.08em; opacity: 0.7;
-    margin-bottom: 4px;
+    font-size: 10px; letter-spacing: 0.08em; opacity: 0.7;
+    margin-bottom: 2px;
 }
-.weather-meta-value { font-size: 22px; font-weight: 400; }
+.weather-meta-value { font-size: 17px; font-weight: 400; }
 
-.wx-empty { font-size: 13px; opacity: 0.6; padding: 8px 0; }
+.wx-empty { font-size: 12px; opacity: 0.6; padding: 6px 0; }
 
-/* Phone tweaks */
+/* Phone tweaks — let the card take more of the visible viewport. */
 @media (max-width: 600px), (orientation: portrait) and (max-width: 900px) {
-    .weather-panel { padding: 20px 16px 24px; }
-    .weather-temp { font-size: 72px; }
-    .weather-location { font-size: 22px; }
+    .weather-modal { padding: 12px; }
+    .weather-card-wrap { width: 100%; max-height: 92vh; max-height: 92dvh; }
+    .weather-panel { padding: 14px 14px 18px; }
+    .weather-temp { font-size: 56px; }
+    .weather-location { font-size: 18px; }
     .wx-day { grid-template-columns: 60px 30px 28px 1fr 28px; gap: 8px; }
 }
 
