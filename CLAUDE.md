@@ -5,6 +5,14 @@ ProjectParrot is a real-time conversational AI system with three agents:
 - **Nori**: Mocha's research analyst sub-agent (fetches data, builds visuals, writes narration)
 - **Shiro**: A coaching meta-agent that analyzes Mocha's conversations and proposes improvements
 
+## Tool & Panel Protocol
+
+When building a tool that surfaces data through Mocha's UI, follow **`docs/tool-protocol.md`**. It defines:
+- The `ui_command` message envelope and all supported panel types (`create_presentation`, `show_card`, `show_weather`, `show_notification`, `show_diary`)
+- Internal tool pattern (direct `_broadcast_clients` call)
+- External / MCP tool pattern (`__panel__` JSON envelope — for tools outside this repo, e.g. opus trading)
+- Step-by-step guide for adding a new panel type
+
 ## PostgreSQL Connection
 
 Every LLM call is logged to PostgreSQL for offline analysis.
