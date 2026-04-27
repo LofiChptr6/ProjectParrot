@@ -288,9 +288,13 @@ async function loadVRMFile(file) {
         }
         scene.add(vrm.scene);
 
-        // Hide drop overlay, show clear button
-        document.getElementById('dropOverlay').style.display = 'none';
-        document.getElementById('btnClearVRM').style.display = '';
+        // Hide loading overlay. (#btnClearVRM lived in the old Config-tab
+        // VRM panel which moved to Settings → Avatar; both elements may be
+        // absent depending on the page state, so guard each access.)
+        const overlay = document.getElementById('dropOverlay');
+        if (overlay) overlay.style.display = 'none';
+        const clearBtn = document.getElementById('btnClearVRM');
+        if (clearBtn) clearBtn.style.display = '';
 
         // Log available expressions
         if (vrm.expressionManager) {
@@ -633,8 +637,10 @@ function clearVRM() {
         scene.remove(vrm.scene);
         vrm = null;
     }
-    document.getElementById('dropOverlay').style.display = '';
-    document.getElementById('btnClearVRM').style.display = 'none';
+    const overlay = document.getElementById('dropOverlay');
+    if (overlay) overlay.style.display = '';
+    const clearBtn = document.getElementById('btnClearVRM');
+    if (clearBtn) clearBtn.style.display = 'none';
 }
 
 /**
