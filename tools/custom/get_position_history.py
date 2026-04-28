@@ -19,18 +19,14 @@ TOOL_DEF = {
             "properties": {
                 "symbol": {
                     "type": "string",
-                    "description": "Ticker symbol (e.g. 'TLT'). Optional — but at least one of symbol/agent_id/setup_type is required.",
+                    "description": "Ticker symbol (e.g. 'TLT', 'NVDA').",
                 },
-                "agent_id": {
-                    "type": "string",
-                    "description": "Agent identifier. Optional.",
-                },
-                "setup_type": {
-                    "type": "string",
-                    "description": "Setup or strategy class (e.g. 'breakout', 'mean_reversion', 'event_driven'). Optional.",
+                "lookback_days": {
+                    "type": "integer",
+                    "description": "How far back to search for past trades on this symbol. Defaults to 30.",
                 },
             },
-            "required": [],
+            "required": ["symbol"],
         },
     },
 }

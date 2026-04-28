@@ -19,11 +19,7 @@ TOOL_DEF = {
             "properties": {
                 "agent_id": {
                     "type": "string",
-                    "description": "Agent identifier (e.g. 'macro', 'aerospace', 'semis'). Use the user's phrasing if unsure.",
-                },
-                "window": {
-                    "type": "string",
-                    "description": "Lookback window for performance stats. e.g. '1d', '7d', '30d', 'ytd'. Defaults to '7d'.",
+                    "description": "Agent identifier (e.g. 'atlas', 'maya', 'iron', 'volt'). Use the user's phrasing if unsure.",
                 },
             },
             "required": ["agent_id"],

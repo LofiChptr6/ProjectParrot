@@ -34,17 +34,19 @@ These 11 tools proxy the user's **own** live trading desk. They come in two shap
 
 | User phrasing | Tool |
 |---|---|
-| "how am I doing", "morning briefing", "portfolio update", "desk summary", any unfocused "my portfolio" | `get_trading_briefing` |
-| "tell me about LMT", "who put X on", "who long'ed X", "what's the thesis on X", "is the X thesis still good", "why did we close X" | `get_position_dossier` (params: symbol, optional status) |
-| "how's the macro agent", "what's the semis specialist running", "show me agent X's book", "best/worst agent" | `get_agent_overview` (params: agent_id, optional window) |
-| "why did I make/lose money", "what drove the loss", "where did the alpha come from", "who lost me money" | `get_pnl_attribution` (optional window) |
-| "what did we trade today", "today's tickets", "any new positions", "recent trades", "did anything close" | `get_trade_activity` (optional window) |
-| "biggest risk", "how concentrated", "net beta", "exposure to X", "what if market drops 5%", "factor exposure" | `get_risk_overview` (optional focus: sector / factor / single_name / scenario) |
-| "agents fighting", "what's controversial in the book", "where do strategies disagree" | `get_agent_disagreement` (no params) |
-| "track record on X", "has the macro agent traded TLT before", "how often does this setup work" | `get_position_history` (at least one of symbol / agent_id / setup_type) |
-| "what's new since I checked", "anything change overnight", "catch me up", "what did I miss" | `get_changes_since` (optional timestamp_iso) |
-| "anything coming up", "what's on the docket", "next catalyst", "upcoming earnings" | `get_upcoming_catalysts` (optional window) |
-| "did I override anything", "manual trades", "did I do anything dumb" | `get_manual_overrides` (optional window) |
+| "how am I doing", "morning briefing", "portfolio update", "desk summary", "how's my portfolio", any UNFOCUSED "my portfolio" / "my desk" question — **prefer this whenever the user hasn't named a specific symbol/agent** | `get_trading_briefing` (no params) |
+| "tell me about LMT", "who put X on", "who long'ed X", "what's the thesis on X", "is the X thesis still good", "why did we close X" — user named ONE specific symbol | `get_position_dossier(symbol)` |
+| "how's the atlas agent", "what's maya running", "show me agent X's book", "best/worst agent" — user named ONE specific agent | `get_agent_overview(agent_id)` |
+| "why did I make/lose money", "what drove the loss", "where did the alpha come from", "who lost me money" | `get_pnl_attribution(window?)` — window default is `today` |
+| "what did we trade today", "today's tickets", "any new positions", "recent trades", "did anything close" | `get_trade_activity(window?)` |
+| "biggest risk", "how concentrated", "net beta", "exposure to X", "what if market drops 5%", "factor exposure" | `get_risk_overview(focus?)` — focus optional: sector / factor / single_name / scenario |
+| "agents fighting", "what's controversial in the book", "where do strategies disagree" | `get_agent_disagreement()` |
+| "track record on X", "has X been traded before", "how often does this setup work" — symbol REQUIRED | `get_position_history(symbol, lookback_days?)` |
+| "what's new since I checked", "anything change overnight", "catch me up", "what did I miss" | `get_changes_since(since)` — since is required (ISO date/datetime) |
+| "anything coming up", "what's on the docket", "next catalyst", "upcoming earnings" | `get_upcoming_catalysts(window?)` |
+| "did I override anything", "manual trades", "did I do anything dumb" | `get_manual_overrides(window?)` |
+
+**Important — don't over-escalate:** If the user asks an UNFOCUSED question like "how's my portfolio doing?" without naming a specific symbol or agent, call `get_trading_briefing` ONCE and stop. Do NOT loop through every position with `get_position_dossier`. The briefing is the right level of zoom for a casual check-in. Save the deep-dive tools for when the user asks about something specific.
 
 **Important pattern:** Every personal-trading tool returns an `analyst_note` field written by the opus team. **Lead your narration from that note, then add 1–2 sentences of your own insight on top.** Don't paraphrase the note word-for-word — extend it. The opus team knows the strategy; you sharpen the framing.
 

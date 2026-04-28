@@ -16,12 +16,12 @@ TOOL_DEF = {
         "parameters": {
             "type": "object",
             "properties": {
-                "timestamp_iso": {
+                "since": {
                     "type": "string",
-                    "description": "ISO timestamp to compare against (e.g. '2026-04-27T08:00:00'). Omit to use the user's last interaction time.",
+                    "description": "ISO date or datetime to compare against (e.g. '2026-04-27' or '2026-04-27T08:00:00'). Required by opus.",
                 },
             },
-            "required": [],
+            "required": ["since"],
         },
     },
 }

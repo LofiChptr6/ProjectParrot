@@ -22,11 +22,6 @@ TOOL_DEF = {
                     "type": "string",
                     "description": "The ticker symbol (e.g. 'LMT', 'NVDA').",
                 },
-                "status": {
-                    "type": "string",
-                    "enum": ["open", "closed", "any"],
-                    "description": "Limit to currently-open positions, recently-closed, or both. Defaults to 'open'.",
-                },
             },
             "required": ["symbol"],
         },
