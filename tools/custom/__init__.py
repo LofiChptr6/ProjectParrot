@@ -63,4 +63,24 @@ def load_custom_tools() -> tuple[dict[str, dict], dict[str, Callable]]:
         executors[tool_name] = execute_fn
         log.info("Loaded custom tool: %s", tool_name)
 
+    # Dynamic registries — modules that expose `register() -> (defs, execs)`.
+    # Used by _opus_tools to auto-register opus_trading MCP tools from
+    # introspection, so we don't hand-maintain schemas that mirror opus.
+    # Hand-written files above have already been registered, so they win
+    # on any name collision (we don't .update() over the existing keys).
+    for registry_name in ("_opus_tools",):
+        try:
+            mod = importlib.import_module(f"tools.custom.{registry_name}")
+            importlib.reload(mod)
+            register_fn = getattr(mod, "register", None)
+            if not callable(register_fn):
+                continue
+            d, e = register_fn()
+            for k, v in d.items():
+                definitions.setdefault(k, v)
+            for k, v in e.items():
+                executors.setdefault(k, v)
+        except Exception as exc:
+            log.warning("Dynamic registry '%s' failed: %s", registry_name, exc)
+
     return definitions, executors

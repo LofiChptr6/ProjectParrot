@@ -12,9 +12,7 @@ Module name starts with `_` so the custom-tool loader skips it.
 from __future__ import annotations
 
 import asyncio
-import datetime as _dt
 import json
-import re
 import time
 from pathlib import Path
 
@@ -58,59 +56,18 @@ def _error_envelope(error_title: str, message: str, **extras) -> str:
     return json.dumps(payload)
 
 
-_WINDOW_SHORTHAND_RE = re.compile(r"^(\d+)d$", re.IGNORECASE)
-
-
-def _translate_window(arg: object) -> object:
-    """Map LLM-friendly window shorthand to the opus _parse_window date format.
-
-    Opus expects either None or 'YYYY-MM-DD' (it appends T00:00:00+00:00).
-    The LLM (per our TOOL_DEF examples) often produces '1d', '5d', '30d',
-    'mtd', 'ytd', or already-formatted ISO strings. Translate here so the
-    contract is forgiving in either direction.
-    """
-    if arg is None or arg == "":
-        return None
-    if not isinstance(arg, str):
-        return arg
-    s = arg.strip().lower()
-    today = _dt.date.today()
-    if s in ("today", "1d"):
-        return today.isoformat()
-    m = _WINDOW_SHORTHAND_RE.match(s)
-    if m:
-        return (today - _dt.timedelta(days=int(m.group(1)))).isoformat()
-    if s == "mtd":
-        return today.replace(day=1).isoformat()
-    if s == "ytd":
-        return today.replace(month=1, day=1).isoformat()
-    # Already an ISO date or datetime — strip a trailing time component if
-    # present so opus's '+T00:00:00+00:00' suffix doesn't double up.
-    if "T" in arg:
-        return arg.split("T", 1)[0]
-    return arg
-
-
-def _normalize_args(arguments: dict | None) -> dict:
-    """Apply small adapters that smooth over contract drift with opus."""
-    if not arguments:
-        return {}
-    out = dict(arguments)
-    for k in ("window", "since", "timestamp_iso"):
-        if k in out:
-            out[k] = _translate_window(out[k])
-    return out
-
-
 async def call_opus(tool: str, arguments: dict, error_title: str) -> str:
     """Invoke an opus_trading MCP tool in a one-shot subprocess and return its envelope.
 
     Always returns a JSON string with a __panel__ envelope, even on failure.
+    Argument shapes are validated against opus's own schema (discovered via
+    introspection in _opus_introspect), so we don't translate here — the LLM
+    sees opus's own parameter values and passes them through verbatim.
     """
     if not OPUS_PY.exists():
         return _error_envelope(error_title, f"opus_trading venv not found at {OPUS_PY}")
 
-    arguments = _normalize_args(arguments)
+    arguments = arguments or {}
 
     env = {
         "PATH": "/usr/bin:/bin",
