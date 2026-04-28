@@ -811,9 +811,126 @@
             case 'news_feed':
                 renderNewsFeedSlide(slide);
                 break;
+            case 'stat_row':
+                renderStatRowSlide(slide);
+                break;
+            case 'markdown':
+                renderMarkdownSlide(slide);
+                break;
             default:
                 presSlide.innerHTML = `<p class="pres-text">${escHtml(slide.title || 'Untitled')}</p>`;
         }
+    }
+
+    // Renders a list of {label, value, delta?} rows. delta auto-colored
+    // by leading sign character ("+" green, "-" red). Used by trading-desk
+    // briefings, P&L summaries, etc.
+    function renderStatRowSlide(slide) {
+        const wrap = document.createElement('div');
+        wrap.className = 'pres-stat-row-slide';
+
+        if (slide.title) {
+            const t = document.createElement('h3');
+            t.className = 'pres-slide-title';
+            t.textContent = slide.title;
+            wrap.appendChild(t);
+        }
+
+        const list = document.createElement('div');
+        list.className = 'stat-list';
+        const stats = Array.isArray(slide.stats) ? slide.stats : [];
+        for (const s of stats) {
+            const row = document.createElement('div');
+            row.className = 'stat-row';
+            const label = document.createElement('span');
+            label.className = 'stat-label';
+            label.textContent = s.label || '';
+            const value = document.createElement('span');
+            value.className = 'stat-value';
+            value.textContent = s.value != null ? String(s.value) : '';
+            row.appendChild(label);
+            row.appendChild(value);
+            if (s.delta != null && s.delta !== '') {
+                const delta = document.createElement('span');
+                const dStr = String(s.delta).trim();
+                const dir = dStr.startsWith('-') ? 'down' : (dStr.startsWith('+') ? 'up' : 'flat');
+                delta.className = 'stat-delta ' + dir;
+                delta.textContent = dStr;
+                row.appendChild(delta);
+            }
+            list.appendChild(row);
+        }
+        wrap.appendChild(list);
+        presSlide.appendChild(wrap);
+    }
+
+    // Renders a freeform markdown body. Uses marked.js if present, falls
+    // back to a minimal converter (paragraphs + tables + bold/italic) so
+    // briefing markdown still readable when the lib isn't loaded.
+    function renderMarkdownSlide(slide) {
+        const wrap = document.createElement('div');
+        wrap.className = 'pres-markdown-slide';
+
+        if (slide.title) {
+            const t = document.createElement('h3');
+            t.className = 'pres-slide-title';
+            t.textContent = slide.title;
+            wrap.appendChild(t);
+        }
+
+        const body = document.createElement('div');
+        body.className = 'markdown-body';
+        const md = String(slide.content || '');
+        if (window.marked && typeof window.marked.parse === 'function') {
+            body.innerHTML = window.marked.parse(md);
+        } else {
+            body.innerHTML = _miniMarkdown(md);
+        }
+        wrap.appendChild(body);
+        presSlide.appendChild(wrap);
+    }
+
+    // Minimal markdown subset: GFM tables, **bold**, *italic*, and
+    // paragraph breaks on blank lines. Enough for briefing copy.
+    function _miniMarkdown(md) {
+        const escape = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const lines = md.split('\n');
+        let html = '';
+        let i = 0;
+        while (i < lines.length) {
+            const line = lines[i];
+            // GFM table: header | sep | rows
+            if (/^\s*\|.*\|\s*$/.test(line) && i + 1 < lines.length && /^\s*\|?[\s:|-]+\|?\s*$/.test(lines[i + 1])) {
+                const headerCells = line.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim());
+                let rowHtml = '<table class="md-table"><thead><tr>'
+                    + headerCells.map(c => `<th>${escape(c)}</th>`).join('') + '</tr></thead><tbody>';
+                i += 2;
+                while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) {
+                    const cells = lines[i].trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim());
+                    rowHtml += '<tr>' + cells.map(c => `<td>${escape(c)}</td>`).join('') + '</tr>';
+                    i++;
+                }
+                rowHtml += '</tbody></table>';
+                html += rowHtml;
+                continue;
+            }
+            if (/^\s*$/.test(line)) {
+                html += '';
+                i++;
+                continue;
+            }
+            // Paragraph: collect contiguous non-empty lines
+            const para = [];
+            while (i < lines.length && !/^\s*$/.test(lines[i]) && !/^\s*\|.*\|\s*$/.test(lines[i])) {
+                para.push(lines[i]);
+                i++;
+            }
+            const text = escape(para.join(' '))
+                .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+                .replace(/\*(.+?)\*/g, '<em>$1</em>');
+            html += `<p>${text}</p>`;
+        }
+        return html;
     }
 
     function renderTitleSlide(slide) {

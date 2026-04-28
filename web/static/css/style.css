@@ -1003,6 +1003,43 @@ body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
     height: 100%; color: var(--muted); font-size: 13px;
 }
 
+/* Stat-row slide — labeled metrics with optional delta badges. */
+.pres-stat-row-slide { display: flex; flex-direction: column; gap: 6px; }
+.stat-list { display: flex; flex-direction: column; gap: 8px; }
+.stat-row {
+    display: flex; align-items: baseline; gap: 12px;
+    padding: 10px 12px; border-radius: 8px;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid var(--border);
+}
+.stat-label { color: var(--muted); font-size: 13px; flex: 1; }
+.stat-value { color: var(--text); font-size: 18px; font-weight: 600; }
+.stat-delta {
+    font-size: 12px; font-weight: 600; padding: 2px 8px;
+    border-radius: 999px; margin-left: 4px;
+}
+.stat-delta.up   { color: var(--green, #10b981); background: rgba(16,185,129,0.15); }
+.stat-delta.down { color: #ef4444; background: rgba(239,68,68,0.15); }
+.stat-delta.flat { color: var(--muted); background: rgba(255,255,255,0.05); }
+
+/* Markdown slide — freeform analysis copy with GFM tables. */
+.pres-markdown-slide { display: flex; flex-direction: column; gap: 8px; }
+.markdown-body { color: var(--text); font-size: 13px; line-height: 1.5; }
+.markdown-body p { margin: 0 0 8px; }
+.markdown-body strong { color: var(--text); }
+.markdown-body .md-table {
+    width: 100%; border-collapse: collapse; margin: 6px 0;
+    font-size: 12px;
+}
+.markdown-body .md-table th,
+.markdown-body .md-table td {
+    text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border);
+}
+.markdown-body .md-table th {
+    color: var(--muted); font-weight: 600; font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.04em;
+}
+
 /* Multi-chart slide */
 .pres-multi-chart-slide { display: flex; flex-direction: column; gap: 6px; }
 .multi-chart-row {
