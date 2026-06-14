@@ -1,0 +1,23 @@
+[Unit]
+Description=project mocha — desk companion (bridge :8090 + STT :8091 + TTS :8092 + web :8080)
+Documentation=https://github.com/LofiChptr6/ProjectParrot
+# Co-managed with the desk: starts when trading-desk.target starts, stops when
+# it stops. NO hard dependency on the vLLM — Mocha must never block the desk and
+# degrades gracefully if the shared LLM is down. Runs as a USER service (no sudo).
+PartOf=trading-desk.target
+After=network-online.target
+
+[Service]
+# Wraps start.sh, which launches the 4 uvicorn services with pidfiles.
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/home/tianyizhang/opus trading/project_mocha
+EnvironmentFile=/home/tianyizhang/opus trading/project_mocha/.env
+ExecStart=/bin/bash -c 'cd "/home/tianyizhang/opus trading/project_mocha" && ./start.sh all'
+ExecStop=/bin/bash -c 'cd "/home/tianyizhang/opus trading/project_mocha" && ./start.sh stop'
+TimeoutStartSec=600
+
+[Install]
+# `systemctl --user enable` symlinks this into trading-desk.target.wants/, so
+# the desk pulls Mocha up automatically. `disable` is the "unless specified" opt-out.
+WantedBy=trading-desk.target

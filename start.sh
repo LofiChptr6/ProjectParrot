@@ -32,13 +32,8 @@ print(c.get('network',{}).get('internal_host','127.0.0.1'))
 
 activate_venv() {
     if [ ! -d "$VENV" ]; then
-        echo "ERROR: Virtual environment not found at $VENV"
-        echo "Run setup first:"
-        echo "  python3 -m venv --without-pip $VENV"
-        echo "  curl -sS https://bootstrap.pypa.io/get-pip.py | $VENV/bin/python3"
-        echo "  $VENV/bin/pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124"
-        echo "  $VENV/bin/pip install -r requirements.txt"
-        exit 1
+        echo "No venv at $VENV — running first-time setup (./setup.sh)…"
+        "$SCRIPT_DIR/setup.sh" || { echo "Setup failed — see logs/setup-*.log"; exit 1; }
     fi
     source "$VENV/bin/activate"
 }
@@ -169,7 +164,9 @@ case "${1:-all}" in
         echo "  Telegram, Discord — set enabled: true + bot_token"
         echo "  CLI REPL — enabled by default (if bridge runs in foreground)"
         echo ""
-        echo "Dashboard: http://$EXTERNAL_HOST:8090/monitor"
+        echo "👉 Meet Mocha on the trading desk dashboard: http://127.0.0.1:8501"
+        echo "   (or your cloudflared 'mocha' tunnel). Standalone web app: http://$EXTERNAL_HOST:8080"
+        echo "   Bridge debug/monitor: http://$EXTERNAL_HOST:8090/monitor"
         ;;
     stt)       activate_venv; start_service stt "stt.service:app" 8091 ;;
     tts)       activate_venv; start_service tts "tts.service:app" 8092 ;;

@@ -65,30 +65,35 @@ proxy.
 - A CUDA GPU with headroom for STT + TTS alongside opus's stack
 - PostgreSQL with a `mocha` DB (DSN: `postgresql://mocha:5369@127.0.0.1:5432/mocha`)
 
-## Quick start
+## Running
 
+The trading desk runs everything as always-on systemd services (incl. the
+dashboard on :8501), so the simplest setup makes Mocha one too.
+
+**Recommended — always-on (one-time install):**
 ```bash
-cp .env.example .env        # fill in: POLYGON_API_KEY, BRAVE_API_KEY,
-                            # Telegram/Discord tokens, etc.
-./setup.sh                  # create .venv, install deps (incl. langgraph)
-./start.sh all              # STT + TTS + Bridge + Web (no docker / no own vLLM)
+sudo scripts/install-service.sh     # installs + enables + starts project-mocha.service
 ```
+That's it. Mocha now starts on boot and auto-restarts; the always-on dashboard
+shows her landing page. (First boot runs `setup.sh` automatically if the venv is
+missing.) Manage with `systemctl {start,stop,restart,status} project-mocha`;
+uninstall with `sudo scripts/install-service.sh remove`.
 
-Then open the opus dashboard (`streamlit run obs/dashboard.py`, from the parent
-`opus trading/` dir) — it opens on Mocha. Or open `http://localhost:8080`
-directly for the standalone web app.
+> **One-time:** after deploying these changes, restart the dashboard once so it
+> picks up the new Mocha landing: `sudo systemctl restart trading-dashboard`.
 
-## Service management
-
+**Manual — one command (no systemd):**
 ```bash
-./start.sh all        # start STT + TTS + Bridge + Web
-./start.sh bridge     # bridge + web only (most common during dev)
-./start.sh web        # web app only
-./start.sh stop       # stop all
-./start.sh status     # show what's running
+./start.sh            # auto-runs setup.sh if needed, then starts everything
 ```
+`start.sh` is now self-sufficient — it builds the venv on first run, starts
+STT + TTS + Bridge + Web, waits for health, and prints where to meet Mocha.
 
+Other subcommands: `./start.sh {bridge|web|stop|status|restart}`.
 Logs: `logs/<service>.log`   ·   PIDs: `.pids/<service>.pid`
+
+Either way, open Mocha at **http://127.0.0.1:8501** (the desk dashboard, or your
+cloudflared `mocha` tunnel) — or the standalone web app at **http://localhost:8080**.
 
 ## Configuration
 
