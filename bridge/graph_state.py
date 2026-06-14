@@ -34,6 +34,7 @@ class TurnState(TypedDict, total=False):
     tool_round: int             # ReAct counter, bounded by tools.max_rounds
     chunk_idx: int              # monotonic speech-chunk counter
     full_text_parts: list       # resolved speech, joined for speech_end
+    stalled: bool               # whether a "working on it" filler was spoken
 
     # ── Per-pass scratch (set by llm_pass, read by log_pass / should_continue)
     pending_tool_calls: list

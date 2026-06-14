@@ -63,6 +63,36 @@ async def _emit(state: TurnState, ev: dict) -> None:
     await state["emit"].put(ev)
 
 
+async def _emit_stall(state: TurnState) -> None:
+    """Speak a short, FRESH filler (generated on the fast 3B, always) so the user
+    isn't left in silence while a tool + deep synthesis run — like a quick
+    "ooh, let me check that". Best-effort: never blocks/breaks the turn. Not added
+    to full_text_parts (it's transient filler, not part of the recorded reply)."""
+    from bridge import server as S
+    try:
+        res = await S.llm_client.chat(
+            [{"role": "system", "content": S._STALL_SYSTEM},
+             {"role": "user", "content": (state.get("user_text") or "")[:400]}],
+            temperature=0.9, max_tokens=16,
+        )
+        line = (res.get("content") or "").strip().strip('"').strip()
+        if not line:
+            return
+        idx = state["chunk_idx"]
+        state["chunk_idx"] = idx + 1
+        audio = await S._synthesize(line, user_id=state.get("user_id"))
+        viseme = (await S._generate_visemes(audio, line) if audio else None) or {}
+        await _emit(state, {
+            "type": "speech_chunk", "chunk_idx": idx, "text": line,
+            "audio_base64": base64.b64encode(audio).decode() if audio else None,
+            "viseme_b64": viseme.get("viseme_b64"),
+            "viseme_fps": viseme.get("viseme_fps", 30),
+            "viseme_frames": viseme.get("viseme_frames", 0),
+        })
+    except Exception as e:
+        log.warning("[graph] stall filler failed: %s", e)
+
+
 # ──────────────────────────────────────────────────────────────────────────
 #  Nodes
 # ──────────────────────────────────────────────────────────────────────────
@@ -253,6 +283,13 @@ async def run_tools_node(state: TurnState) -> dict:
 
     # Record the assistant's last spoken output so the follow-up call has context.
     messages.append({"role": "assistant", "content": state["pass_content"]})
+
+    # Perceived-latency: once per turn, speak a fresh filler while the tool +
+    # (possibly deep) synthesis run, so the user always hears something. The
+    # filler's audio plays client-side while the slow work proceeds here.
+    if not state.get("stalled"):
+        state["stalled"] = True
+        await _emit_stall(state)
 
     for tc in pending:
         tool_round += 1

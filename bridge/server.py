@@ -142,6 +142,17 @@ def _route_model(user_text: str) -> str:
     return "fast"
 
 
+# Short, fresh filler spoken while a tool runs (perceived-latency cover). Always
+# generated on the FAST 3B so it's instant even on deep/tool turns.
+_STALL_SYSTEM = (
+    "You are Mocha — warm, upbeat, casual. You're about to look something up for "
+    "the user. Reply with ONE very short filler line (3-7 words) that sounds "
+    "natural and signals you're on it — e.g. \"ooh, let me check that\", \"one "
+    "sec, pulling it up\", \"on it, give me a moment\". React to what they asked, "
+    "vary your wording, and output ONLY the line: no quotes, no emoji, no tags."
+)
+
+
 BRIDGE_INTERNAL_URL = f"http://{INTERNAL_HOST}:{config['port']}"
 
 
