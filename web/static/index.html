@@ -25,6 +25,17 @@
 </head>
 <body>
 
+<!-- ══ Enter trading desk — redirects to the dashboard (href set from
+     /api/config.desk_url by app.js; hidden if unset). ══ -->
+<a id="enterDeskBtn" href="#" target="_top" rel="noopener"
+   onmouseover="this.style.filter='brightness(1.08)';this.style.transform='translateY(-1px)'"
+   onmouseout="this.style.filter='';this.style.transform=''"
+   style="display:none;position:fixed;bottom:20px;right:20px;z-index:9000;
+          background:#ff6b6b;color:#fff;font-weight:800;font-size:15px;
+          font-family:Nunito,system-ui,sans-serif;padding:11px 18px;border-radius:999px;
+          text-decoration:none;box-shadow:0 6px 18px rgba(0,0,0,.4);
+          transition:transform .12s,filter .12s;">Trading desk →</a>
+
 <!-- ══ Theme decor slot (populated by theme_propose/theme_apply) ══ -->
 <div id="theme-decor" aria-hidden="true"></div>
 

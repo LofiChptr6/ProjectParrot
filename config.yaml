@@ -125,6 +125,10 @@ diary:
 
 web:
   port: 8080
+  # Public URL of the trading-desk dashboard. Mocha's app shows an "Enter trading
+  # desk" button linking here. After the tunnel swap the desk lives at mocha.* and
+  # Mocha (this app) is the apex. Leave blank to hide the button.
+  desk_url: "https://mocha.project-hello-mocha.com"
 
 animation:
   # fbx_functions — LLM picks from gesture functions defined in

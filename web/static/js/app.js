@@ -2715,6 +2715,12 @@ async function init() {
         if (resp.ok) {
             const cfg = await resp.json();
             bridgePort = cfg.bridge_port || cfg.port || 8090;
+            // Show the "Trading desk" button only if a dashboard URL is configured.
+            const deskBtn = document.getElementById('enterDeskBtn');
+            if (deskBtn && cfg.desk_url) {
+                deskBtn.href = cfg.desk_url;
+                deskBtn.style.display = '';
+            }
         }
     } catch (e) {
         console.warn('/api/config not available, falling back to defaults');

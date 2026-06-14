@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parent.parent
 _cfg = yaml.safe_load((ROOT / "config.yaml").read_text())
 _bridge_port = _cfg.get("bridge", {}).get("port", 8090)
 _web_port = _cfg.get("web", {}).get("port", 8080)
+_desk_url = (_cfg.get("web", {}).get("desk_url") or "").rstrip("/")
 
 app = FastAPI(title="Mocha Web")
 
@@ -127,6 +128,7 @@ async def config():
         "bridge_ws_live": f"ws://{{host}}:{_bridge_port}/ws/live",
         "bridge_ws_monitor": f"ws://{{host}}:{_bridge_port}/ws/monitor",
         "bridge_http": f"http://{{host}}:{_bridge_port}",
+        "desk_url": _desk_url,
     }
 
 
