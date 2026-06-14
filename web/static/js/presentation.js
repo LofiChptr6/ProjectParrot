@@ -855,7 +855,9 @@
                 const dStr = String(s.delta).trim();
                 const dir = dStr.startsWith('-') ? 'down' : (dStr.startsWith('+') ? 'up' : 'flat');
                 delta.className = 'stat-delta ' + dir;
-                delta.textContent = dStr;
+                // Direction glyph so the up/down read is instant, not color-only.
+                const arrow = dir === 'up' ? '▲ ' : (dir === 'down' ? '▼ ' : '');
+                delta.textContent = arrow + dStr;
                 row.appendChild(delta);
             }
             list.appendChild(row);

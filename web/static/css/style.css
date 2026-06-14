@@ -979,11 +979,16 @@ body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
 .pres-candle-slide { display: flex; flex-direction: column; gap: 8px; height: 100%; }
 
 .candle-header {
-    display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+    display: flex; align-items: center; gap: 12px; flex-wrap: nowrap;
+    border-left: 3px solid var(--accent); padding-left: 9px;
 }
-.candle-symbol { font-size: 18px; font-weight: 700; color: var(--text); }
-.candle-price { font-size: 18px; font-weight: 600; color: var(--text); }
-.candle-change { font-size: 14px; font-weight: 600; }
+.candle-symbol { font-size: 17px; font-weight: 800; color: var(--text); min-width: 56px; }
+.candle-price {
+    font-size: 16px; font-weight: 700; color: var(--text);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+}
+.candle-change { font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .candle-change.up { color: var(--green); }
 .candle-change.down { color: var(--red); }
 .candle-name { font-size: 13px; color: var(--muted); }
@@ -1003,24 +1008,33 @@ body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
     height: 100%; color: var(--muted); font-size: 13px;
 }
 
-/* Stat-row slide — labeled metrics with optional delta badges. */
+/* Stat-row slide — labeled metrics with optional delta badges.
+   Finance-pro layout: aligned label | value | delta columns, tabular monospace
+   numbers (right-aligned so they scan vertically), tighter density. */
 .pres-stat-row-slide { display: flex; flex-direction: column; gap: 6px; }
-.stat-list { display: flex; flex-direction: column; gap: 8px; }
+.stat-list { display: flex; flex-direction: column; gap: 6px; }
 .stat-row {
-    display: flex; align-items: baseline; gap: 12px;
-    padding: 10px 12px; border-radius: 8px;
-    background: rgba(255,255,255,0.03);
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    align-items: center; gap: 10px;
+    padding: 7px 10px; border-radius: 7px;
+    background: rgba(255,255,255,0.035);
     border: 1px solid var(--border);
 }
-.stat-label { color: var(--muted); font-size: 13px; flex: 1; }
-.stat-value { color: var(--text); font-size: 18px; font-weight: 600; }
-.stat-delta {
-    font-size: 12px; font-weight: 600; padding: 2px 8px;
-    border-radius: 999px; margin-left: 4px;
+.stat-label { color: var(--muted); font-size: 12px; letter-spacing: .2px; }
+.stat-value {
+    color: var(--text); font-size: 16px; font-weight: 700;
+    font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap;
 }
-.stat-delta.up   { color: var(--green, #10b981); background: rgba(16,185,129,0.15); }
-.stat-delta.down { color: #ef4444; background: rgba(239,68,68,0.15); }
-.stat-delta.flat { color: var(--muted); background: rgba(255,255,255,0.05); }
+.stat-delta {
+    font-size: 11px; font-weight: 700; padding: 2px 7px;
+    border-radius: 999px; white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+.stat-delta.up   { color: var(--green); background: rgba(74,222,128,0.22); }
+.stat-delta.down { color: var(--red);   background: rgba(239,68,68,0.22); }
+.stat-delta.flat { color: var(--muted); background: rgba(255,255,255,0.06); }
 
 /* Markdown slide — freeform analysis copy with GFM tables. */
 .pres-markdown-slide { display: flex; flex-direction: column; gap: 8px; }

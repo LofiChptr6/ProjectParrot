@@ -229,6 +229,15 @@ tools:
     - get_changes_since
     - get_upcoming_catalysts
     - get_manual_overrides
+    # Desk-state read-outs (read-only) — keep in sync with _opus_introspect.py.
+    - get_pnl_summary
+    - get_positions
+    - get_balances
+    - get_agent_pnl_windows
+    - get_trade_blotter
+    - get_agent_list
+    - get_market_status
+    - get_kill_switch_status
   working_dir: /home/tianyizhang/opus trading/project_mocha
   max_rounds: 5
   timeout: 120  # generous: a tool round may need time for multi-step data fetches

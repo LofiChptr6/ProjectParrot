@@ -26,11 +26,16 @@ DISCOVER_TIMEOUT_SEC = 15.0
 # total including order placement, kill switches, etc. — explicit allowlist
 # is the safety boundary. Add here when opus ships a new read-only tool we
 # want surfaced.
+#
+# SAFETY: every name here MUST be a READ-ONLY opus tool. Never add anything that
+# places/cancels/modifies orders, toggles kill switches, writes notes/memory,
+# rebalances, or sends messages — that would break the "Mocha can never change
+# the desk" guarantee. When in doubt, leave it out.
 EXPOSED_TOOLS: set[str] = {
     # Pre-wrapped panel envelope (handled by tools/custom/get_trading_briefing.py
     # — kept as a hand-written file for the envelope path)
     "get_trading_briefing",
-    # Raw data + analyst_note tools — auto-registered via _opus_tools.py
+    # Curated companion views (raw data + analyst_note) — auto-registered.
     "get_position_dossier",
     "get_agent_overview",
     "get_pnl_attribution",
@@ -41,6 +46,16 @@ EXPOSED_TOOLS: set[str] = {
     "get_changes_since",
     "get_upcoming_catalysts",
     "get_manual_overrides",
+    # Desk-state read-outs (added 2026-06-14 — current opus exposes these and
+    # they let Mocha speak to "what's interesting right now"). All read-only.
+    "get_pnl_summary",        # desk-wide combined P&L by agent
+    "get_positions",          # all open positions (qty, avg cost, unrealized)
+    "get_balances",           # NAV, cash, buying power, realized/unrealized P&L
+    "get_agent_pnl_windows",  # per-agent P&L over 1d / WTD / month / 3mo
+    "get_trade_blotter",      # fill history
+    "get_agent_list",         # configured agents + allocation + enabled status
+    "get_market_status",      # NYSE hours: is_open, session bounds, next_open
+    "get_kill_switch_status", # is the desk trading or halted (status only)
 }
 
 _BOOTSTRAP = """
