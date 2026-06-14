@@ -21,14 +21,12 @@ network:
   internal_host: "127.0.0.1"
 
 llm:
-  # SHARED with opus trading: Mocha does NOT run her own vLLM. She reuses
-  # opus's already-loaded vLLM (OpenAI-compatible, :8000/v1) to avoid putting a
-  # second LLM on the GPU. The rate-limit + circuit-breaker in bridge/llm_client.py
-  # bounds Mocha's load so a Mocha bug can never starve Corvus's trading inference.
-  base_url: http://127.0.0.1:8000/v1
-  # Must match opus's served model (LOCAL_MODEL in opus .env). Claude-name aliases
-  # are also served (claude-sonnet-4-6, claude-haiku-4-5-20251001, ...).
-  model: Qwen/Qwen3-32B-FP8
+  # Mocha's OWN small/fast model (Llama-3.2-3B on vLLM, GPU :8893), served by
+  # project-mocha-vllm.service. She no longer shares opus's 32B — faster replies,
+  # a friendlier voice, and total inference isolation from the trading desk.
+  # The rate-limit + circuit-breaker in bridge/llm_client.py still applies.
+  base_url: http://127.0.0.1:8893/v1
+  model: unsloth/Llama-3.2-3B-Instruct
   # Note: no generic system_prompt here — character/soul.md is the single source
   # of truth for Mocha's voice. A generic framing block here would dilute it.
   temperature: 0.8

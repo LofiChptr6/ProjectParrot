@@ -135,9 +135,11 @@ status() {
 case "${1:-all}" in
     all)
         activate_venv
-        start_service stt "stt.service:app" 8091
+        # STT (Whisper) removed — text-only input; freed its ~5.5GB VRAM for
+        # Mocha's own LLM. Re-add `start_service stt "stt.service:app" 8091` to
+        # bring voice input back.
         start_service tts "tts.service:app" 8092
-        echo "  Waiting for STT/TTS models to load..."
+        echo "  Waiting for TTS model to load..."
         sleep 5
         start_service bridge "bridge.server:app" 8090
         start_service web "web.app:app" 8080
@@ -145,7 +147,6 @@ case "${1:-all}" in
         echo "All services started.  (external_host=$EXTERNAL_HOST)"
         echo "  Bridge:    http://$EXTERNAL_HOST:8090"
         echo "  Web:       http://$EXTERNAL_HOST:8080  (dashboard)"
-        echo "  STT:       http://$INTERNAL_HOST:8091  (internal)"
         echo "  TTS:       http://$INTERNAL_HOST:8092  (internal)"
         echo "  Memory:    in-process (mem0, inside bridge)"
         echo "  Animation: in-process (fbx_functions CSV, inside bridge)"
