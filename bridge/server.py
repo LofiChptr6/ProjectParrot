@@ -102,6 +102,7 @@ def _resolve_url(cfg_key: str, service_section: str, default_port: int) -> str:
     return f"http://{INTERNAL_HOST}:{port}"
 
 config["stt_url"] = _resolve_url("stt_url", "stt", 8091)
+_STT_ENABLED: bool = bool(full_config.get("stt", {}).get("enabled", True))
 config["tts_url"] = _resolve_url("tts_url", "tts", 8092)
 # memory: in-process via memory/mem0_store.py — no URL to resolve.
 # animation: FBX function mode uses character/animation_functions.csv directly;
@@ -1537,10 +1538,10 @@ async def root_redirect():
 @app.get("/health")
 async def health():
     checks = {}
-    for name, url in [
-        ("stt", config["stt_url"]),
-        ("tts", config["tts_url"]),
-    ]:
+    _svcs = [("tts", config["tts_url"])]
+    if _STT_ENABLED:
+        _svcs.insert(0, ("stt", config["stt_url"]))
+    for name, url in _svcs:
         try:
             r = await http.get(f"{url}/health", timeout=5.0)
             checks[name] = "ok" if r.status_code == 200 else f"error ({r.status_code})"

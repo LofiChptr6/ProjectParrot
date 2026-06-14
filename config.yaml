@@ -49,6 +49,10 @@ llm:
   #  all calls run full-context, single-pass.)
 
 stt:
+  # Voice INPUT removed (text-only) to free ~5.5GB VRAM for Mocha's own LLM.
+  # start.sh no longer launches it; health checks skip it when disabled. Set
+  # true + re-add the start_service line in start.sh to bring voice input back.
+  enabled: false
   host: 0.0.0.0
   port: 8091  # remapped 8001->8091: opus trading owns 8001 (llm-proxy)
   model: large-v3

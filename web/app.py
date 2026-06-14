@@ -142,9 +142,11 @@ async def health():
     """
     services = {
         "bridge": f"http://127.0.0.1:{_bridge_port}/health",
-        "stt": f"http://127.0.0.1:{_cfg.get('stt', {}).get('port', 8091)}/health",
         "tts": f"http://127.0.0.1:{_cfg.get('tts', {}).get('port', 8092)}/health",
     }
+    # STT (voice input) is optional — only probe it when enabled.
+    if _cfg.get("stt", {}).get("enabled", True):
+        services["stt"] = f"http://127.0.0.1:{_cfg.get('stt', {}).get('port', 8091)}/health"
     results = {}
     async with httpx.AsyncClient(timeout=2.0) as client:
         for name, url in services.items():
