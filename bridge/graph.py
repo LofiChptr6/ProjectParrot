@@ -67,6 +67,14 @@ async def _emit(state: TurnState, ev: dict) -> None:
 #  Nodes
 # ──────────────────────────────────────────────────────────────────────────
 
+async def route_node(state: TurnState) -> dict:
+    """Heuristic model pick for this turn (fast 3B vs deep Qwen-32B). No LLM
+    call, so it costs ~0ms / no TTFT hit. Tool turns later escalate to deep."""
+    from bridge import server as S
+    state["route"] = S._route_model(state.get("user_text", ""))
+    return state
+
+
 async def build_messages_node(state: TurnState) -> dict:
     """System prompt + bounded history + memories + redaction; init counters."""
     from bridge import server as S
@@ -102,7 +110,10 @@ async def llm_pass_node(state: TurnState) -> dict:
     chunk_idx = state["chunk_idx"]
     full_text_parts = state["full_text_parts"]
 
-    llm_stream = S.llm_client.chat_stream(messages, tools=None)
+    # Route: deep model (Qwen-32B) for reasoning/tool turns, else the fast 3B.
+    client = S.llm_deep if state.get("route") == "deep" else S.llm_client
+    state["pass_model"] = client.model
+    llm_stream = client.chat_stream(messages, tools=None)
 
     async def _token_feeder():
         nonlocal pass_ttft, pass_usage, pass_finish
@@ -201,10 +212,11 @@ async def log_pass_node(state: TurnState) -> dict:
     latency_ms = (time.monotonic() - state["pass_started"]) * 1000
     S._pipeline_state["llm_ms"] = round(latency_ms, 1)
     _pass_ctx = dataclasses.replace(state["base_ctx"], pass_number=1)
+    _logc = S.llm_deep if state.get("route") == "deep" else S.llm_client
     asyncio.create_task(S.call_log.log_call(
-        _pass_ctx, model=S.llm_client.model,
-        temperature=S.llm_client.default_temperature,
-        max_tokens=S.llm_client.default_max_tokens,
+        _pass_ctx, model=_logc.model,
+        temperature=_logc.default_temperature,
+        max_tokens=_logc.default_max_tokens,
         stream=True, enable_thinking=False,
         tools_provided=False, messages=state["messages"],
         response_content=state["pass_content"] or None,
@@ -289,6 +301,9 @@ async def run_tools_node(state: TurnState) -> dict:
     if any("num:" in (m.get("content") or "") for m in messages[-len(pending):]):
         messages.append({"role": "system", "content": _HANDLE_REMINDER})
 
+    # A tool fired → synthesize the result on the deep model (Qwen-32B), which is
+    # far more reliable at the inline-tag format + handle-quoting than the 3B.
+    state["route"] = "deep"
     state["tool_round"] = tool_round
     return state
 
@@ -312,13 +327,15 @@ async def finalize_node(state: TurnState) -> dict:
 
 def _build_graph():
     g = StateGraph(TurnState)
+    g.add_node("router", route_node)
     g.add_node("build_messages", build_messages_node)
     g.add_node("llm_pass", llm_pass_node)
     g.add_node("log_pass", log_pass_node)
     g.add_node("run_tools", run_tools_node)
     g.add_node("finalize", finalize_node)
 
-    g.add_edge(START, "build_messages")
+    g.add_edge(START, "router")
+    g.add_edge("router", "build_messages")
     g.add_edge("build_messages", "llm_pass")
     g.add_edge("llm_pass", "log_pass")
     g.add_conditional_edges(

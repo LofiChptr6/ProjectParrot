@@ -40,13 +40,38 @@ llm:
   # Bounds Mocha's worst-case load so a Mocha bug can never starve Corvus's
   # trading inference. Defaults shown; tune only if needed.
   isolation:
-    max_concurrency: 1        # at most N Mocha requests in flight at once
-    rate_limit_per_min: 30    # hard requests/minute ceiling (token bucket)
-    burst: 8                  # allow one turn's tool rounds without throttling
-    breaker_fail_threshold: 4 # consecutive backend failures before opening
-    breaker_cooldown_s: 20    # fail-fast window once the breaker opens
-  # (Pass 1 / Pass 2 complexity-routing block removed in feature/single-pass-llama70b —
-  #  all calls run full-context, single-pass.)
+    # FAST client = Mocha's DEDICATED 3B (:8893). Nothing to protect here, so
+    # don't rate-limit it (that was adding multi-second waits under load). The
+    # strict guard lives on the `deep` client below (the shared trading vLLM).
+    max_concurrency: 3        # allow a little parallelism on the dedicated 3B
+    rate_limit_per_min: 0     # 0 = no rate cap
+    burst: 1
+    breaker_fail_threshold: 4 # still fail fast if the 3B hangs
+    breaker_cooldown_s: 15
+  # ── Model routing ──────────────────────────────────────────────────────────
+  # Deep model for reasoning/tool-heavy turns — opus's SHARED Qwen-32B (:8000).
+  # The isolation guard above protects this shared path too. Remove this block
+  # to disable routing (everything stays on the fast 3B).
+  deep:
+    base_url: http://127.0.0.1:8000/v1
+    model: Qwen/Qwen3-32B-FP8
+    # STRICT guard — this path hits the SHARED trading vLLM, so bound Mocha's
+    # load so a Mocha bug can never starve the desk (the prime directive).
+    isolation:
+      max_concurrency: 1
+      rate_limit_per_min: 30
+      burst: 8
+      breaker_fail_threshold: 4
+      breaker_cooldown_s: 20
+  # Heuristic router (no extra LLM call → no TTFT cost): default to the fast 3B;
+  # escalate to deep on these signals. Tool turns also auto-escalate (synthesis).
+  routing:
+    enabled: true
+    min_words: 40
+    keywords: [trading, desk, position, portfolio, pnl, "p&l", nav, risk, alloc,
+               conviction, attribution, briefing, hedge, exposure, drawdown,
+               earnings, catalyst, stock, ticker, price, market, analyze,
+               explain, compare, forecast, valuation]
 
 stt:
   # Voice INPUT removed (text-only) to free ~5.5GB VRAM for Mocha's own LLM.

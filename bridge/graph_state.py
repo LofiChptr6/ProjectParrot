@@ -25,6 +25,10 @@ class TurnState(TypedDict, total=False):
     user_text: str
     memories: list              # pre-fetched mem0 facts (caller supplies)
 
+    # ── Routing (which model serves this turn) ──────────────────────────────
+    route: str                  # "fast" (Llama-3B) | "deep" (Qwen-32B)
+    pass_model: str             # model id actually used this pass (for logging)
+
     # ── Working set (mutated across the ReAct loop) ─────────────────────────
     messages: list              # OpenAI-format message array
     tool_round: int             # ReAct counter, bounded by tools.max_rounds

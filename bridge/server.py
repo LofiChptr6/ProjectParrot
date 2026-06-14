@@ -113,6 +113,35 @@ llm_client = LLMClient(llm_config)
 # Expose URL for logging / health display
 config["llm_url"] = llm_client._base_url.rsplit("/v1", 1)[0]
 
+# ── Model routing ──────────────────────────────────────────────────────────
+# Default = the fast/friendly model above (Llama-3.2-3B, Mocha's own :8893).
+# Deep = opus's shared Qwen-32B (smarter + better at the tool format), used for
+# turns that need reasoning or data tools. Heuristic router (no extra LLM call,
+# so no TTFT cost); the graph also auto-escalates to deep once a tool fires.
+# The deep client inherits the isolation guard (it hits the shared trading vLLM).
+_deep_cfg = {**llm_config, **(llm_config.get("deep") or {})}
+llm_deep = (LLMClient(_deep_cfg)
+            if (llm_config.get("deep") or {}).get("base_url") else llm_client)
+_routing_cfg = llm_config.get("routing", {}) or {}
+_ROUTE_KEYWORDS = [k.lower() for k in _routing_cfg.get("keywords", [])]
+_TICKER_RE = re.compile(r"\$[A-Za-z]{1,5}\b")  # $NVDA-style cashtags only
+
+
+def _route_model(user_text: str) -> str:
+    """Heuristic: 'deep' (Qwen-32B) for reasoning/tool turns, else 'fast' (3B).
+    Defaults to fast for speed; misroutes are caught by tool-escalation."""
+    if not _routing_cfg.get("enabled", False) or llm_deep is llm_client:
+        return "fast"
+    t = user_text or ""
+    if any(k in t.lower() for k in _ROUTE_KEYWORDS):
+        return "deep"
+    if _TICKER_RE.search(t):
+        return "deep"
+    if len(t.split()) >= int(_routing_cfg.get("min_words", 40)):
+        return "deep"
+    return "fast"
+
+
 BRIDGE_INTERNAL_URL = f"http://{INTERNAL_HOST}:{config['port']}"
 
 
