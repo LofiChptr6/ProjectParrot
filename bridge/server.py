@@ -101,8 +101,8 @@ def _resolve_url(cfg_key: str, service_section: str, default_port: int) -> str:
     port = full_config.get(service_section, {}).get("port", default_port)
     return f"http://{INTERNAL_HOST}:{port}"
 
-config["stt_url"] = _resolve_url("stt_url", "stt", 8001)
-config["tts_url"] = _resolve_url("tts_url", "tts", 8002)
+config["stt_url"] = _resolve_url("stt_url", "stt", 8091)
+config["tts_url"] = _resolve_url("tts_url", "tts", 8092)
 # memory: in-process via memory/mem0_store.py — no URL to resolve.
 # animation: FBX function mode uses character/animation_functions.csv directly;
 #   no HTTP service, no vector DB.
@@ -174,7 +174,7 @@ elif ANIMATION_MODE == "fbx_functions":
     else:
         log.warning("Animation mode=fbx_functions but CSV not found: %s", _csv_path)
 
-app = FastAPI(title="Parrot Bridge")
+app = FastAPI(title="Mocha Bridge")
 log.info("bridge.live enabled=%s (WS /ws/live)", _live_mode_enabled())
 log.info("Network: internal=%s  bridge=%s", INTERNAL_HOST, BRIDGE_INTERNAL_URL)
 log.info(
@@ -350,13 +350,8 @@ async def _account_type_for(user_id: str | None) -> str:
         return "registered"
     return (row or {}).get("account_type") or "registered"
 
-_cr_config = llm_config.get("complexity_routing", {})
-COMPLEXITY_ROUTING_ENABLED: bool = bool(_cr_config.get("enabled", False))
-COMPLEXITY_SHORT_HISTORY: int    = int(_cr_config.get("short_history", 4))
-PASS1_TOOLS: bool                = bool(_cr_config.get("pass1_tools", True))
-# Subset of tool names whose schemas ride along in Pass 1. Pass 2 always gets
-# the full allowlist. Empty/missing → Pass 1 uses the full allowlist (legacy).
-PASS1_TOOL_ALLOWLIST: list[str]  = list(_cr_config.get("pass1_tool_allowlist") or [])
+# (Pass 1 / Pass 2 complexity-routing config removed in feature/single-pass-llama70b —
+#  all calls now run full-context, single-pass.)
 
 
 # When True (set per-task by /admin/eval), suppresses broadcasts and memory
@@ -881,9 +876,9 @@ def _extract_tool_calls(msg: dict) -> list[dict] | None:
 #  Inline-tag turn driver
 #
 #  Replaces the old JSON-segment pipeline. The LLM emits plaintext sprinkled
-#  with inline tags (<emotion>, <gesture>, <tool_call>, <escalate/>). Bridge
+#  with inline tags (<reads>, <emotion>, <gesture>, <tool_call>). Bridge
 #  parses the stream in real time, synthesises TTS per sentence chunk, fires
-#  gesture/emotion events, and handles tool calls + escalation inline.
+#  reads/gesture/emotion events, and handles tool calls inline.
 # ---------------------------------------------------------------------------
 
 # Numeric-literal detector for observability. Matches: 42, 3.14, $39.75, -1.29%, 12:34.
@@ -944,7 +939,7 @@ def _parse_tool_args_str(args_str: str) -> dict:
     """Adapt inline <tool_call> body to a dict for the executor.
 
     - If the body is a JSON object literal, use it directly.
-    - Otherwise wrap as ``{"request": body}`` (matches ask_nori's schema).
+    - Otherwise wrap as ``{"request": body}`` (single-string-arg tool schema).
     """
     s = (args_str or "").strip()
     if not s:
@@ -971,7 +966,6 @@ def _build_inline_messages(user_text: str, memories: list[dict],
     """
     system_prompt = build_system_prompt(
         animation_mode=ANIMATION_MODE,
-        unified_routing=False,   # routing is implicit via <escalate/>
         tools_available=TOOLS_ENABLED,
         user_id=user_id,
     )
@@ -1082,6 +1076,13 @@ async def _run_inline_turn(
         {"type": "tool_status",   "action": "call"|"result", "round": int, ...}
         {"type": "speech_end",    "total_chunks": int, "full_text": str}
     """
+    # Orchestration now runs as a LangGraph StateGraph (bridge/graph.py). This
+    # wrapper only sets per-turn context, drives the compiled graph in a task,
+    # and relays the graph's streamed UI events through an asyncio.Queue. The
+    # event contract is byte-identical to the old hand-rolled loop, so all 5
+    # callers are untouched.
+    from bridge.graph import MOCHA_GRAPH, SENTINEL
+
     base_ctx = log_ctx or CallContext(
         triggered_by="chat_stream", source=source, conversation_id=str(job_id),
     )
@@ -1098,244 +1099,52 @@ async def _run_inline_turn(
         diary_writer.note_interaction((load_primary_user() or {}).get("timezone"))
     except Exception:
         pass
-    messages = _build_inline_messages(user_text, memories, user_id=user_id)
-    chunk_idx = 0
-    full_text_parts: list[str] = []
-    tool_round = 0
-    enable_thinking = False
-    thinking_enabled_once = False
 
-    await _monitor_thread_start("llm", input_preview=user_text, job_id=job_id)
-
-    while True:
-        pass_tool_calls: list[dict] = []
-        escalate_requested = False
-        pass_content_parts: list[str] = []
-        pass_started = time.monotonic()
-        pass_ttft: float | None = None
-        pass_usage: dict = {}
-        pass_finish: str | None = None
-        pass_error: str | None = None
-        pass_number = 2 if thinking_enabled_once else 1
-
-        llm_stream = llm_client.chat_stream(
-            messages, tools=None, enable_thinking=enable_thinking,
-        )
-
-        async def _token_feeder():
-            nonlocal pass_ttft, pass_usage, pass_finish
-            async for chunk in llm_stream:
-                content = chunk.get("content", "")
-                if content:
-                    pass_content_parts.append(content)
-                    if pass_ttft is None:
-                        pass_ttft = (time.monotonic() - pass_started) * 1000
-                    yield content
-                if chunk.get("done"):
-                    pass_usage = chunk.get("usage", {})
-                    pass_finish = chunk.get("finish_reason")
-                    break
-
-        _event_gen = drive_inline_stream(_token_feeder())
-        try:
-            async for ev in _event_gen:
-                t = ev["type"]
-                if t == "thinking":
-                    yield {"type": "thinking_delta", "content": ev["text"]}
-                elif t == "emotion":
-                    yield {"type": "emotion", "id": ev["id"]}
-                elif t == "gesture":
-                    # Validate against the CSV; pass through even if unknown
-                    # (frontend will fall back to idle if the controller can't
-                    # resolve the name).
-                    resolved = await _resolve_action(ev["name"])
-                    yield {"type": "gesture", "name": resolved or ev["name"]}
-                elif t == "speech_chunk":
-                    raw_text = ev["text"]
-                    # Layer 4: observability — before resolution, any numeric
-                    # literal in Mocha's raw output came from memory/training,
-                    # not a tool handle. Those are the real hallucinations.
-                    _check_unmapped_numeric_literals(raw_text, job_id, chunk_idx)
-                    # Layer 3: resolve num: (and other) handles Mocha emitted
-                    # back to their formatted display values BEFORE TTS so the
-                    # audio says "$39.75" instead of "num colon a3bK9fQp".
-                    chunk_text, unmapped = substitute_handles_in_text(raw_text)
-                    if unmapped:
-                        log.warning(
-                            "[inline-turn] job=%s chunk_idx=%d unmapped handles: %s",
-                            job_id, chunk_idx, unmapped,
-                        )
-                    full_text_parts.append(chunk_text)
-                    audio_bytes = await _synthesize(chunk_text, user_id=user_id)
-                    viseme = (
-                        await _generate_visemes(audio_bytes, chunk_text)
-                        if audio_bytes else None
-                    ) or {}
-                    yield {
-                        "type": "speech_chunk",
-                        "chunk_idx": chunk_idx,
-                        "text": chunk_text,
-                        "audio_base64": (
-                            base64.b64encode(audio_bytes).decode()
-                            if audio_bytes else None
-                        ),
-                        "viseme_b64": viseme.get("viseme_b64"),
-                        "viseme_fps": viseme.get("viseme_fps", 30),
-                        "viseme_frames": viseme.get("viseme_frames", 0),
-                    }
-                    chunk_idx += 1
-                elif t == "tool_call":
-                    pass_tool_calls.append(ev)
-                    # Layer 3: abort the rest of this pass. Anything the LLM
-                    # babbles after <tool_call> is speculation without tool
-                    # results and commonly hallucinates numbers. Pass 2 re-fires
-                    # with the tool result and is the sole author of post-tool
-                    # speech.
-                    log.info(
-                        "[inline-turn] job=%s <tool_call name=%s> — aborting Pass %d stream",
-                        job_id, ev.get("name"), pass_number,
-                    )
-                    await _event_gen.aclose()
-                    break
-                elif t == "escalate":
-                    escalate_requested = True
-                elif t == "end":
-                    pass
-        except httpx.ConnectError as e:
-            pass_error = str(e)
-            log.error("LLM unreachable at %s: %s", config["llm_url"], e)
-        except Exception as e:
-            pass_error = str(e)
-            log.exception("LLM stream failed")
-        finally:
-            try:
-                await _event_gen.aclose()
-            except Exception:
-                pass
-
-        # Log the pass to PG
-        latency_ms = (time.monotonic() - pass_started) * 1000
-        _pipeline_state["llm_ms"] = round(latency_ms, 1)
-        _pass_ctx = dataclasses.replace(base_ctx, pass_number=pass_number)
-        asyncio.create_task(call_log.log_call(
-            _pass_ctx, model=llm_client.model,
-            temperature=llm_client.default_temperature,
-            max_tokens=llm_client.default_max_tokens,
-            stream=True, enable_thinking=enable_thinking,
-            tools_provided=False, messages=messages,
-            response_content="".join(pass_content_parts) or None,
-            finish_reason=pass_finish, error=pass_error,
-            latency_ms=latency_ms, ttft_ms=pass_ttft,
-            prompt_tokens=pass_usage.get("prompt_tokens"),
-            completion_tokens=pass_usage.get("completion_tokens"),
-            total_tokens=pass_usage.get("total_tokens"),
-        ))
-
-        # Escalate → re-fire with full history + thinking enabled
-        if escalate_requested and not thinking_enabled_once:
-            log.info("[inline-turn] <escalate/> — firing Pass 2 (thinking enabled)")
-            enable_thinking = True
-            thinking_enabled_once = True
-            continue
-
-        # Tool calls → execute, append to messages, continue loop
-        if pass_tool_calls and TOOLS_ENABLED and tool_round < _TOOL_MAX_ROUNDS:
-            # Record the assistant's last spoken output + tool calls as an
-            # assistant message so the next LLM call has the context.
-            asst_content = "".join(pass_content_parts)
-            messages.append({"role": "assistant", "content": asst_content})
-
-            for tc in pass_tool_calls:
-                tool_round += 1
-                tool_name = tc["name"]
-                tool_args_str = tc["arguments"]
-                tool_id = tc["id"]
-                args = _parse_tool_args_str(tool_args_str)
-
-                yield {
-                    "type": "tool_status", "action": "call", "round": tool_round,
-                    "tool_name": tool_name,
-                    "tool_args_preview": tool_args_str[:200],
-                    "tool_args": args,
-                }
-                await _broadcast_monitor({
-                    "type": "tool_activity", "action": "call",
-                    "job_id": job_id, "round": tool_round, "tool_name": tool_name,
-                    "tool_args": json.dumps(args)[:500],
-                })
-
-                t_tool = time.monotonic()
-                try:
-                    result = await execute_tool(tool_name, args)
-                except Exception as e:
-                    log.exception("Tool %s failed", tool_name)
-                    result = f"Tool error: {e}"
-                tool_ms = (time.monotonic() - t_tool) * 1000
-
-                yield {
-                    "type": "tool_status", "action": "result", "round": tool_round,
-                    "tool_name": tool_name, "result_preview": result[:500],
-                    "duration_ms": round(tool_ms, 1),
-                }
-                await _broadcast_monitor({
-                    "type": "tool_activity", "action": "result",
-                    "job_id": job_id, "round": tool_round, "tool_name": tool_name,
-                    "result_preview": result[:800], "duration_ms": round(tool_ms, 1),
-                })
-
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_id,
-                    "content": result,
-                })
-
-            # Reinforce handle-quoting rule for the follow-up LLM call. The
-            # tool results above contain `num:xxxxxxxx` handles for every
-            # data value; without this reminder the model tends to substitute
-            # numbers from training or prior conversation history (e.g.
-            # yesterday's stock price) instead of quoting the current handle.
-            if any("num:" in (m.get("content") or "") for m in messages[-len(pass_tool_calls):]):
-                messages.append({
-                    "role": "system",
-                    "content": (
-                        "CRITICAL — read before replying:\n\n"
-                        "1. The tool result above contains `num:xxxxxxxx` handles wherever "
-                        "a numeric value belongs (prices, percentages, temperatures, counts).\n"
-                        "2. Your conversation history and memory fragments may contain "
-                        "numeric-looking tokens from previous turns. Those are STALE — "
-                        "today's data may be completely different. You must IGNORE every "
-                        "number-like token that is NOT inside a `num:xxxxxxxx` handle.\n"
-                        "3. The ONLY numbers you may reference in this reply are `num:xxxxxxxx` "
-                        "handles from the most recent tool result. Copy each handle VERBATIM. "
-                        "Do not write out the value — write the handle, the bridge resolves it.\n"
-                        "4. If a claim you want to make needs a value you don't have a handle "
-                        "for, OMIT the claim entirely. Do not invent, recall, or approximate.\n"
-                        "5. The bridge resolves handles to real formatted values right before "
-                        "TTS. The user hears the real number even though you wrote the handle."
-                    ),
-                })
-
-            # Force a follow-up LLM call with tool results present
-            continue
-
-        # Done — no more tool calls, no escalation
-        break
-
-    await _monitor_thread_end("llm", elapsed_ms=(time.monotonic() - pass_started) * 1000,
-                              input_preview=user_text, job_id=job_id)
-
-    yield {
-        "type": "speech_end",
-        "total_chunks": chunk_idx,
-        "full_text": "".join(full_text_parts),
+    emit: asyncio.Queue = asyncio.Queue()
+    init = {
+        "user_text": user_text,
+        "memories": memories,
+        "job_id": job_id,
+        "source": source,
+        "user_id": user_id,
+        "base_ctx": base_ctx,
+        "emit": emit,
     }
+
+    async def _run_graph():
+        # recursion_limit is comfortably above (3 nodes × max tool rounds).
+        try:
+            await MOCHA_GRAPH.ainvoke(init, config={"recursion_limit": 50})
+        finally:
+            # Always unblock the consumer, even if a node raised.
+            await emit.put(SENTINEL)
+
+    graph_task = asyncio.create_task(_run_graph())
+    try:
+        while True:
+            ev = await emit.get()
+            if ev is SENTINEL:
+                break
+            yield ev
+        await graph_task  # surface any node exception
+    finally:
+        # Barge-in / caller cancellation: tear down the in-flight graph so the
+        # active LLM/tool call is cancelled. Memory/history writes live in the
+        # caller AFTER this generator completes, so a cancelled turn persists
+        # nothing — identical to the previous behaviour.
+        if not graph_task.done():
+            graph_task.cancel()
+            try:
+                await graph_task
+            except (asyncio.CancelledError, Exception):
+                pass
 
 
 class ChannelRequest(BaseModel):
     text: str
     user_id: str = "unknown"       # external channel ID (e.g. Telegram chat_id)
     source: str = "unknown"
-    app_user_id: str | None = None  # ProjectParrot user_id (for per-user memory)
+    app_user_id: str | None = None  # project mocha user_id (for per-user memory)
 
 
 class TtsRequest(BaseModel):
@@ -1528,10 +1337,8 @@ async def _on_startup():
     asyncio.create_task(_cache_rewarm_loop())
     asyncio.create_task(_start_channels())
     asyncio.create_task(_start_agent_loop())
-    asyncio.create_task(_start_shiro())
 
 
-_shiro_agent = None
 _agent_loop_instance = None
 
 
@@ -1542,33 +1349,10 @@ def get_agent_loop():
 
 @app.on_event("shutdown")
 async def _on_shutdown():
-    if _shiro_agent:
-        await _shiro_agent.stop()
     if _agent_loop_instance:
         await _agent_loop_instance.stop()
     await call_log.close_pool()
     await llm_client.close()
-
-
-async def _start_shiro():
-    """Start Shiro coaching agent if enabled."""
-    global _shiro_agent
-    await asyncio.sleep(5)  # let PG pool and other services init first
-    shiro_cfg = full_config.get("shiro", {})
-    if not shiro_cfg.get("enabled"):
-        log.info("Shiro: disabled in config")
-        return
-    call_log_dsn = full_config.get("call_log", {}).get("dsn", "")
-    if not call_log_dsn:
-        log.warning("Shiro: call_log.dsn not configured — agent disabled")
-        return
-    try:
-        from shiro.agent import ShiroAgent
-        _shiro_agent = ShiroAgent(shiro_cfg, full_config.get("llm", {}), call_log_dsn)
-        await _shiro_agent.start()
-        log.info("Shiro coaching agent started")
-    except Exception as exc:
-        log.error("Failed to start Shiro: %s", exc)
 
 
 async def _init_call_log():
@@ -2594,6 +2378,11 @@ async def chat_stream(request: Request, text: str, client_id: str = "",
                 etype = ev.get("type")
                 if etype == "thinking_delta":
                     yield f"data: {json.dumps(ev)}\n\n"
+                elif etype == "reads_debug":
+                    # Mocha's emotional read of the user. Forwarded to the
+                    # frontend so a debug overlay can display it; not piped
+                    # to TTS.
+                    yield f"data: {json.dumps(ev)}\n\n"
                 elif etype == "emotion":
                     yield f"data: {json.dumps(ev)}\n\n"
                 elif etype == "gesture":
@@ -3028,23 +2817,6 @@ async def admin_clear_memory(request: Request):
     except Exception as exc:
         log.error("Failed to clear memory (window=%s): %s", window, exc)
         raise HTTPException(status_code=500, detail=str(exc))
-
-
-@app.post("/admin/shiro/toggle")
-async def admin_shiro_toggle():
-    """Start or stop the Shiro coaching agent at runtime."""
-    global _shiro_agent
-    if _shiro_agent is not None:
-        await _shiro_agent.stop()
-        _shiro_agent = None
-        log.info("Shiro stopped via admin endpoint")
-        await _broadcast_monitor({"type": "shiro_state", "running": False})
-        return JSONResponse({"status": "stopped"})
-    else:
-        asyncio.create_task(_start_shiro())
-        log.info("Shiro start requested via admin endpoint")
-        await _broadcast_monitor({"type": "shiro_state", "running": True})
-        return JSONResponse({"status": "starting"})
 
 
 @app.post("/admin/tts/restart")
@@ -4202,16 +3974,13 @@ async def monitor_ws(ws: WebSocket):
         }))
     # Send current echo mode so the dashboard toggle initialises correctly
     await ws.send_text(json.dumps({"type": "echo_mode", "mode": LIVE_ECHO_MODE}))
-    # Send Shiro running state
-    await ws.send_text(json.dumps({"type": "shiro_state", "running": _shiro_agent is not None}))
     # Send current config values for Config tab
     await ws.send_text(json.dumps({
         "type": "config_state",
         "vad_final_ms": _cfg_vad_final_ms,
         "vad_interim_ms": _cfg_vad_interim_ms,
         "llm_temperature": getattr(llm_client, "default_temperature", 0.8),
-        "pass1_history": COMPLEXITY_SHORT_HISTORY,
-        "pass2_history": MAX_HISTORY,
+        "history_size": MAX_HISTORY,
     }))
 
     try:
@@ -4258,7 +4027,7 @@ async def _handle_monitor_command(msg: dict) -> None:
     """Handle config commands sent from the dashboard monitor."""
     global LIVE_ECHO_MODE, MUTE_MIC_WHILE_AGENT_TALKING
     global _cfg_vad_final_ms, _cfg_vad_interim_ms
-    global COMPLEXITY_SHORT_HISTORY, MAX_HISTORY
+    global MAX_HISTORY
 
     if msg.get("type") != "config_update":
         return
@@ -4302,15 +4071,12 @@ async def _handle_monitor_command(msg: dict) -> None:
         _persist_config("llm.temperature", float(value))
         log.info("LLM temperature changed via dashboard: %.2f", llm_client.default_temperature)
 
-    elif key == "pass1_history":
-        COMPLEXITY_SHORT_HISTORY = max(1, int(value))
-        _persist_config("llm.complexity_routing.short_history", COMPLEXITY_SHORT_HISTORY)
-        log.info("Pass 1 history changed via dashboard: %d", COMPLEXITY_SHORT_HISTORY)
-
-    elif key == "pass2_history":
+    elif key in ("history_size", "pass2_history"):
+        # pass2_history kept as alias for backward compat with the dashboard
+        # frontend until that's renamed to history_size.
         MAX_HISTORY = max(1, int(value))
         _persist_config("memory.short_term_limit", MAX_HISTORY)
-        log.info("Pass 2 history changed via dashboard: %d", MAX_HISTORY)
+        log.info("History size changed via dashboard: %d", MAX_HISTORY)
 
 
 @app.get("/monitor", include_in_schema=False)

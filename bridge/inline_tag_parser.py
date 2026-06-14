@@ -2,11 +2,11 @@
 
 The LLM emits plaintext sprinkled with tags:
 
+    <reads>STATE</reads>
     <emotion>ID</emotion>
     <gesture>FUNCTION_NAME</gesture>
     <tool_call name="TOOL">arguments_payload</tool_call>
-    <escalate/>
-    <think>reasoning...</think>            # Qwen3 passthrough, emitted as thinking_delta
+    <think>reasoning...</think>            # Qwen3 passthrough (kept for compat; ignored on Llama)
 
 The parser consumes tokens incrementally via ``feed(chunk)`` and returns a list
 of events. Call ``finish()`` at end-of-stream to flush any trailing buffer.
@@ -14,10 +14,10 @@ of events. Call ``finish()`` at end-of-stream to flush any trailing buffer.
 Event kinds:
     {"kind": "text_delta",     "text": str}
     {"kind": "thinking_delta", "text": str}
+    {"kind": "reads",          "state": str}
     {"kind": "emotion",        "id":   str}
     {"kind": "gesture",        "name": str}
     {"kind": "tool_call",      "name": str, "arguments": str, "id": str}
-    {"kind": "escalate"}
     {"kind": "flush"}                      # sentence terminator or tag boundary
 
 Design:
@@ -41,13 +41,13 @@ from typing import Optional
 
 log = logging.getLogger(__name__)
 
-_KNOWN_TAGS = frozenset({"emotion", "gesture", "tool_call", "escalate", "think"})
-_SIMPLE_BODY_TAGS = frozenset({"emotion", "gesture"})  # close by exact </name>
+_KNOWN_TAGS = frozenset({"reads", "emotion", "gesture", "tool_call", "think"})
+_SIMPLE_BODY_TAGS = frozenset({"reads", "emotion", "gesture"})  # close by exact </name>
 _MAX_TAG_LOOKAHEAD = 128
 _SENTENCE_TERMINATORS = frozenset(".!?")
 
 _TAG_OPEN_RE = re.compile(
-    r"<\s*(/?)\s*(emotion|gesture|tool_call|escalate|think)\s*"
+    r"<\s*(/?)\s*(reads|emotion|gesture|tool_call|think)\s*"
     r"(?:name\s*=\s*\"([^\"]*)\")?\s*(/?)\s*>",
     re.IGNORECASE,
 )
@@ -59,6 +59,7 @@ class _State(Enum):
     EMOTION_BODY = 3
     GESTURE_BODY = 4
     TOOL_CALL_BODY = 5
+    READS_BODY = 6
 
 
 class InlineTagParser:
@@ -125,9 +126,10 @@ class InlineTagParser:
             self._body_accum = ""
             self._tool_call_name = None
             self._state = _State.TEXT
-        elif self._state in (_State.EMOTION_BODY, _State.GESTURE_BODY):
+        elif self._state in (_State.EMOTION_BODY, _State.GESTURE_BODY, _State.READS_BODY):
             # Stream ended inside a simple tag body — the body is a short ID
-            # (emotion name or gesture function). Treat it as an implicit close.
+            # (emotion name, gesture function, or reads state). Treat it as
+            # an implicit close.
             tag = _state_to_tag(self._state)
             body = self._body_accum.strip()
             if body:
@@ -135,6 +137,8 @@ class InlineTagParser:
                     self._pending.append({"kind": "emotion", "id": body})
                 elif tag == "gesture":
                     self._pending.append({"kind": "gesture", "name": body})
+                elif tag == "reads":
+                    self._pending.append({"kind": "reads", "state": body})
                 self._emit_flush_on_tag_boundary()
                 log.info("inline-tag: stream ended inside <%s>; implicit close (value=%r)",
                          tag, body)
@@ -240,6 +244,9 @@ class InlineTagParser:
             elif self._state == _State.GESTURE_BODY:
                 if not self._process_body("gesture"):
                     return
+            elif self._state == _State.READS_BODY:
+                if not self._process_body("reads"):
+                    return
             elif self._state == _State.TOOL_CALL_BODY:
                 if not self._process_body("tool_call"):
                     return
@@ -276,10 +283,7 @@ class InlineTagParser:
                 return True
 
             if is_self_close:
-                if tag == "escalate":
-                    self._emit_flush_on_tag_boundary()
-                    self._pending.append({"kind": "escalate"})
-                elif tag == "tool_call":
+                if tag == "tool_call":
                     # Self-closing tool_call with no body — the LLM treats
                     # no-arg tools like show_diary as `<tool_call name="X"/>`.
                     # Fire with empty arguments so the executor gets a chance.
@@ -294,7 +298,7 @@ class InlineTagParser:
                     else:
                         log.debug("inline-tag: self-closing <tool_call/> without name; ignored")
                 else:
-                    # Self-closing emotion/gesture/think — ignore content, emit nothing
+                    # Self-closing reads/emotion/gesture/think — ignore content, emit nothing
                     log.debug("inline-tag: self-closing <%s/> ignored", tag)
                 self._buf = self._buf[end:]
                 return True
@@ -304,6 +308,8 @@ class InlineTagParser:
             self._body_accum = ""
             if tag == "think":
                 self._state = _State.THINK_BODY
+            elif tag == "reads":
+                self._state = _State.READS_BODY
             elif tag == "emotion":
                 self._state = _State.EMOTION_BODY
             elif tag == "gesture":
@@ -311,10 +317,6 @@ class InlineTagParser:
             elif tag == "tool_call":
                 self._state = _State.TOOL_CALL_BODY
                 self._tool_call_name = attr_name or ""
-            elif tag == "escalate":
-                # Opening <escalate> without self-close — treat as self-close
-                self._pending.append({"kind": "escalate"})
-                self._state = _State.TEXT
             self._buf = self._buf[end:]
             return True
 
@@ -344,10 +346,10 @@ class InlineTagParser:
         close_re = re.compile(rf"<\s*/\s*{tag}\s*>", re.IGNORECASE)
         close_m = close_re.search(self._buf)
 
-        # For emotion/gesture: a new open tag of the same type auto-closes the
-        # active one (no-nesting rule). Prefer reopen when it comes BEFORE close.
+        # For reads/emotion/gesture: a new open tag of the same type auto-closes
+        # the active one (no-nesting rule). Prefer reopen when it comes BEFORE close.
         reopen_m = None
-        if tag in ("emotion", "gesture"):
+        if tag in ("reads", "emotion", "gesture"):
             reopen_re = re.compile(rf"<\s*{tag}\s*>", re.IGNORECASE)
             reopen_m = reopen_re.search(self._buf)
 
@@ -386,6 +388,10 @@ class InlineTagParser:
         if tag == "think":
             if self._body_accum:
                 self._pending.append({"kind": "thinking_delta", "text": self._body_accum})
+        elif tag == "reads":
+            if body:
+                self._pending.append({"kind": "reads", "state": body})
+                self._emit_flush_on_tag_boundary()
         elif tag == "emotion":
             if body:
                 self._pending.append({"kind": "emotion", "id": body})
@@ -412,6 +418,7 @@ class InlineTagParser:
 def _state_to_tag(s: _State) -> str:
     return {
         _State.THINK_BODY: "think",
+        _State.READS_BODY: "reads",
         _State.EMOTION_BODY: "emotion",
         _State.GESTURE_BODY: "gesture",
         _State.TOOL_CALL_BODY: "tool_call",

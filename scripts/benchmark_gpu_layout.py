@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-A/B benchmark: compare two GPU layouts for the Parrot Assistant pipeline.
+A/B benchmark: compare two GPU layouts for the project mocha pipeline.
 
 NOTE: Both layouts are now historical. The project has moved to single-GPU mode
 (all services on Blackwell GPU 0). This script is kept for reference/regression testing.

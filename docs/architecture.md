@@ -1,4 +1,4 @@
-# ProjectParrot — System Architecture
+# project mocha — System Architecture
 
 ## 1. High-Level Overview
 

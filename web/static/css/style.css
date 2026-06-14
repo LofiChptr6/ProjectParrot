@@ -2005,22 +2005,66 @@ body.mocha-away .mocha-away-pill { display: block; }
     to   { background-position: 0 30px; }
 }
 
-/* Snow: similar but bigger, slower, white circles */
+/* Snow — 3 parallax layers: far (small/slow), mid, near (large/fast) */
 .wx-fx-snow {
     background-image:
-        radial-gradient(circle at 10% 10%, white 1.4px, transparent 2px),
-        radial-gradient(circle at 30% 40%, white 1.2px, transparent 1.8px),
-        radial-gradient(circle at 60% 20%, white 1.6px, transparent 2.2px),
-        radial-gradient(circle at 80% 60%, white 1.2px, transparent 1.8px),
-        radial-gradient(circle at 45% 80%, white 1.4px, transparent 2px),
-        radial-gradient(circle at 90% 30%, white 1.2px, transparent 1.8px);
-    background-size: 200px 200px;
-    animation: wx-snow-fall 9s linear infinite;
-    opacity: 0.85;
+        radial-gradient(circle at  8% 15%, rgba(255,255,255,.90)  .9px, transparent 1.3px),
+        radial-gradient(circle at 25% 55%, rgba(255,255,255,.80)  .8px, transparent 1.2px),
+        radial-gradient(circle at 42%  8%, rgba(255,255,255,.95) 1.0px, transparent 1.4px),
+        radial-gradient(circle at 58% 38%, rgba(255,255,255,.70)  .9px, transparent 1.3px),
+        radial-gradient(circle at 72% 72%, rgba(255,255,255,.85)  .8px, transparent 1.2px),
+        radial-gradient(circle at 88% 22%, rgba(255,255,255,.90) 1.0px, transparent 1.4px),
+        radial-gradient(circle at 15% 85%, rgba(255,255,255,.75)  .9px, transparent 1.3px),
+        radial-gradient(circle at 35% 68%, rgba(255,255,255,.85)  .8px, transparent 1.2px),
+        radial-gradient(circle at 65% 92%, rgba(255,255,255,.90) 1.0px, transparent 1.4px),
+        radial-gradient(circle at 82% 48%, rgba(255,255,255,.80)  .9px, transparent 1.3px),
+        radial-gradient(circle at 50% 30%, rgba(255,255,255,.85)  .8px, transparent 1.2px),
+        radial-gradient(circle at 95% 78%, rgba(255,255,255,.90) 1.0px, transparent 1.4px);
+    background-size: 120px 120px;
+    animation: wx-snow-far 14s linear infinite;
 }
-@keyframes wx-snow-fall {
-    from { background-position: 0 -200px; }
-    to   { background-position: 60px 200px; }
+.wx-fx-snow::before {
+    content: '';
+    position: absolute; inset: 0;
+    background-image:
+        radial-gradient(circle at 12% 20%, rgba(255,255,255,.85) 1.5px, transparent 2.0px),
+        radial-gradient(circle at 35% 55%, rgba(255,255,255,.75) 1.8px, transparent 2.3px),
+        radial-gradient(circle at 55% 12%, rgba(255,255,255,.90) 1.6px, transparent 2.1px),
+        radial-gradient(circle at 78% 40%, rgba(255,255,255,.80) 1.5px, transparent 2.0px),
+        radial-gradient(circle at 20% 78%, rgba(255,255,255,.85) 1.8px, transparent 2.3px),
+        radial-gradient(circle at 48% 88%, rgba(255,255,255,.90) 1.5px, transparent 2.0px),
+        radial-gradient(circle at 70% 68%, rgba(255,255,255,.75) 1.6px, transparent 2.1px),
+        radial-gradient(circle at 90% 25%, rgba(255,255,255,.85) 1.8px, transparent 2.3px),
+        radial-gradient(circle at  5% 45%, rgba(255,255,255,.80) 1.5px, transparent 2.0px),
+        radial-gradient(circle at 62% 30%, rgba(255,255,255,.90) 1.6px, transparent 2.1px);
+    background-size: 200px 200px;
+    animation: wx-snow-mid 9s linear infinite;
+}
+.wx-fx-snow::after {
+    content: '';
+    position: absolute; inset: 0;
+    background-image:
+        radial-gradient(circle at 15% 25%, rgba(255,255,255,.80) 2.5px, transparent 3.2px),
+        radial-gradient(circle at 40% 65%, rgba(255,255,255,.70) 3.0px, transparent 3.8px),
+        radial-gradient(circle at 68% 15%, rgba(255,255,255,.85) 2.8px, transparent 3.5px),
+        radial-gradient(circle at 85% 50%, rgba(255,255,255,.75) 2.5px, transparent 3.2px),
+        radial-gradient(circle at 25% 85%, rgba(255,255,255,.80) 3.2px, transparent 4.0px),
+        radial-gradient(circle at 55% 40%, rgba(255,255,255,.70) 2.5px, transparent 3.2px),
+        radial-gradient(circle at 92% 80%, rgba(255,255,255,.85) 2.8px, transparent 3.5px);
+    background-size: 300px 300px;
+    animation: wx-snow-near 5s linear infinite;
+}
+@keyframes wx-snow-far {
+    from { background-position:  20px -120px; }
+    to   { background-position: -20px  120px; }
+}
+@keyframes wx-snow-mid {
+    from { background-position:   0   -200px; }
+    to   { background-position:  50px  200px; }
+}
+@keyframes wx-snow-near {
+    from { background-position:  60px -300px; }
+    to   { background-position:   0    300px; }
 }
 
 /* Fog: drifting horizontal bands of soft light, low contrast */

@@ -21,7 +21,7 @@ import sys
 import httpx
 
 
-DEFAULT_URL = "http://127.0.0.1:8000/admin/eval"
+DEFAULT_URL = "http://127.0.0.1:8090/admin/eval"
 
 
 def _pretty(resp: dict) -> None:

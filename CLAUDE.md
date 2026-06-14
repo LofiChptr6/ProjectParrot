@@ -1,9 +1,39 @@
-# ProjectParrot — Claude Code Instructions
+# project mocha — Claude Code Instructions
 
-ProjectParrot is a real-time conversational AI system with three agents:
-- **Mocha**: The main conversational agent (3D character with voice, emotions, animations)
-- **Nori**: Mocha's research analyst sub-agent (fetches data, builds visuals, writes narration)
-- **Shiro**: A coaching meta-agent that analyzes Mocha's conversations and proposes improvements
+project mocha is a real-time conversational AI character (3D VRM + voice +
+emotions + gestures), co-located inside the **opus trading** desk (ProjectCorvus)
+as a morale companion. It is a single agent — **Mocha**. (The former Nori
+research sub-agent, Shiro coaching meta-agent, and Hana design critic were
+removed; Mocha now calls data/UI tools directly.)
+
+## Where it lives & how it runs
+
+- **Location**: `opus trading/project_mocha/` — its own subtree + git repo,
+  ignored by Corvus's `.gitignore` (never embedded as a submodule).
+- **Services** (own processes via `./start.sh all`): bridge `:8090`, STT `:8091`,
+  TTS `:8092`, web `:8080`. (Remapped off 8000–8002, which opus trading owns.)
+- **LLM**: Mocha does **not** run her own vLLM — she SHARES opus trading's vLLM
+  (`Qwen/Qwen3-32B-FP8` at `:8000/v1`). A rate-limit + circuit-breaker in
+  `bridge/llm_client.py` bounds her load so a Mocha bug can never starve
+  Corvus's trading inference (the prime directive: **Mocha must never impact
+  Corvus**).
+- **Front door**: the opus dashboard (`obs/dashboard.py`) opens on a public
+  Mocha landing (embeds `:8080/gadget`); an "Enter trading desk" button leads
+  to the password-gated desk. The dashboard never imports Mocha code.
+
+## Orchestration — LangGraph (bridge/graph.py)
+
+Mocha's conversational loop is a LangGraph `StateGraph` (replaced the old
+hand-rolled ReAct loop):
+
+    build_messages → llm_pass → log_pass → {run_tools ⇄ llm_pass | finalize} → END
+
+- State: `bridge/graph_state.py` (`TurnState`).
+- The streaming LLM call + inline-tag parser stay inside `llm_pass`; per-turn UI
+  events are pushed to an `asyncio.Queue` and relayed by the thin wrapper
+  `bridge/server.py:_run_inline_turn` (its event contract is unchanged, so all
+  callers — `/chat/stream`, `/admin/eval`, `/channel`, `/voice`, `/ws` live —
+  are untouched). Tools are still inline `<tool_call>` tags, not function-calling.
 
 ## Tool & Panel Protocol
 
@@ -121,18 +151,15 @@ LIMIT 5;
 | Behavior rules | `character/behaviors.yaml` |
 | Emotion definitions | `character/emotions.yaml` |
 | System prompt builder | `character/context.py` |
-| Bridge server | `bridge/server.py` |
-| LLM client | `bridge/llm_client.py` |
+| Bridge server (HTTP/WS + turn wrapper) | `bridge/server.py` |
+| **Conversational graph (LangGraph)** | `bridge/graph.py` |
+| **Graph state** | `bridge/graph_state.py` |
+| LLM client (+ shared-vLLM isolation guard) | `bridge/llm_client.py` |
 | PG call logger | `bridge/call_log.py` |
 | Tool schemas | `tools/registry.py` |
 | Tool execution | `tools/executor.py` |
 | Custom tools dir | `tools/custom/` |
-| Nori agent | `nori/agent.py` |
-| Nori personality | `nori/soul.md` |
-| Mocha→Nori bridge | `tools/custom/ask_nori.py` |
-| Shiro agent | `shiro/agent.py` |
-| Shiro analyzer | `shiro/analyzer.py` |
-| Shiro PG reader | `shiro/pg_reader.py` |
+| opus trading proxies (read-only) | `tools/custom/_opus_proxy.py`, `_opus_introspect.py`, `get_trading_briefing.py` |
 | Animation functions | `character/animation_functions.csv` |
 | VRM animation controller | `web/static/js/animation-controller.js` |
 | Central config | `config.yaml` |
@@ -161,28 +188,13 @@ per-bone quaternion retargeting to VRM.
 - `character/soul.md` and `character/behaviors.yaml` are re-read on every LLM call — changes take effect immediately, no restart needed.
 - Tool definitions follow OpenAI function-calling schema format.
 - Custom tools in `tools/custom/` must export `TOOL_DEF` (dict) and `async def execute(args: dict) -> str`.
-- Hot-reload custom tools: call `POST http://127.0.0.1:8000/admin/reload-tools` or import and call `tools.registry.reload_custom_tools()`.
-- Log all LLM calls with `CallContext(triggered_by="shiro")` via `bridge.call_log.log_call()`.
+- Hot-reload custom tools: call `POST http://127.0.0.1:8090/admin/reload-tools` or import and call `tools.registry.reload_custom_tools()`.
+- Log all LLM calls via `bridge.call_log.log_call()` with an appropriate `CallContext(triggered_by=...)`.
 
-## Acting as Manual Shiro
-
-When asked to analyze or improve Mocha's conversations:
-
-1. **Query PG** for recent conversations using the SQL above
-2. **Read** current `character/soul.md` and `character/behaviors.yaml`
-3. **Analyze**: What did the user want? Did Mocha deliver? What patterns emerge?
-4. **Propose** specific changes with clear rationale:
-   - New behavior rules (append to `behaviors.yaml`)
-   - Soul edits (modify sections in `soul.md`)
-   - New tools (write to `tools/custom/<name>.py`)
-5. **Always explain reasoning** before making any changes
-6. **Never modify** `bridge/server.py` or `bridge/llm_client.py` without explicit permission
-7. **Test changes** by checking that `character/context.py:build_system_prompt()` can still assemble the prompt
-
-### Custom Tool Template
+## Custom Tool Template
 
 ```python
-"""Custom tool: example_tool — created by Shiro."""
+"""Custom tool: example_tool."""
 
 TOOL_DEF = {
     "type": "function",

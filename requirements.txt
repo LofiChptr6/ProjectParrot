@@ -1,4 +1,4 @@
-# Parrot Assistant — Top-level dependencies
+# project mocha — Top-level dependencies
 # Install: pip install -r requirements.txt
 #
 # NOTE: Install PyTorch with CUDA first. For Blackwell GPUs (RTX 50-series, PRO 6000),
@@ -36,6 +36,11 @@ pyyaml>=6.0.2
 pydantic>=2.9.0
 numpy>=1.26.0
 
+# --- Orchestration (LangGraph StateGraph for the conversational loop) ---
+# Versions aligned with the co-located opus-trading project's pins.
+langgraph>=0.3,<0.5
+langchain-core>=0.3,<0.4
+
 # --- Channels (Telegram, Discord, CLI) ---
 python-telegram-bot[ext]>=20.0
 discord.py>=2.0
@@ -59,6 +64,3 @@ bcrypt>=4.0.0
 # --- Utilities ---
 python-multipart>=0.0.12
 aiofiles>=24.1.0
-
-# --- Hana (vision sub-agent, Anthropic SDK) ---
-anthropic>=0.42.0

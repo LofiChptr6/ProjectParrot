@@ -1,5 +1,5 @@
 /**
- * ui-orchestrator.js — Timing synchronization for ProjectParrot
+ * ui-orchestrator.js — Timing synchronization for project mocha
  *
  * Holds ui_command messages (show_slides, show_card, etc.) in a staging
  * queue until Mocha actually starts speaking. This prevents presentations

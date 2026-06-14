@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
-# ProjectParrot — First-time setup
+# project mocha — First-time setup
 #
 # GPU-heavy services (vLLM) run in Docker with explicit GPU reservation.
 # Python services (STT, TTS, memory, animation, bridge) run natively.
@@ -138,7 +138,7 @@ echo
 
 # ── Done ──────────────────────────────────────────────────────────
 green "╔══════════════════════════════════════════════════════════════╗"
-green "║  ProjectParrot setup complete!                              ║"
+green "║  project mocha setup complete!                              ║"
 green "║                                                             ║"
 green "║  vLLM (Docker):  http://127.0.0.1:8800  (GPU ${PRO6000_GPU_INDEX})         ║"
 green "║                                                             ║"

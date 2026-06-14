@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Parrot Dashboard</title>
+<title>Mocha Dashboard</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Space+Grotesk:wght@400;600;700&display=swap');
 
@@ -589,7 +589,7 @@
 
 <header>
   <div class="logo">&#x1F99C;</div>
-  <h1>Parrot Dashboard</h1>
+  <h1>Mocha Dashboard</h1>
   <div class="status">
     <span class="dot" id="ws-dot"></span>
     <span id="ws-label">connecting...</span>
@@ -1044,8 +1044,8 @@ function renderTicks(maxMs) {
 let healthTimer = null;
 
 const SVC_META = {
-  stt:       { label: 'STT (Whisper)',            port: 8001 },
-  tts:       { label: 'TTS (F5-TTS)',             port: 8002 },
+  stt:       { label: 'STT (Whisper)',            port: 8091 },
+  tts:       { label: 'TTS (F5-TTS)',             port: 8092 },
   memory:    { label: 'Memory (mem0)',            port: null },  // in-process
   animation: { label: 'Animation (fbx CSV)',      port: null },  // in-process
   llm:       { label: 'LLM (vLLM)',               port: 8800 },

@@ -2714,7 +2714,7 @@ async function init() {
         const resp = await fetch('/api/config');
         if (resp.ok) {
             const cfg = await resp.json();
-            bridgePort = cfg.bridge_port || cfg.port || 8000;
+            bridgePort = cfg.bridge_port || cfg.port || 8090;
         }
     } catch (e) {
         console.warn('/api/config not available, falling back to defaults');
@@ -2725,7 +2725,7 @@ async function init() {
         bridgePort = BRIDGE_PORT;
     }
     if (!bridgePort) {
-        bridgePort = 8000;
+        bridgePort = 8090;
     }
 
     // Bridge host defaults to the page hostname

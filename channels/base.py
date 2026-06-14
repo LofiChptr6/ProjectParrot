@@ -47,7 +47,7 @@ class ChannelRegistry:
 
     def __init__(self) -> None:
         self._channels: dict[str, Channel] = {}
-        # Per-user Telegram bots, keyed by ProjectParrot app_user_id.
+        # Per-user Telegram bots, keyed by project mocha app_user_id.
         self._user_bots: dict[str, Channel] = {}
 
     def register(self, channel: Channel) -> None:

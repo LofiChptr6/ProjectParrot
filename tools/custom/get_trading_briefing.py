@@ -12,7 +12,8 @@ import asyncio
 import json
 from pathlib import Path
 
-OPUS_DIR = Path("/home/tianyizhang/opus trading")
+OPUS_DIR = Path(__file__).resolve().parents[3]  # project_mocha/tools/custom -> opus trading root
+assert (OPUS_DIR / "mcp_server.py").exists(), f"opus root not found at {OPUS_DIR}"
 OPUS_PY = OPUS_DIR / ".venv" / "bin" / "python"
 SUBPROCESS_TIMEOUT_SEC = 30.0
 PROXY_CLIENT_ID = "42"

@@ -30,18 +30,16 @@ TOOL_DEF = {
                 },
                 "action": {
                     "type": "string",
-                    "enum": ["reminder", "nori_research", "prompt"],
+                    "enum": ["reminder", "prompt"],
                     "description": (
                         "reminder = deliver plain text. "
-                        "nori_research = have Nori investigate and queue the finding. "
                         "prompt = send text as if Ika asked it."
                     ),
                 },
                 "params": {
                     "type": "object",
                     "description": (
-                        "Action-specific. reminder: {text: '...'}. "
-                        "nori_research: {topic: '...'}. prompt: {text: '...'}."
+                        "Action-specific. reminder: {text: '...'}. prompt: {text: '...'}."
                     ),
                 },
                 "description": {

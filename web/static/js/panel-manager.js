@@ -1,5 +1,5 @@
 /**
- * panel-manager.js — Layout orchestration for ProjectParrot
+ * panel-manager.js — Layout orchestration for project mocha
  *
  * Manages: chat sidebar toggle, panel drag/resize, responsive breakpoints,
  * dynamic camera computation, localStorage persistence.

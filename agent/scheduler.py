@@ -22,7 +22,7 @@ class ScheduledJob:
     enabled: bool = True
     created_at: Optional[str] = None        # ISO8601; set when created at runtime
     created_by: Optional[str] = None        # "config" | "mocha" | "nori" | "user"
-    user_id: Optional[str] = None           # ProjectParrot user who owns this job
+    user_id: Optional[str] = None           # project mocha user who owns this job
 
     @classmethod
     def from_dict(cls, data: dict) -> "ScheduledJob":

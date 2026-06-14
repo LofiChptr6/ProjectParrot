@@ -107,27 +107,28 @@ def test_mixed_emotion_and_gesture():
 
 def test_tool_call_with_body():
     p = InlineTagParser()
-    ev = _collect(p, '<tool_call name="ask_nori">caveats in investing in AAPL</tool_call>')
+    ev = _collect(p, '<tool_call name="get_stock_data">caveats in investing in AAPL</tool_call>')
     tc = next(e for e in ev if e["kind"] == "tool_call")
-    assert tc["name"] == "ask_nori"
+    assert tc["name"] == "get_stock_data"
     assert tc["arguments"] == "caveats in investing in AAPL"
     assert tc["id"].startswith("tc_")
 
 
-def test_escalate_self_close():
+def test_reads_tag():
     p = InlineTagParser()
-    ev = _collect(p, "<escalate/>")
+    ev = _collect(p, "<reads>venting</reads>Hi.")
     kinds = _kinds(ev)
-    assert "escalate" in kinds
+    assert "reads" in kinds
+    reads = next(e for e in ev if e["kind"] == "reads")
+    assert reads["state"] == "venting"
 
 
-def test_escalate_open_close():
-    """<escalate>...</escalate> variant — opening treated as self-close."""
+def test_reads_first_then_emotion():
+    """<reads> as first token, before <emotion>."""
     p = InlineTagParser()
-    ev = _collect(p, "Before<escalate/>")
-    kinds = _kinds(ev)
-    assert "escalate" in kinds
-    assert _only_text(ev) == "Before"
+    ev = _collect(p, "<reads>curious</reads><emotion>happy</emotion><gesture>speak_normal</gesture>So.")
+    assert any(e["kind"] == "reads" and e["state"] == "curious" for e in ev)
+    assert any(e["kind"] == "emotion" and e["id"] == "happy" for e in ev)
 
 
 # --------------------------------------------------------------------------
@@ -162,13 +163,13 @@ def test_tag_split_across_chunks():
 
 def test_tool_call_split_across_chunks():
     p = InlineTagParser()
-    parts = ['<tool_call na', 'me="ask_nori', '">find', ' AAPL caveats</tool_call>']
+    parts = ['<tool_call na', 'me="get_stock_data', '">find', ' AAPL caveats</tool_call>']
     ev: list[dict] = []
     for part in parts:
         ev.extend(p.feed(part))
     ev.extend(p.finish())
     tc = next(e for e in ev if e["kind"] == "tool_call")
-    assert tc["name"] == "ask_nori"
+    assert tc["name"] == "get_stock_data"
     assert tc["arguments"] == "find AAPL caveats"
 
 
@@ -277,11 +278,11 @@ def test_unclosed_tool_call_fires_anyway():
     """LLM forgot </tool_call> — still fire the tool with what we have."""
     p = InlineTagParser()
     ev = _collect(p,
-        '<tool_call name="ask_nori">Current AAPL stock price and chart.'
+        '<tool_call name="get_stock_data">Current AAPL stock price and chart.'
     )
     tcs = [e for e in ev if e["kind"] == "tool_call"]
     assert len(tcs) == 1
-    assert tcs[0]["name"] == "ask_nori"
+    assert tcs[0]["name"] == "get_stock_data"
     assert "AAPL" in tcs[0]["arguments"]
     # Crucially, the body must NOT appear as literal text
     txt = _only_text(ev)
@@ -295,13 +296,13 @@ def test_unclosed_tool_call_with_preceding_speech():
     text = (
         "<emotion>thinking</emotion><gesture>speak_calm</gesture>"
         "One sec — checking what's new with Nvidia today."
-        '<tool_call name="ask_nori">Current performance and recent news on NVIDIA stock. Include a chart.'
+        '<tool_call name="get_stock_data">Current performance and recent news on NVIDIA stock. Include a chart.'
     )
     ev = _collect(p, text)
     kinds = _kinds(ev)
     assert "tool_call" in kinds
     tc = next(e for e in ev if e["kind"] == "tool_call")
-    assert tc["name"] == "ask_nori"
+    assert tc["name"] == "get_stock_data"
     assert "NVIDIA" in tc["arguments"]
     # The speech before the tool call should be preserved
     txt = _only_text(ev)
@@ -344,7 +345,7 @@ def test_users_canonical_example():
         "<emotion>neutral</emotion><gesture>pointing_finger_at_board</gesture>"
         "<emotion>happy</emotion><gesture>dance</gesture>"
         "Look here! it's a profit opportunity. Let me find in details "
-        '<tool_call name="ask_nori">caveats in investing in this stock</tool_call>'
+        '<tool_call name="get_stock_data">caveats in investing in this stock</tool_call>'
     )
     ev = _collect(p, text)
     emotions = [e["id"] for e in ev if e["kind"] == "emotion"]
@@ -353,7 +354,7 @@ def test_users_canonical_example():
     assert emotions == ["neutral", "happy"]
     assert gestures == ["pointing_finger_at_board", "dance"]
     assert len(tcs) == 1
-    assert tcs[0]["name"] == "ask_nori"
+    assert tcs[0]["name"] == "get_stock_data"
     assert "caveats" in tcs[0]["arguments"]
     txt = _only_text(ev)
     assert "profit opportunity" in txt

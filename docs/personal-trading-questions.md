@@ -15,7 +15,7 @@ This document enumerates the questions a user will *actually ask* about their st
 ## Design principles
 
 1. **One tool per question class, not one tool per question.** A user asking "why did agent X buy LMT?" and "why did the conviction change on LMT?" both want a position dossier — same tool, different focus.
-2. **Each tool returns a panel-ready envelope.** No string blobs that Mocha has to parse. The opus team owns the analysis; ProjectParrot owns the rendering.
+2. **Each tool returns a panel-ready envelope.** No string blobs that Mocha has to parse. The opus team owns the analysis; project mocha owns the rendering.
 3. **Panels carry insight, not raw fields.** Every tool should include a 1–3 sentence `analyst_note` field that Nori can use as the basis of her narration. This way the opus team — who knows the strategy best — gets to influence the framing, not just hand over rows.
 4. **Be okay returning "no data."** A graceful `markdown` slide that says "this position has no recorded thesis — likely a manual override on Mar 12" is far better than fabricating one.
 
@@ -238,7 +238,7 @@ If the opus team can only ship a few of these soon, I'd prioritize as:
 
 ---
 
-## ProjectParrot side: what we still need
+## project mocha side: what we still need
 
 Each new tool above will Just Work via the existing `__panel__` envelope detection in `tools/executor.py`. Two small things to add on this side, both already trivial:
 
@@ -251,7 +251,7 @@ Each new tool above will Just Work via the existing `__panel__` envelope detecti
 1. Is there a stable `agent_id` namespace? (e.g. `aerospace`, `macro`, `semis`) Or are agents identified by class name + instance?
 2. Do agents persist their thesis as text at entry time, or do we have to reconstruct from logs?
 3. Is there a "thesis health" check the agents run, or is that a new capability we'd ask for?
-4. What's the canonical timestamp for "since I last checked" — is this stored per-user on opus side, or do we pass it in from ProjectParrot?
+4. What's the canonical timestamp for "since I last checked" — is this stored per-user on opus side, or do we pass it in from project mocha?
 5. Are sector/factor exposures already computed somewhere, or would `get_risk_overview` need to compute on-the-fly?
 
 Answers to these shape which tools are 1-day builds vs 1-week builds.

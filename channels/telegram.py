@@ -36,7 +36,7 @@ class TelegramChannel(Channel):
     ):
         self._token = bot_token
         self._bridge_url = bridge_url.rstrip("/")
-        self._app_user_id = app_user_id  # ProjectParrot user_id this bot belongs to
+        self._app_user_id = app_user_id  # project mocha user_id this bot belongs to
         self._allowed_users = set(allowed_users) if allowed_users else None
         self._app: Optional[Application] = None
         self._http = httpx.AsyncClient(timeout=120.0)
@@ -49,7 +49,7 @@ class TelegramChannel(Channel):
     async def _handle_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if update.effective_chat:
             await update.effective_chat.send_message(
-                "Hey! I'm your Parrot assistant. Send me a message and I'll reply."
+                "Hey! I'm your Mocha assistant. Send me a message and I'll reply."
             )
 
     async def _handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

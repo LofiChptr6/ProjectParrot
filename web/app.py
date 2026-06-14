@@ -1,4 +1,4 @@
-"""Mocha Web App — Full browser-based frontend for ProjectParrot.
+"""Mocha Web App — Full browser-based frontend for project mocha.
 
 Serves static files and provides API endpoints for the web frontend.
 The frontend connects directly to the bridge WebSocket for communication.
@@ -22,7 +22,7 @@ import uvicorn
 
 ROOT = Path(__file__).resolve().parent.parent
 _cfg = yaml.safe_load((ROOT / "config.yaml").read_text())
-_bridge_port = _cfg.get("bridge", {}).get("port", 8000)
+_bridge_port = _cfg.get("bridge", {}).get("port", 8090)
 _web_port = _cfg.get("web", {}).get("port", 8080)
 
 app = FastAPI(title="Mocha Web")
@@ -93,6 +93,17 @@ async def index():
     return FileResponse(STATIC_DIR / "index.html", headers=_NO_CACHE_HEADERS)
 
 
+@app.get("/gadget")
+async def gadget():
+    """Stable, named entry point for embedding Mocha (full VRM + voice) as the
+    landing gadget on the opus-trading dashboard. Serves the same app as ``/``;
+    kept as a separate route so the dashboard has a stable embed URL and a
+    trimmed gadget view can be swapped in later without touching the dashboard.
+    All assets/APIs use absolute paths, so this renders identically to ``/``.
+    """
+    return FileResponse(STATIC_DIR / "index.html", headers=_NO_CACHE_HEADERS)
+
+
 @app.get("/login")
 async def login_page():
     return FileResponse(STATIC_DIR / "login.html", headers=_NO_CACHE_HEADERS)
@@ -129,8 +140,8 @@ async def health():
     """
     services = {
         "bridge": f"http://127.0.0.1:{_bridge_port}/health",
-        "stt": f"http://127.0.0.1:{_cfg.get('stt', {}).get('port', 8001)}/health",
-        "tts": f"http://127.0.0.1:{_cfg.get('tts', {}).get('port', 8002)}/health",
+        "stt": f"http://127.0.0.1:{_cfg.get('stt', {}).get('port', 8091)}/health",
+        "tts": f"http://127.0.0.1:{_cfg.get('tts', {}).get('port', 8092)}/health",
     }
     results = {}
     async with httpx.AsyncClient(timeout=2.0) as client:

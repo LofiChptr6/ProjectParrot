@@ -6,16 +6,16 @@ no HTTP, no globals. The bridge wires this into its endpoints.
 
 Event types:
     {"type": "thinking",    "text": str}       # <think>...</think> passthrough
+    {"type": "reads",       "state": str}      # one-word emotional read of user
     {"type": "emotion",     "id": str}
     {"type": "gesture",     "name": str}
     {"type": "speech_chunk","text": str}       # ready-for-TTS prose chunk
     {"type": "tool_call",   "name": str, "arguments": str, "id": str}
-    {"type": "escalate"}
     {"type": "end"}                            # last event before generator returns
 
 Speech chunking:
     - Flush on sentence terminator (.!?) followed by whitespace (via parser flush)
-    - Flush on tag boundary (emotion/gesture/tool_call/escalate arriving)
+    - Flush on tag boundary (reads/emotion/gesture/tool_call arriving)
     - Flush on soft-cap (180 chars) at a good break (,;:—) then whitespace
     - First-chunk aggressive flush: first .!? OR 12 words, whichever first
       (minimises TTFA)
@@ -180,6 +180,8 @@ async def drive_inline_stream(
                     yield _make_chunk(chunk)
             elif kind == "thinking_delta":
                 yield {"type": "thinking", "text": ev["text"]}
+            elif kind == "reads":
+                yield {"type": "reads", "state": ev["state"]}
             elif kind == "emotion":
                 for chunk in chunker.flush_on_tag():
                     yield _make_chunk(chunk)
@@ -197,10 +199,6 @@ async def drive_inline_stream(
                     "arguments": ev["arguments"],
                     "id": ev["id"],
                 }
-            elif kind == "escalate":
-                for chunk in chunker.flush_on_tag():
-                    yield _make_chunk(chunk)
-                yield {"type": "escalate"}
 
     # Drain parser
     for ev in parser.finish():
@@ -213,6 +211,8 @@ async def drive_inline_stream(
                 yield _make_chunk(chunk)
         elif kind == "thinking_delta":
             yield {"type": "thinking", "text": ev["text"]}
+        elif kind == "reads":
+            yield {"type": "reads", "state": ev["state"]}
         elif kind == "emotion":
             yield {"type": "emotion", "id": ev["id"]}
         elif kind == "gesture":
@@ -224,8 +224,6 @@ async def drive_inline_stream(
                 "arguments": ev["arguments"],
                 "id": ev["id"],
             }
-        elif kind == "escalate":
-            yield {"type": "escalate"}
 
     for chunk in chunker.flush_final():
         yield _make_chunk(chunk)

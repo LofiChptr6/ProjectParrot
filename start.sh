@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Parrot Assistant — Start all services
+# project mocha — Start all services
 # Usage: ./start.sh [all|stt|tts|bridge|stop|end|restart|status]
 #   (memory is in-process via mem0; animation is CSV-driven via fbx_functions —
 #    neither has a standalone service to start.)
@@ -109,7 +109,7 @@ stop_all() {
     done
 
     # Second: kill anything still listening on known ports (stale processes / no pidfile)
-    for port in 8000 8001 8002 8080; do
+    for port in 8090 8091 8092 8080; do
         squatter="$(ss -tlnp "sport = :$port" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | head -1 || true)"
         if [ -n "$squatter" ] && kill -0 "$squatter" 2>/dev/null; then
             echo "[port:$port] Killing leftover process $squatter"
@@ -119,7 +119,7 @@ stop_all() {
 }
 
 status() {
-    echo "=== Parrot Assistant Status ==="
+    echo "=== project mocha Status ==="
     for pidfile in "$PIDS_DIR"/*.pid; do
         [ -f "$pidfile" ] || continue
         name="$(basename "$pidfile" .pid)"
@@ -140,25 +140,25 @@ status() {
 case "${1:-all}" in
     all)
         activate_venv
-        start_service stt "stt.service:app" 8001
-        start_service tts "tts.service:app" 8002
+        start_service stt "stt.service:app" 8091
+        start_service tts "tts.service:app" 8092
         echo "  Waiting for STT/TTS models to load..."
         sleep 5
-        start_service bridge "bridge.server:app" 8000
+        start_service bridge "bridge.server:app" 8090
         start_service web "web.app:app" 8080
         echo ""
         echo "All services started.  (external_host=$EXTERNAL_HOST)"
-        echo "  Bridge:    http://$EXTERNAL_HOST:8000"
+        echo "  Bridge:    http://$EXTERNAL_HOST:8090"
         echo "  Web:       http://$EXTERNAL_HOST:8080  (dashboard)"
-        echo "  STT:       http://$INTERNAL_HOST:8001  (internal)"
-        echo "  TTS:       http://$INTERNAL_HOST:8002  (internal)"
+        echo "  STT:       http://$INTERNAL_HOST:8091  (internal)"
+        echo "  TTS:       http://$INTERNAL_HOST:8092  (internal)"
         echo "  Memory:    in-process (mem0, inside bridge)"
         echo "  Animation: in-process (fbx_functions CSV, inside bridge)"
         echo ""
-        echo "Health check: curl http://$INTERNAL_HOST:8000/health (waiting up to ~10s)"
+        echo "Health check: curl http://$INTERNAL_HOST:8090/health (waiting up to ~10s)"
         for i in {1..10}; do
-            if curl -fsS "http://$INTERNAL_HOST:8000/health" >/dev/null 2>&1; then
-                echo "Health OK: $(curl -sS "http://$INTERNAL_HOST:8000/health")"
+            if curl -fsS "http://$INTERNAL_HOST:8090/health" >/dev/null 2>&1; then
+                echo "Health OK: $(curl -sS "http://$INTERNAL_HOST:8090/health")"
                 break
             fi
             echo "  waiting for bridge... ($i/10)"
@@ -169,20 +169,20 @@ case "${1:-all}" in
         echo "  Telegram, Discord — set enabled: true + bot_token"
         echo "  CLI REPL — enabled by default (if bridge runs in foreground)"
         echo ""
-        echo "Dashboard: http://$EXTERNAL_HOST:8000/monitor"
+        echo "Dashboard: http://$EXTERNAL_HOST:8090/monitor"
         ;;
-    stt)       activate_venv; start_service stt "stt.service:app" 8001 ;;
-    tts)       activate_venv; start_service tts "tts.service:app" 8002 ;;
+    stt)       activate_venv; start_service stt "stt.service:app" 8091 ;;
+    tts)       activate_venv; start_service tts "tts.service:app" 8092 ;;
     web)       activate_venv; start_service web "web.app:app" 8080 ;;
     bridge)
         # Restart the bridge AND ensure the webapp is up. Cloudflare's tunnel
         # routes to port 8080 (the webapp), so leaving web dead while only
         # bridge runs gives a 502 to anyone hitting the public hostname.
         activate_venv
-        start_service bridge "bridge.server:app" 8000
+        start_service bridge "bridge.server:app" 8090
         start_service web "web.app:app" 8080
         echo ""
-        echo "Dashboard: http://$EXTERNAL_HOST:8000/monitor"
+        echo "Dashboard: http://$EXTERNAL_HOST:8090/monitor"
         ;;
     stop)   stop_all ;;
     end)    stop_all ;;

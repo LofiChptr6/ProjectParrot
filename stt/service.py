@@ -28,7 +28,7 @@ log = logging.getLogger("stt")
 ROOT = Path(__file__).resolve().parent.parent
 config = yaml.safe_load((ROOT / "config.yaml").read_text())["stt"]
 
-app = FastAPI(title="Parrot STT")
+app = FastAPI(title="Mocha STT")
 model: WhisperModel = None
 _align_model = None
 _align_tokenizer = None

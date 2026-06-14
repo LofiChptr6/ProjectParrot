@@ -41,7 +41,7 @@ log = logging.getLogger("tts")
 ROOT = Path(__file__).resolve().parent.parent
 config = yaml.safe_load((ROOT / "config.yaml").read_text())["tts"]
 
-app = FastAPI(title="Parrot TTS")
+app = FastAPI(title="Mocha TTS")
 tts_model = None
 
 

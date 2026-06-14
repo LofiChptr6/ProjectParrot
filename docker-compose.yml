@@ -1,87 +1,17 @@
-services:
-  vllm:
-    image: vllm/vllm-openai:latest
-    container_name: vllm
-    restart: unless-stopped
-    ports:
-      - "8800:8000"
-    volumes:
-      - huggingface_cache:/root/.cache/huggingface
-    environment:
-      # Pin to GPU 0 (RTX Pro 6000 Blackwell, 96 GB).
-      - CUDA_VISIBLE_DEVICES=0
-      # HuggingFace token for gated / private models
-      - HF_TOKEN=${HF_TOKEN:-}
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              device_ids: ["0"]
-              capabilities: [gpu]
-    # NOTE: --num-scheduler-steps / --speculative-model / --num-speculative-tokens
-    # were removed in newer vllm images (v0.8+). Speculative decoding can be
-    # reintroduced via --speculative-config '{"method":"...","model":"..."}'
-    # when we need the throughput back.
-    command:
-      - "--model"
-      - "Qwen/Qwen3-32B"
-      - "--quantization"
-      - "fp8"
-      # Qwen3-32B native max is 40960 (max_position_embeddings). Going above
-      # that requires --rope-scaling yarn, which costs quality at short ctx.
-      # 40960 = 25% over the old 32768 with zero quality cost.
-      - "--max-model-len"
-      - "40960"
-      - "--gpu-memory-utilization"
-      - "0.70"
-      - "--dtype"
-      - "half"
-      - "--enable-prefix-caching"
-      - "--max-num-seqs"
-      - "4"
-      - "--enable-chunked-prefill"
-      - "--max-num-batched-tokens"
-      - "4096"
-      - "--enable-auto-tool-choice"
-      - "--tool-call-parser"
-      - "hermes"
-      - "--port"
-      - "8000"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 15s
-      timeout: 10s
-      retries: 10
-      # Model download + load can take several minutes on first run
-      start_period: 300s
-
-  gesture:
-    build:
-      context: .
-      dockerfile: gesture/Dockerfile
-    container_name: gesture
-    restart: unless-stopped
-    ports:
-      - "8005:8005"
-    volumes:
-      - huggingface_cache:/app/.cache/huggingface
-    environment:
-      - CUDA_VISIBLE_DEVICES=0
-      - HF_TOKEN=${HF_TOKEN:-}
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              device_ids: ["0"]
-              capabilities: [gpu]
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8005/health"]
-      interval: 15s
-      timeout: 10s
-      retries: 5
-      start_period: 120s
-
-volumes:
-  huggingface_cache:
+# project mocha — no containers.
+#
+# Mocha used to run her own vLLM (Hermes-4-70B) and a gesture service here.
+# After co-locating inside "opus trading", both were removed:
+#
+#   • LLM       — Mocha now SHARES opus trading's already-running vLLM
+#                 (Qwen/Qwen3-32B-FP8 on http://127.0.0.1:8000/v1). Putting a
+#                 second LLM on the GPU is unnecessary and risks contending with
+#                 Corvus's trading inference. See config.yaml `llm.base_url` and
+#                 the rate-limit/circuit-breaker in bridge/llm_client.py.
+#   • gesture   — the build context (gesture/Dockerfile) never existed; the
+#                 service was already broken. Body-language is driven entirely by
+#                 the web app's clip-based animation controller (no GPU service).
+#
+# Mocha's own services (STT :8091, TTS :8092, bridge :8090, web :8080) run as
+# plain processes via ./start.sh — no Docker needed.
+services: {}

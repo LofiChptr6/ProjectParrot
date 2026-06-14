@@ -45,14 +45,14 @@ class CLIChannel(Channel):
         await self._http.aclose()
 
     async def send(self, text: str, user_id: Optional[str] = None) -> None:
-        console.print(Panel(Markdown(text), title="[bold cyan]Parrot[/]", border_style="cyan"))
+        console.print(Panel(Markdown(text), title="[bold cyan]Mocha[/]", border_style="cyan"))
 
     async def _repl(self) -> None:
         await asyncio.sleep(2)
         console.print()
         console.print(
             Panel(
-                Text("Parrot CLI — type a message and press Enter.  Ctrl+C to quit.", style="bold"),
+                Text("Mocha CLI — type a message and press Enter.  Ctrl+C to quit.", style="bold"),
                 border_style="green",
             )
         )
@@ -89,7 +89,7 @@ class CLIChannel(Channel):
                             badge = f"[yellow][{emotion}][/yellow] " if emotion else ""
                             console.print(f"  {badge}{text_s}")
                     else:
-                        console.print(Panel(Markdown(reply), title="[bold cyan]Parrot[/]", border_style="cyan"))
+                        console.print(Panel(Markdown(reply), title="[bold cyan]Mocha[/]", border_style="cyan"))
                 else:
                     console.print(f"[red]Bridge error ({resp.status_code})[/red]")
             except Exception as exc:

@@ -35,7 +35,7 @@ EVAL_CAPTURE: ContextVar[list[dict] | None] = ContextVar("eval_capture", default
 # captured records know which round they came from; the live path never reads
 # or sets it.
 EVAL_TOOL_ROUND: ContextVar[int] = ContextVar("eval_tool_round", default=0)
-# ProjectParrot user_id of the user whose turn is currently being processed.
+# project mocha user_id of the user whose turn is currently being processed.
 # Set by _run_inline_turn so that cron/diary tools can tag their output.
 TOOL_USER_ID: ContextVar[str | None] = ContextVar("tool_user_id", default=None)
 

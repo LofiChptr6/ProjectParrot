@@ -191,7 +191,7 @@ async def _deliver_to_telegram(text: str, tg_chat_id: str, app_user_id: str | No
 # ---------------------------------------------------------------------------
 
 async def route_autonomous_for_user(app_user_id: str, payload: dict[str, Any]) -> str:
-    """Like route_autonomous but targets a specific ProjectParrot user.
+    """Like route_autonomous but targets a specific project mocha user.
 
     Delivery priority:
       1. Web UI (all connected clients — not yet per-user tagged)

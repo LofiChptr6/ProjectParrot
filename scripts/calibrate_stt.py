@@ -4,7 +4,7 @@ STT Calibration Script — measures Whisper accuracy on your voice and suggests
 vocabulary biasing (initial_prompt / hotwords) improvements.
 
 Usage:
-    python scripts/calibrate_stt.py [--stt-url http://127.0.0.1:8001]
+    python scripts/calibrate_stt.py [--stt-url http://127.0.0.1:8091]
 
 What it does:
   1. Shows you a sentence to read aloud
@@ -35,7 +35,7 @@ ROOT = Path(__file__).resolve().parent.parent
 CALIBRATION_SENTENCES = [
     "Hey Mocha, how are you doing today?",
     "Can you ask Shiro to analyze the last conversation?",
-    "I'm working on ProjectParrot, the real-time voice assistant.",
+    "I'm working on project mocha, the real-time voice assistant.",
     "The vLLM server is running on port eight eight hundred.",
     "Please use the barge-in feature to interrupt the current response.",
     "The WebSocket connection is streaming PCM sixteen mono audio.",
@@ -126,7 +126,7 @@ def word_error_rate(reference: str, hypothesis: str) -> tuple[float, list[str], 
 
 def main():
     parser = argparse.ArgumentParser(description="Calibrate STT to your voice")
-    parser.add_argument("--stt-url", default="http://127.0.0.1:8001")
+    parser.add_argument("--stt-url", default="http://127.0.0.1:8091")
     parser.add_argument("--sentences", type=int, default=len(CALIBRATION_SENTENCES),
                         help="Number of sentences to test (default: all)")
     args = parser.parse_args()

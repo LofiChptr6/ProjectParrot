@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Benchmark LLM vs TTS latency for the Parrot Assistant pipeline.
+Benchmark LLM vs TTS latency for the project mocha pipeline.
 
 Sends 10 random phrases through the LLM and TTS services independently,
 times each stage, and renders a Gantt-style horizontal bar chart.
@@ -139,7 +139,7 @@ def draw_chart(results: list[dict], out_path: Path):
     ax.set_yticklabels(labels, fontsize=8)
     ax.invert_yaxis()
     ax.set_xlabel("Time (seconds)")
-    ax.set_title("Parrot Assistant — LLM vs TTS Latency per Phrase")
+    ax.set_title("project mocha — LLM vs TTS Latency per Phrase")
     ax.xaxis.set_major_locator(ticker.MultipleLocator(1))
     ax.legend(loc="lower right")
     ax.grid(axis="x", alpha=0.3)
@@ -164,7 +164,7 @@ def print_summary(results: list[dict]):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Benchmark Parrot Assistant latency")
+    parser = argparse.ArgumentParser(description="Benchmark project mocha latency")
     parser.add_argument("-n", type=int, default=10, help="number of phrases (default 10)")
     parser.add_argument("--no-tts", action="store_true", help="skip TTS, measure LLM only")
     parser.add_argument("-o", "--output", type=str, default=None, help="chart output path (default: scripts/benchmark_latency.png)")
@@ -172,7 +172,7 @@ def main():
 
     out = Path(args.output) if args.output else ROOT / "scripts" / "benchmark_latency.png"
 
-    print(f"Parrot Assistant Latency Benchmark")
+    print(f"project mocha Latency Benchmark")
     print(f"  LLM : {LLM_URL} ({LLM_MODEL})")
     print(f"  TTS : {TTS_URL} {'(skipped)' if args.no_tts else ''}")
     print(f"  N   : {args.n}")

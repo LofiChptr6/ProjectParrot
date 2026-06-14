@@ -8,13 +8,107 @@ callers never deal with provider-specific quirks.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import time
 from typing import AsyncIterator
 
 import httpx
 
 log = logging.getLogger("llm_client")
+
+
+class CircuitOpenError(Exception):
+    """Raised when the LLM circuit breaker is open (backend unhealthy)."""
+
+
+class _LLMThrottle:
+    """Isolation guard for Mocha's calls to the SHARED opus-trading vLLM.
+
+    Mocha reuses Corvus's inference server, so a Mocha bug (runaway tool loop,
+    retry storm) must never be able to flood it and starve live trading. This
+    bounds Mocha's worst-case load to a tiny, predictable slice:
+
+      • semaphore   — at most ``max_concurrency`` in-flight requests (default 1,
+                      i.e. strictly serial).
+      • token bucket — a hard requests/minute ceiling so even fast requests
+                      can't burst indefinitely.
+      • circuit breaker — after ``fail_threshold`` consecutive backend failures
+                      (timeouts / 5xx / connection errors), open for
+                      ``cooldown_s`` and fail Mocha's calls fast instead of
+                      retry-storming the shared endpoint.
+    """
+
+    def __init__(self, *, max_concurrency: int, rate_per_min: float,
+                 burst: float, fail_threshold: int, cooldown_s: float) -> None:
+        self._sem = asyncio.Semaphore(max(1, max_concurrency))
+        self._rate = max(0.0, rate_per_min) / 60.0  # tokens/sec
+        self._burst = max(1.0, float(burst))
+        self._tokens = self._burst
+        self._last_refill = time.monotonic()
+        self._tb_lock = asyncio.Lock()
+        self._fail_threshold = max(1, fail_threshold)
+        self._cooldown = max(1.0, cooldown_s)
+        self._fails = 0
+        self._open = False
+        self._opened_at = 0.0
+
+    def _check_breaker(self) -> None:
+        if self._open and (time.monotonic() - self._opened_at) < self._cooldown:
+            raise CircuitOpenError(
+                f"LLM circuit open ({self._fails} consecutive failures); "
+                f"backing off ~{self._cooldown:.0f}s to protect shared vLLM"
+            )
+        # closed, or open-but-cooldown-elapsed (half-open trial) → allow
+
+    async def _take_token(self) -> None:
+        if self._rate <= 0:
+            return
+        async with self._tb_lock:
+            now = time.monotonic()
+            self._tokens = min(self._burst,
+                               self._tokens + (now - self._last_refill) * self._rate)
+            self._last_refill = now
+            if self._tokens >= 1.0:
+                self._tokens -= 1.0
+                return
+            wait = (1.0 - self._tokens) / self._rate
+        # Pace (not flood). Concurrency is already bounded, so at most a few
+        # waiters ever queue here.
+        await asyncio.sleep(min(wait, 30.0))
+        async with self._tb_lock:
+            now = time.monotonic()
+            self._tokens = min(self._burst,
+                               self._tokens + (now - self._last_refill) * self._rate)
+            self._last_refill = now
+            self._tokens = max(0.0, self._tokens - 1.0)
+
+    async def acquire(self) -> None:
+        """Pre-flight: breaker check → rate token → concurrency slot.
+
+        Raises CircuitOpenError before acquiring anything when the breaker is
+        open, so callers can degrade gracefully without holding a slot.
+        """
+        self._check_breaker()
+        await self._take_token()
+        await self._sem.acquire()
+
+    def release(self, *, failure: bool) -> None:
+        self._sem.release()
+        if failure:
+            self._fails += 1
+            if self._fails >= self._fail_threshold:
+                if not self._open:
+                    log.warning("LLM circuit OPEN after %d consecutive failures",
+                                self._fails)
+                self._open = True
+                self._opened_at = time.monotonic()
+        else:
+            if self._open:
+                log.info("LLM circuit CLOSED (backend healthy again)")
+            self._fails = 0
+            self._open = False
 
 
 class LLMClient:
@@ -41,6 +135,16 @@ class LLMClient:
             headers["Authorization"] = f"Bearer {api_key}"
 
         self._http = httpx.AsyncClient(timeout=timeout, headers=headers)
+
+        # Isolation guard for the SHARED opus-trading vLLM (see _LLMThrottle).
+        iso = config.get("isolation", {}) or {}
+        self._throttle = _LLMThrottle(
+            max_concurrency=int(iso.get("max_concurrency", 1)),
+            rate_per_min=float(iso.get("rate_limit_per_min", 30)),
+            burst=float(iso.get("burst", 8)),
+            fail_threshold=int(iso.get("breaker_fail_threshold", 4)),
+            cooldown_s=float(iso.get("breaker_cooldown_s", 20)),
+        )
 
     # ------------------------------------------------------------------
     #  Non-streaming chat
@@ -82,22 +186,39 @@ class LLMClient:
         if enable_thinking is not None:
             body["chat_template_kwargs"] = {"enable_thinking": enable_thinking}
 
-        resp = await self._http.post(self._chat_url, json=body)
-        if resp.status_code != 200:
-            log.error("LLM HTTP %s: %s", resp.status_code, resp.text[:2000])
+        try:
+            await self._throttle.acquire()
+        except CircuitOpenError as exc:
+            log.warning("LLM chat fast-failed: %s", exc)
             return {"content": "", "tool_calls": None, "role": "assistant",
-                    "usage": {}, "finish_reason": None, "_error": resp.text[:2000]}
+                    "usage": {}, "finish_reason": None, "_error": str(exc)}
 
-        data = resp.json()
-        choice = data.get("choices", [{}])[0]
-        msg = choice.get("message", {})
-        return {
-            "content": msg.get("content") or "",
-            "tool_calls": self._normalize_tool_calls(msg.get("tool_calls")),
-            "role": "assistant",
-            "usage": data.get("usage", {}),
-            "finish_reason": choice.get("finish_reason"),
-        }
+        failure = False
+        try:
+            resp = await self._http.post(self._chat_url, json=body)
+            if resp.status_code != 200:
+                failure = True
+                log.error("LLM HTTP %s: %s", resp.status_code, resp.text[:2000])
+                return {"content": "", "tool_calls": None, "role": "assistant",
+                        "usage": {}, "finish_reason": None, "_error": resp.text[:2000]}
+
+            data = resp.json()
+            choice = data.get("choices", [{}])[0]
+            msg = choice.get("message", {})
+            return {
+                "content": msg.get("content") or "",
+                "tool_calls": self._normalize_tool_calls(msg.get("tool_calls")),
+                "role": "assistant",
+                "usage": data.get("usage", {}),
+                "finish_reason": choice.get("finish_reason"),
+            }
+        except asyncio.CancelledError:
+            raise  # caller cancellation is not a backend failure
+        except Exception:
+            failure = True
+            raise
+        finally:
+            self._throttle.release(failure=failure)
 
     # ------------------------------------------------------------------
     #  Streaming chat
@@ -112,7 +233,46 @@ class LLMClient:
         tools: list[dict] | None = None,
         enable_thinking: bool | None = None,
     ) -> AsyncIterator[dict]:
-        """Streaming chat completion via SSE.
+        """Streaming chat completion via SSE, behind the shared-vLLM isolation
+        guard (concurrency cap + rate limit + circuit breaker — see
+        ``_LLMThrottle``). When the breaker is open, yields a single graceful
+        ``done`` chunk carrying ``_error`` instead of hammering the backend.
+        """
+        try:
+            await self._throttle.acquire()
+        except CircuitOpenError as exc:
+            log.warning("LLM stream fast-failed: %s", exc)
+            yield {"content": "", "done": True, "tool_calls": None,
+                   "usage": {}, "finish_reason": None, "_error": str(exc)}
+            return
+
+        failure = False
+        try:
+            async for chunk in self._chat_stream_raw(
+                messages, temperature=temperature, max_tokens=max_tokens,
+                tools=tools, enable_thinking=enable_thinking,
+            ):
+                if chunk.get("_error") is not None:
+                    failure = True
+                yield chunk
+        except asyncio.CancelledError:
+            raise  # barge-in / caller cancellation is not a backend failure
+        except Exception:
+            failure = True
+            raise
+        finally:
+            self._throttle.release(failure=failure)
+
+    async def _chat_stream_raw(
+        self,
+        messages: list[dict],
+        *,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        tools: list[dict] | None = None,
+        enable_thinking: bool | None = None,
+    ) -> AsyncIterator[dict]:
+        """Unguarded streaming completion via SSE.
 
         Yields normalised chunks::
 
@@ -145,7 +305,8 @@ class LLMClient:
                     if len(body_text) > 2000:
                         break
                 log.error("LLM stream HTTP %s: %s", resp.status_code, body_text[:2000])
-                yield {"content": "", "done": True, "tool_calls": None, "usage": {}, "finish_reason": None}
+                yield {"content": "", "done": True, "tool_calls": None, "usage": {},
+                       "finish_reason": None, "_error": body_text[:2000] or f"HTTP {resp.status_code}"}
                 return
 
             # Accumulate tool call deltas and usage across chunks

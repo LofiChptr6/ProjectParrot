@@ -234,20 +234,11 @@ class AgentLoop:
 
         try:
             if job.action in ("prompt", "morning_greeting"):
-                # Scheduled tasks go through Nori — Mocha doesn't chat with the
-                # cron scheduler anymore. Nori produces a concise spoken report
-                # that Mocha's voice pipeline reads back on the live channel
-                # AND Telegram (via cron_origin fanout).
-                from nori.agent import process_request
-                prompt = job.params.get("text") or f"Scheduled task: {job.description}"
-                hint = (
-                    "This is a scheduled cron job, not a live user conversation. "
-                    "Produce a concise spoken report (2-5 short sentences) "
-                    "suitable for Mocha to voice back to the user. Respond with "
-                    "plain text, NOT a JSON segments block."
-                )
-                raw = await process_request(f"{hint}\n\n{prompt}")
-                spoken = _extract_narration(raw)
+                # The Nori research sub-agent was removed. Scheduled prompts now
+                # route their text straight to the user's channels — no AI report
+                # generation. For a richer scheduled briefing use a `command`
+                # job, or just ask Mocha live.
+                spoken = job.params.get("text") or job.description or "Scheduled reminder."
                 await self._route_text(
                     spoken, source=f"cron:{job.id}", kind="cron_report",
                     description=job.description, cron_origin=True,
@@ -270,19 +261,12 @@ class AgentLoop:
                     user_id=job.user_id,
                 )
             elif job.action == "nori_research":
-                from nori.agent import process_request
-                from bridge.notifications import enqueue
-                topic = job.params.get("topic", "")
-                result = await process_request(topic)
-                await enqueue({
-                    "kind": "research_finding",
-                    "source": "nori_cron",
-                    "summary": _first_line(result),
-                    "detail": result,
-                    "job_id": job.id,
-                    "topic": topic,
-                    "cron_origin": True,
-                })
+                # Removed with the Nori sub-agent — nothing to research autonomously.
+                log.warning(
+                    "Job %s uses removed action 'nori_research' — skipping "
+                    "(Nori was dropped). Topic was: %r",
+                    job.id, job.params.get("topic", ""),
+                )
             else:
                 log.warning("Unknown job action: %s", job.action)
         except Exception as exc:

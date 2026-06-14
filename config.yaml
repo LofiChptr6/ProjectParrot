@@ -1,4 +1,4 @@
-# Parrot Assistant — Central Configuration
+# project mocha — Central Configuration
 # All services read from this file.
 
 # ---------------------------------------------------------------------------
@@ -21,13 +21,14 @@ network:
   internal_host: "127.0.0.1"
 
 llm:
-  # vLLM serves an OpenAI-compatible API at /v1/chat/completions
-  # vLLM launch knobs (--max-model-len, --gpu-memory-utilization, etc.) live
-  # in docker-compose.yml. To change context window or VRAM allotment, edit
-  # docker-compose.yml and run: docker compose up -d --force-recreate vllm
-  base_url: http://127.0.0.1:8800/v1
-  # Must match the model vLLM was launched with (HuggingFace model ID)
-  model: Qwen/Qwen3-32B
+  # SHARED with opus trading: Mocha does NOT run her own vLLM. She reuses
+  # opus's already-loaded vLLM (OpenAI-compatible, :8000/v1) to avoid putting a
+  # second LLM on the GPU. The rate-limit + circuit-breaker in bridge/llm_client.py
+  # bounds Mocha's load so a Mocha bug can never starve Corvus's trading inference.
+  base_url: http://127.0.0.1:8000/v1
+  # Must match opus's served model (LOCAL_MODEL in opus .env). Claude-name aliases
+  # are also served (claude-sonnet-4-6, claude-haiku-4-5-20251001, ...).
+  model: Qwen/Qwen3-32B-FP8
   # Note: no generic system_prompt here — character/soul.md is the single source
   # of truth for Mocha's voice. A generic framing block here would dilute it.
   temperature: 0.8
@@ -37,28 +38,21 @@ llm:
   request_timeout_s: 360
   # If any segment exceeds this word count, run repair/split.
   repair_max_words_per_segment: 60
-  # Two-pass routing: Pass 1 uses short context for fast TTFT.
-  # The LLM decides whether to answer directly, use tools, or request
-  # full context (via needs_context signal). Same vllm instance, dynamic
-  # context window — prefix caching makes Pass 2 efficient.
-  complexity_routing:
-    enabled: true
-    short_history: 16
-    # Feed tool schemas into Pass 1 so LLM can call tools directly
-    # without escalating to Pass 2.  Set false to restore the old
-    # behaviour (tools only in Pass 2).
-    pass1_tools: true
-    # Hot subset whose schemas ride along in Pass 1. Everything else in
-    # the `tools.allowed` list is visible only in Pass 2. Keeps the Pass 1
-    # prompt lean — rare tools (theme_*, cron_*, UI modals) escalate via
-    # the <escalate/> inline tag and fire from Pass 2.
-    pass1_tool_allowlist:
-      - ask_nori
-      - ask_hana
+  # Isolation guard for the SHARED opus-trading vLLM (bridge/llm_client.py).
+  # Bounds Mocha's worst-case load so a Mocha bug can never starve Corvus's
+  # trading inference. Defaults shown; tune only if needed.
+  isolation:
+    max_concurrency: 1        # at most N Mocha requests in flight at once
+    rate_limit_per_min: 30    # hard requests/minute ceiling (token bucket)
+    burst: 8                  # allow one turn's tool rounds without throttling
+    breaker_fail_threshold: 4 # consecutive backend failures before opening
+    breaker_cooldown_s: 20    # fail-fast window once the breaker opens
+  # (Pass 1 / Pass 2 complexity-routing block removed in feature/single-pass-llama70b —
+  #  all calls run full-context, single-pass.)
 
 stt:
   host: 0.0.0.0
-  port: 8001
+  port: 8091  # remapped 8001->8091: opus trading owns 8001 (llm-proxy)
   model: large-v3
   device: cuda
   compute_type: float16
@@ -75,7 +69,7 @@ stt:
 
 tts:
   host: 0.0.0.0
-  port: 8002
+  port: 8092  # remapped 8002->8092: opus trading owns 8002 (vllm-embed)
   engine: f5-tts
   # cuda | cpu — use cpu if TorchCodec/CUDA (e.g. libnvrtc) breaks on your machine
   device: cuda
@@ -142,13 +136,13 @@ animation:
 
 bridge:
   host: 0.0.0.0
-  port: 8000
-  ws_port: 8000
+  port: 8090  # remapped 8000->8090: opus trading owns 8000 (vllm)
+  ws_port: 8090
   # Internal service URLs — auto-derived from network.internal_host + each
   # service's port when omitted.  Set explicit URLs only to override.
-  # stt_url: http://127.0.0.1:8001
-  # tts_url: http://127.0.0.1:8002
-  # llm_url: http://127.0.0.1:8800
+  # stt_url: http://127.0.0.1:8091
+  # tts_url: http://127.0.0.1:8092
+  # llm_url: http://127.0.0.1:8000   # opus trading's shared vLLM (see llm.base_url)
   # Memory is in-process (memory/mem0_store.py); animation is CSV-driven
   # (character/animation_functions.csv, mode=fbx_functions below).
 
@@ -199,45 +193,31 @@ channels:
 tools:
   enabled: true
   allowed:
-    # Nori sub-agent (Mocha delegates all research/data/visuals here)
-    - ask_nori
-    # UI tools (Mocha presents what Nori prepared)
+    # Research & data — Mocha calls these directly (Nori sub-agent removed).
+    - web_search
+    - get_stock_data
+    - get_news
+    - get_weather
+    - calculate
+    # UI panels (Mocha renders her own findings)
     - show_slides
     - control_slides
     - show_card
     - show_notification
+    - show_weather       # iPhone-Weather-style modal with animated bg
+    - video_player       # Mocha finds real IDs via web_search before playing
     - clear_ui
-    # show_video is Nori-only (she finds real video IDs via web_search)
     # Cron + autonomy (Mocha schedules user-asked reminders / routines)
     - schedule_cron
     - list_cron_jobs
     - cancel_cron_job
     - mocha_self_mute
-    # Escalation uses the inline <escalate/> tag (parsed by the bridge) — no
-    # corresponding tool entry needed.
-    # NOTE: video_player is deliberately NOT in Mocha's allowlist — only Nori
-    # has it. Mocha cannot know real YouTube IDs and will hallucinate dead
-    # links if given direct access. For music/video requests, Mocha must
-    # call ask_nori, which web-searches and fires video_player itself.
-    # Theme toolbox + Hana design critic
-    - ask_hana
-    - theme_get
-    - theme_propose
-    - theme_screenshot
-    - theme_apply
-    - theme_revert
-    - theme_load
-    - theme_preview_modal
     # Mocha's diary (per-day activity memory)
     - recall_diary
     - show_diary
-    # Weather modal (iPhone-Weather-style with animated bg)
-    - show_weather
     # Save the user's preferred name once they introduce themselves
     - set_display_name
-    # Personalized trading desk (proxies opus_trading MCP — read-only).
-    # Primary path is via ask_nori; listed here so Mocha can also call
-    # them in Pass 2 when she's confident which tool fits.
+    # Personalized trading desk (proxies opus trading MCP — read-only, PG-only).
     - get_trading_briefing
     - get_position_dossier
     - get_agent_overview
@@ -249,12 +229,12 @@ tools:
     - get_changes_since
     - get_upcoming_catalysts
     - get_manual_overrides
-  working_dir: /home/tianyizhang/AI Projects/ProjectParrot
+  working_dir: /home/tianyizhang/opus trading/project_mocha
   max_rounds: 5
-  timeout: 120  # increased: Nori may need time for multi-step research
+  timeout: 120  # generous: a tool round may need time for multi-step data fetches
 
   # Shell-execution safety. Substring match; case-sensitive. Applies to all
-  # callers of bash_exec (Mocha has no direct shell access — she uses ask_nori).
+  # callers of bash_exec (bash_exec is not in Mocha's allowlist — no shell access).
   bash_exec:
     blocklist_patterns:
       - "rm -rf /"
@@ -325,23 +305,6 @@ autonomy:
 notifications:
   path: data/notifications.jsonl
   max_retained_delivered: 200
-
-# ---------------------------------------------------------------------------
-# Hana — vision sub-agent (Claude API). Reads ANTHROPIC_API_KEY from env.
-# Mocha reaches Hana via the ask_hana tool; Hana never has disk write access.
-# ---------------------------------------------------------------------------
-hana:
-  enabled: true
-  # Default model for inspire() and routine critique().
-  model: claude-haiku-4-5
-  # Optional upgrade model when caller passes mode="deep".
-  deep_model: claude-sonnet-4-6
-  max_tokens: 2048
-  temperature: 0.5
-  # Safety cap on calls per local day. Reset at midnight.
-  daily_max_calls: 200
-  # Largest single image we'll forward (~5MB Anthropic limit; leave headroom).
-  max_image_bytes: 3500000
 
 # Call logging — write-only PostgreSQL log of every LLM call.
 # Used for offline evaluation / analytics; the agent never reads this table.
