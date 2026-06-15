@@ -63,17 +63,60 @@ async def _emit(state: TurnState, ev: dict) -> None:
     await state["emit"].put(ev)
 
 
+# Arg keys most likely to carry the "what" of a lookup, in priority order.
+_STALL_HINT_KEYS = (
+    "symbol", "ticker", "symbols", "query", "q", "topic", "subject",
+    "location", "city", "name", "title", "expression", "text",
+)
+
+
+def _describe_pending_action(pending: list) -> str:
+    """Compact, human-readable description of the tool call(s) about to run, so the
+    stall filler can NAME what it's fetching (e.g. ``get_stock_quote (NVDA)``)
+    instead of guessing. Best-effort; returns "" when nothing useful is found."""
+    from bridge import server as S
+    parts = []
+    for tc in (pending or [])[:2]:
+        name = (tc.get("name") or "").strip()
+        if not name:
+            continue
+        try:
+            args = S._parse_tool_args_str(tc.get("arguments") or "") or {}
+        except Exception:
+            args = {}
+        hint = ""
+        for k in _STALL_HINT_KEYS:
+            v = args.get(k)
+            if isinstance(v, (str, int, float)) and str(v).strip():
+                hint = str(v).strip()
+                break
+        if not hint:
+            for v in args.values():
+                if isinstance(v, str) and v.strip():
+                    hint = v.strip()
+                    break
+        parts.append(f"{name} ({hint})" if hint else name)
+    return "; ".join(parts)
+
+
 async def _emit_stall(state: TurnState) -> None:
-    """Speak a short, FRESH filler (generated on the fast 3B, always) so the user
-    isn't left in silence while a tool + deep synthesis run — like a quick
-    "ooh, let me check that". Best-effort: never blocks/breaks the turn. Not added
-    to full_text_parts (it's transient filler, not part of the recorded reply)."""
+    """Speak a short, FRESH filler grounded in the action she's about to take —
+    e.g. "getting NVIDIA's price right now", "looking up the latest TSLA news" —
+    so the user isn't left in silence while a tool + (often deep) synthesis run.
+    Generated on the fast 3B so it's instant even on deep/tool turns. Best-effort:
+    never blocks/breaks the turn. Not added to full_text_parts (transient filler,
+    not part of the recorded reply)."""
     from bridge import server as S
     try:
+        action = _describe_pending_action(state.get("pending_tool_calls") or [])
+        user_msg = f"They asked: {(state.get('user_text') or '')[:240]}"
+        if action:
+            user_msg += f"\nThe lookup you're about to run: {action}"
+        user_msg += "\nSay your one short line now."
         res = await S.llm_client.chat(
             [{"role": "system", "content": S._STALL_SYSTEM},
-             {"role": "user", "content": (state.get("user_text") or "")[:400]}],
-            temperature=0.9, max_tokens=16,
+             {"role": "user", "content": user_msg}],
+            temperature=0.8, max_tokens=20,
         )
         line = (res.get("content") or "").strip().strip('"').strip()
         if not line:
@@ -284,12 +327,16 @@ async def run_tools_node(state: TurnState) -> dict:
     # Record the assistant's last spoken output so the follow-up call has context.
     messages.append({"role": "assistant", "content": state["pass_content"]})
 
-    # Perceived-latency: once per turn, speak a fresh filler while the tool +
-    # (possibly deep) synthesis run, so the user always hears something. The
-    # filler's audio plays client-side while the slow work proceeds here.
+    # Perceived-latency cover: speak a fresh, action-grounded filler — but ONLY if
+    # she went silent before the tool fired. If the model already streamed a lead-in
+    # this turn (it lives in full_text_parts; the injected filler deliberately does
+    # not), that's the user's audible cover already and a second line would just be
+    # redundant. The decision is made once per turn either way.
     if not state.get("stalled"):
         state["stalled"] = True
-        await _emit_stall(state)
+        spoken_so_far = "".join(state.get("full_text_parts") or []).strip()
+        if len(spoken_so_far) < 12:
+            await _emit_stall(state)
 
     for tc in pending:
         tool_round += 1
