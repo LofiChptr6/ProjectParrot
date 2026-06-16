@@ -454,6 +454,11 @@ idle:
   # Stop sending idle actions after this many seconds of total silence
   # (character "falls asleep" / goes to a resting pose). 0 = never stop.
   max_idle_duration: 300
+  # A connected web tab counts as the live surface for proactive/idle messages
+  # only if it's been interacted with within this window; past it, the tab is
+  # treated as asleep and idle news routes to Telegram (the phone) instead of a
+  # screen no one's watching. 0 = any open tab always counts (old behavior).
+  web_active_window_s: 7200   # 2 hours
 
 # External API keys used by custom tools.
 # Prefer exporting these as environment variables (POLYGON_API_KEY, ...);

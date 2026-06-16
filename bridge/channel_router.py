@@ -188,6 +188,28 @@ async def _deliver_to_telegram(text: str, tg_chat_id: str, app_user_id: str | No
         return None
 
 
+def _web_attended() -> bool:
+    """Is a connected web tab actually being WATCHED right now?
+
+    A tab counts as the live surface for proactive delivery only if there's been
+    interaction within ``idle.web_active_window_s`` (default 2h). A tab left open
+    and idle past that is treated as asleep, so idle news falls through to Telegram
+    (the phone) instead of a screen no one's looking at. Returns False on any error
+    (so delivery still has Telegram/queue fallbacks)."""
+    try:
+        import time as _t
+        from bridge import server as _srv
+        if not _srv._ws_clients:
+            return False
+        window = float((getattr(_srv, "full_config", {}) or {})
+                       .get("idle", {}).get("web_active_window_s", 7200))
+        if window <= 0:
+            return True  # 0/disabled → any open tab counts (legacy behavior)
+        return (_t.monotonic() - getattr(_srv, "_last_interaction_time", 0.0)) < window
+    except Exception:
+        return False
+
+
 # ---------------------------------------------------------------------------
 #  Public entry point
 # ---------------------------------------------------------------------------
@@ -207,10 +229,9 @@ async def route_autonomous_for_user(app_user_id: str, payload: dict[str, Any]) -
 
     results: list[str] = []
 
-    # 1. Web UI (broadcast to all connected clients for now)
+    # 1. Web UI — only if a tab is actually being watched (see _web_attended).
     try:
-        from bridge import server as _srv
-        if _srv._ws_clients:
+        if _web_attended():
             try:
                 await _deliver_to_web(payload)
                 results.append("web")
@@ -274,11 +295,10 @@ async def route_autonomous(payload: dict[str, Any]) -> str:
     results: list[str] = []
 
     # --- 1. Web UI ---
-    web_attempted = False
+    # Web only counts if a tab is actually being watched — an idle (>2h) open tab
+    # is treated as asleep so the message falls through to Telegram (the phone).
     try:
-        from bridge import server as _srv
-        if _srv._ws_clients:
-            web_attempted = True
+        if _web_attended():
             try:
                 await _deliver_to_web(payload)
                 results.append("web")
