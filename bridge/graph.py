@@ -234,6 +234,10 @@ async def llm_pass_node(state: TurnState) -> dict:
             and not state.get("started_stall") and not state.get("escalated")):
         # (Skip on escalated turns: the fast model's <escalate/> cover already spoke.)
         state["started_stall"] = True
+        # Also claim the `stalled` flag so run_tools_node won't speak a SECOND
+        # "getting…" filler during tool execution — this parallel filler is the
+        # single per-turn acknowledgment.
+        state["stalled"] = True
         _stall_reserved = chunk_idx
         chunk_idx += 1
         _stall_task = asyncio.create_task(_emit_stall(state, reserved_idx=_stall_reserved))
