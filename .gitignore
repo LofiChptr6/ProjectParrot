@@ -41,6 +41,7 @@ data/recordings/
 data/autonomy_state.json
 data/curiosity_pool.json
 data/news_ledger.json
+data/cron_last_fires.json
 
 # Per-user runtime data (diary entries, soul.md/behaviors.yaml overrides,
 # conversation context). Contains personal info — never commit.
