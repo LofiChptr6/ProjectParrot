@@ -18,6 +18,7 @@ locally by button clicks.
 from __future__ import annotations
 
 import json
+import os
 import re
 
 
@@ -49,14 +50,24 @@ TOOL_DEF = {
                 "video_id": {
                     "type": "string",
                     "description": (
-                        "YouTube video reference. Prefer a 'vid:XXXXXXXX' HANDLE "
-                        "that appeared in a recent web_search / get_news result — "
-                        "the handle resolves to the real 11-char video_id "
-                        "automatically, so you never need to know or type the ID. "
-                        "Raw 11-char IDs are still accepted for user-supplied "
-                        "URLs, but DO NOT invent one from a video title — that "
-                        "produces a 'Video unavailable' error. Required for "
-                        "action=open."
+                        "YouTube video reference. A 'vid:XXXXXXXX' HANDLE from a "
+                        "recent web_search / get_news result resolves to the real "
+                        "video_id automatically. Raw 11-char IDs are accepted for "
+                        "user-supplied URLs. DO NOT invent one from a title. "
+                        "OPTIONAL when you pass `query` instead (preferred for "
+                        "'play some X' requests)."
+                    ),
+                },
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "What to play, in plain words — e.g. 'lofi hip hop', "
+                        "'ambient music', 'Rick Astley Never Gonna Give You Up'. "
+                        "The tool searches YouTube and picks a real, embeddable "
+                        "video for you (oEmbed-verified), so for 'play some X' just "
+                        "call video_player(action='open', query='X') — you do NOT "
+                        "need to web_search first or know any video_id. Used only "
+                        "when no valid video_id/handle is given."
                     ),
                 },
                 "title": {
@@ -75,6 +86,57 @@ TOOL_DEF = {
 
 
 _VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
+
+_YT_WATCH_RE = re.compile(
+    r"(?:youtube\.com/(?:watch\?v=|embed/|shorts/)|youtu\.be/)([A-Za-z0-9_-]{11})"
+)
+
+
+def _yt_ids_from_brave(data: dict) -> list[str]:
+    """Extract YouTube video IDs from a Brave web-search JSON payload, in order,
+    de-duplicated. Pure (no network) so it's unit-testable."""
+    out: list[str] = []
+    for res in (data.get("web", {}).get("results") or []):
+        for field in (res.get("url", ""), res.get("title", ""), res.get("description", "")):
+            m = _YT_WATCH_RE.search(field or "")
+            if m and m.group(1) not in out:
+                out.append(m.group(1))
+    return out
+
+
+async def _resolve_youtube_id(query: str) -> dict:
+    """Find a real, embeddable YouTube video for a plain-language query.
+
+    Searches Brave scoped to YouTube, then oEmbed-verifies candidates in order and
+    returns the first that exists AND embeds. This is what lets Mocha satisfy
+    'play some ambient music' without the model having to extract an ID from
+    handle-redacted web results. Returns {"ok", "video_id", "title"} or
+    {"ok": False, "reason"}.
+    """
+    key = os.environ.get("BRAVE_API_KEY", "")
+    if not key:
+        return {"ok": False, "reason": "BRAVE_API_KEY not set — can't search YouTube"}
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                "https://api.search.brave.com/res/v1/web/search",
+                params={"q": f"{query} site:youtube.com", "count": 10},
+                headers={"X-Subscription-Token": key, "Accept": "application/json"},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as exc:
+        return {"ok": False, "reason": f"YouTube search failed: {exc}"}
+
+    candidates = _yt_ids_from_brave(data)
+    if not candidates:
+        return {"ok": False, "reason": f"no YouTube videos found for '{query}'"}
+    for vid in candidates[:6]:
+        verdict = await _verify_embeddable(vid)
+        if verdict.get("ok"):
+            return {"ok": True, "video_id": vid, "title": verdict.get("title", "")}
+    return {"ok": False, "reason": f"found videos for '{query}' but none were embeddable"}
 
 
 async def _verify_embeddable(video_id: str) -> dict:
@@ -128,29 +190,50 @@ async def execute(arguments: dict) -> str:
     title = (arguments.get("title") or "").strip()
 
     if action == "open":
+        resolved_from_query = False
         if not _VIDEO_ID_RE.match(video_id):
-            return (
-                f"Invalid video_id '{video_id}'. Expected an 11-char YouTube ID "
-                "(letters/digits/_/-) or a 'vid:XXXXXXXX' handle from a recent "
-                "search. Did you fabricate it? Re-run web_search and copy a "
-                "handle from the result."
-            )
-        verdict = await _verify_embeddable(video_id)
-        if not verdict.get("ok"):
-            return json.dumps({
-                "status": "error",
-                "op": "open",
-                "video_id": video_id,
-                "reason": verdict.get("reason"),
-                "status_code": verdict.get("status_code"),
-                "hint": (
-                    "Pick a different candidate from your last web_search — "
-                    "the handle system guarantees you have real IDs, so just "
-                    "use the next vid: handle."
-                ),
-            }, ensure_ascii=False)
-        if not title:
-            title = verdict.get("title") or "Now playing"
+            # No usable id/handle — resolve a real video from a plain query.
+            # This is the robust path for "play some ambient music": the tool
+            # searches + verifies a YouTube video itself instead of relying on the
+            # model to extract an ID from handle-redacted web_search output.
+            query = (arguments.get("query") or "").strip()
+            if not query:
+                return (
+                    f"Invalid/empty video_id '{video_id}' and no query. For "
+                    "'play some X' just call video_player(action='open', "
+                    "query='X') — I'll find a playable video. A 'vid:XXXXXXXX' "
+                    "handle from a recent search also works; never fabricate an ID."
+                )
+            found = await _resolve_youtube_id(query)
+            if not found.get("ok"):
+                return json.dumps({
+                    "status": "error", "op": "open", "query": query,
+                    "reason": found.get("reason"),
+                    "hint": "Try a more specific query (artist + track), or pass a vid: handle.",
+                }, ensure_ascii=False)
+            video_id = found["video_id"]
+            resolved_from_query = True
+            if not title:
+                title = found.get("title") or "Now playing"
+
+        if not resolved_from_query:
+            # An id/handle was supplied directly — verify it embeds.
+            verdict = await _verify_embeddable(video_id)
+            if not verdict.get("ok"):
+                return json.dumps({
+                    "status": "error",
+                    "op": "open",
+                    "video_id": video_id,
+                    "reason": verdict.get("reason"),
+                    "status_code": verdict.get("status_code"),
+                    "hint": (
+                        "Pick a different candidate from your last web_search "
+                        "(use the next vid: handle), or pass a `query` and I'll "
+                        "find one myself."
+                    ),
+                }, ensure_ascii=False)
+            if not title:
+                title = verdict.get("title") or "Now playing"
 
     if action == "set_title" and not title:
         return "set_title requires a title."
