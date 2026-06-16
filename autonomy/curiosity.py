@@ -263,6 +263,21 @@ async def next_item() -> Optional[dict]:
         return None
 
 
+async def peek(n: int = 3) -> list[dict]:
+    """Return up to ``n`` upcoming pool items WITHOUT consuming them, so a greeting
+    can be grounded in real, cited news Mocha actually found (vs. inventing some).
+    Non-destructive (unlike next_item, which pops). Never raises."""
+    try:
+        if not _cfg().get("enabled", True) or n <= 0:
+            return []
+        async with _lock:
+            data = _load_sync()
+            return list(data.get("pool", [])[:n])
+    except Exception as exc:
+        log.warning("curiosity: peek failed: %s", exc)
+        return []
+
+
 async def pool_status() -> dict:
     """Small introspection helper for admin/debugging. Never raises."""
     try:

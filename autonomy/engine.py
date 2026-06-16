@@ -209,6 +209,8 @@ def _internal_prompt_for_state(state: str, topic: str, findings_preview: str = "
             f"[autonomy-mode: drift] Ika went quiet on \"{topic}\" a moment ago. "
             f"If you have ONE genuine new thought about it — an angle, a small "
             f"question, something it reminded you of — say it in one short line. "
+            f"Riff on the FEELING or your own angle, NOT new facts: do not introduce "
+            f"any news, company, number, or claim that wasn't already said. "
             f"Otherwise return {{\"segments\":[]}} and stay silent. Do NOT comment "
             f"on the silence or ask if they're there."
         )
@@ -217,9 +219,12 @@ def _internal_prompt_for_state(state: str, topic: str, findings_preview: str = "
         return (
             "[autonomy-mode: bored] Offer ONE short, genuine thing — a stray "
             "observation, a half-finished thought, something you actually find "
-            "interesting right now. Light, not needy. Do NOT mention that it's "
-            "quiet, that time has passed, or that you're waiting — that's the "
-            "lazy line. If nothing real comes to mind, return {\"segments\":[]}."
+            "interesting right now. Light, not needy. Keep it to feelings, opinions, "
+            "or a callback to this conversation — do NOT state any news, company, "
+            "ticker, number, date, or current event (you have no live data here). "
+            "Do NOT mention that it's quiet, that time has passed, or that you're "
+            "waiting — that's the lazy line. If nothing real comes to mind, return "
+            "{\"segments\":[]}."
             + tail
         )
     if state == "lonely":
@@ -227,29 +232,44 @@ def _internal_prompt_for_state(state: str, topic: str, findings_preview: str = "
             "[autonomy-mode: lonely] It's been a long quiet stretch but Ika is "
             "still around. Your tone can be a touch more honest, but say something "
             "with actual content — a thought, a small confession, a question "
-            "that's genuinely new. Do NOT remark on the silence, the quiet, or "
-            "the waiting (that is the lazy, repetitive line — avoid it entirely). "
-            "One short sentence, or stay silent: {\"segments\":[]}."
+            "that's genuinely new. Keep it to inner-state, opinion, or a callback "
+            "to this conversation — do NOT state any news, company, number, date, "
+            "or current event (you have no live data). Do NOT remark on the silence, "
+            "the quiet, or the waiting (that is the lazy, repetitive line — avoid it "
+            "entirely). One short sentence, or stay silent: {\"segments\":[]}."
         )
     if state == "reconnect":
         base = (
-            "[autonomy-mode: reconnect] Ika just came back. Greet briefly by name."
+            "[autonomy-mode: reconnect] Ika just came back. Greet him by name in one "
+            "short, warm sentence — like a person glad to see him, not an assistant."
         )
         if findings_preview:
             base += (
-                f" Pending findings from while they were away:\n{findings_preview}\n"
-                "Mention 1-2 headlines only, end with a hook question."
+                "\nReal, recent things you ACTUALLY found or shared (your ONLY "
+                f"permitted hooks — quote their substance, don't embellish):\n{findings_preview}\n"
+                "You MAY pick up ONE of these as a light, natural hook, in your own "
+                "words."
             )
         else:
-            base += " No pending findings. Welcome them back in one or two sentences, end with a hook."
+            base += (
+                " You have NO current news or findings. Do NOT reference any news, "
+                "market event, company, earnings, report, or 'recent' anything — you "
+                "have nothing to cite, and inventing one is a lie. A callback to your "
+                "last topic is fine; otherwise just be glad he's back."
+            )
+        base += (
+            "\nHARD RULE: if you're about to name a company, ticker, earnings result, "
+            "economic report, study, or number that is NOT explicitly written above, "
+            "you are hallucinating it — drop it. Never imply you read news you didn't."
+        )
         return base
     if state == "first_hello":
         return (
-            "[autonomy-mode: first_hello] Someone just opened your window for the "
-            "very first time — you've never met. No prior conversation, no name yet. "
-            "Greet them in one short, warm sentence (your voice, not assistant-coded), "
-            "and ask what to call them. Don't introduce yourself with a long bio. "
-            "Don't say 'Hello!' — just sound like a person who noticed someone walked in."
+            "[autonomy-mode: first_hello] Ika just opened your window. Greet him by "
+            "name in one short, warm sentence (your voice, not assistant-coded). You "
+            "already know who he is — don't ask his name. Don't introduce yourself "
+            "with a long bio, don't say 'Hello!', and don't mention any news, company, "
+            "or number — you have nothing to cite. Just sound glad he showed up."
         )
     return "[autonomy] say something short and natural."
 
@@ -347,10 +367,11 @@ def _news_share_prompt(item: dict) -> str:
         "[autonomy-mode: share-find] You drifted off and noticed something. "
         f"{flavor}\n{material}\n"
         "React in ONE or two short sentences, in your own voice — what's actually "
-        "interesting or strange about it, not a summary. End with a small hook "
-        "that invites Ika in. Don't read the URL, don't say 'I read an article', "
-        "and don't recite the headline word-for-word. If it's genuinely dull, "
-        "return {\"segments\":[]}."
+        "interesting or strange about it, not a summary. State ONLY what's in the "
+        "headline/snippet above — do not invent figures, outcomes (beat/missed), or "
+        "context that isn't there. End with a small hook that invites Ika in. Don't "
+        "read the URL, don't say 'I read an article', and don't recite the headline "
+        "word-for-word. If it's genuinely dull, return {\"segments\":[]}."
     )
 
 
@@ -795,14 +816,41 @@ async def handle_client_hello(user_id: str | None = None,
         return
     _mocha_state["last_hello_at"] = now
 
+    # Ground the greeting in REAL, cited items she actually has — never invent.
+    # Priority: news she SHARED (ledger, newest first) → fresh news she FOUND
+    # (curiosity pool, non-destructive peek) → queued findings. If nothing real
+    # is available, findings_preview stays empty and the prompt forbids any news.
+    grounding: list[str] = []
+    try:
+        from autonomy import news_ledger
+        for rec in reversed(news_ledger.recent(3)):
+            h = (rec.get("headline") or "").strip()
+            if h:
+                src = rec.get("source") or ""
+                grounding.append(f"- {h}{f' — {src}' if src else ''} (you shared this)")
+    except Exception as exc:
+        log.debug("reconnect grounding: ledger read failed: %s", exc)
+    if len(grounding) < 3:
+        try:
+            from autonomy import curiosity
+            for it in await curiosity.peek(3):
+                h = (it.get("title") or "").strip()
+                if h:
+                    src = it.get("source") or ""
+                    grounding.append(f"- {h}{f' — {src}' if src else ''} (you noticed this)")
+                if len(grounding) >= 3:
+                    break
+        except Exception as exc:
+            log.debug("reconnect grounding: curiosity peek failed: %s", exc)
+
     pending = await notifications.list_undelivered()
-    # Cap to the 2 most recent items for the preview — leave the rest queued.
+    # Cap to the 2 most recent queued findings — leave the rest queued.
     preview_items = pending[-2:]
-    findings_preview = ""
-    if preview_items:
-        findings_preview = "\n".join(
-            f"- {(it.get('summary') or '')[:160]}" for it in preview_items
-        )
+    for it in preview_items:
+        s = (it.get("summary") or "").strip()
+        if s:
+            grounding.append(f"- {s[:160]}")
+    findings_preview = "\n".join(grounding[:3])
 
     segments = await _compose_utterance("reconnect", _mocha_state.get("last_topic_summary") or "",
                                          elapsed_s=0.0, findings_preview=findings_preview)
