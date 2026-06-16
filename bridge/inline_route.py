@@ -36,6 +36,29 @@ _SOFT_CAP_CHARS = 180
 _FIRST_CHUNK_WORD_CAP = 12
 _SOFT_BREAK_CHARS = frozenset(",;:—–")
 
+_TERM_RE = re.compile(r"[.!?]+")
+
+
+def _sentence_end(buf: str) -> int:
+    """Index just past the first real sentence terminator in ``buf``, or -1.
+
+    A terminator qualifies only when followed by whitespace OR the buffer end.
+    Crucially, a lone '.' that is a DECIMAL POINT — a digit immediately before it
+    and either a digit after it OR the buffer ending right there (mid-stream, more
+    digits may still be coming) — is NOT a sentence end. This stops "$70.3 million"
+    from being flushed as "$70." + "3 million" when a token boundary lands on the
+    decimal during streaming (the buffer-end case the old `(?:\\s|$)` regex missed).
+    """
+    for m in _TERM_RE.finditer(buf):
+        s, e = m.start(), m.end()
+        if e < len(buf) and not buf[e].isspace():
+            continue  # not followed by whitespace/end → not a sentence boundary
+        if buf[s:e] == "." and s > 0 and buf[s - 1].isdigit() and (
+                e >= len(buf) or buf[e:e + 1].isdigit()):
+            continue  # decimal point mid-number — keep the number whole
+        return e
+    return -1
+
 
 def _find_soft_break(text: str) -> int:
     """Return index just after a 'good' break near the end of text, or -1."""
@@ -76,12 +99,13 @@ class _SpeechChunker:
         out: list[str] = []
         # First chunk: flush aggressively (first .!? OR 12 words, whichever first)
         if not self._had_first_chunk:
-            # Look for first sentence terminator + whitespace or end
-            m = re.search(r"[.!?]+(?:\s|$)", self._buf)
-            if m:
-                piece = self._buf[: m.end()]
+            # Look for first real sentence terminator (decimal-aware so we never
+            # split a number like "$70.3 million" at its decimal point).
+            pos = _sentence_end(self._buf)
+            if pos != -1:
+                piece = self._buf[:pos]
                 out.append(piece)
-                self._buf = self._buf[m.end():]
+                self._buf = self._buf[pos:]
                 self._had_first_chunk = True
                 self._chunk_idx += 1
                 return out + self._try_split()  # may have more to flush
@@ -106,12 +130,12 @@ class _SpeechChunker:
 
         # Steady state: flush on soft-cap at a good break
         while len(self._buf) >= _SOFT_CAP_CHARS:
-            # Try a sentence terminator first
-            m = re.search(r"[.!?]+(?:\s|$)", self._buf)
-            if m and m.end() <= _SOFT_CAP_CHARS + 40:
-                piece = self._buf[: m.end()]
+            # Try a real (decimal-aware) sentence terminator first
+            pos = _sentence_end(self._buf)
+            if pos != -1 and pos <= _SOFT_CAP_CHARS + 40:
+                piece = self._buf[:pos]
                 out.append(piece)
-                self._buf = self._buf[m.end():]
+                self._buf = self._buf[pos:]
                 self._chunk_idx += 1
                 continue
             # Soft break

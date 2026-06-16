@@ -252,6 +252,48 @@ async def llm_pass_node(state: TurnState) -> dict:
                 pass_finish = chunk.get("finish_reason")
                 break
 
+    # Pre-tool speech suppression. The stall filler fired above is the single
+    # "on it" acknowledgment; the deep model nonetheless tends to add its OWN
+    # redundant lead-in ("let me dig up the numbers… I'm curious to see…") before
+    # the <tool_call>, which stacks into the choppy multi-stall the user saw. So
+    # on this pass we BUFFER the model's speech: if a tool_call fires we DISCARD
+    # the lead-in (the filler already covered the ack); if it's actually a direct
+    # answer (no tool_call within a couple of chunks) we flush and stream the rest.
+    _pretool_buf: list[str] = []
+    _buffering = _stall_task is not None
+    _tool_seen = False
+
+    async def _emit_speech_chunk(raw_text: str) -> None:
+        nonlocal chunk_idx
+        S._check_unmapped_numeric_literals(raw_text, state["job_id"], chunk_idx)
+        chunk_text, unmapped = S.substitute_handles_in_text(raw_text)
+        if unmapped:
+            log.warning("[graph] job=%s chunk_idx=%d unmapped handles: %s",
+                        state["job_id"], chunk_idx, unmapped)
+        chunk_text = S._clean_spoken(chunk_text)
+        full_text_parts.append(chunk_text)
+        audio_bytes = await S._synthesize(chunk_text, user_id=state.get("user_id"))
+        viseme = (await S._generate_visemes(audio_bytes, chunk_text)
+                  if audio_bytes else None) or {}
+        await _emit(state, {
+            "type": "speech_chunk",
+            "chunk_idx": chunk_idx,
+            "text": chunk_text,
+            "audio_base64": (base64.b64encode(audio_bytes).decode() if audio_bytes else None),
+            "viseme_b64": viseme.get("viseme_b64"),
+            "viseme_fps": viseme.get("viseme_fps", 30),
+            "viseme_frames": viseme.get("viseme_frames", 0),
+        })
+        chunk_idx += 1
+
+    async def _flush_pretool() -> None:
+        nonlocal _buffering
+        buf = _pretool_buf[:]
+        _pretool_buf.clear()
+        _buffering = False
+        for rt in buf:
+            await _emit_speech_chunk(rt)
+
     _event_gen = drive_inline_stream(_token_feeder())
     try:
         async for ev in _event_gen:
@@ -264,36 +306,26 @@ async def llm_pass_node(state: TurnState) -> dict:
                 resolved = await S._resolve_action(ev["name"])
                 await _emit(state, {"type": "gesture", "name": resolved or ev["name"]})
             elif t == "speech_chunk":
-                raw_text = ev["text"]
-                S._check_unmapped_numeric_literals(raw_text, state["job_id"], chunk_idx)
-                chunk_text, unmapped = S.substitute_handles_in_text(raw_text)
-                if unmapped:
-                    log.warning(
-                        "[graph] job=%s chunk_idx=%d unmapped handles: %s",
-                        state["job_id"], chunk_idx, unmapped,
-                    )
-                # Scrub the STREAMED chunk (webapp shows these live, before finalize):
-                # strip a mimicked [past #], leaked <strong>/HTML, and **markdown**.
-                chunk_text = S._clean_spoken(chunk_text)
-                full_text_parts.append(chunk_text)
-                audio_bytes = await S._synthesize(chunk_text, user_id=state.get("user_id"))
-                viseme = (
-                    await S._generate_visemes(audio_bytes, chunk_text)
-                    if audio_bytes else None
-                ) or {}
-                await _emit(state, {
-                    "type": "speech_chunk",
-                    "chunk_idx": chunk_idx,
-                    "text": chunk_text,
-                    "audio_base64": (
-                        base64.b64encode(audio_bytes).decode() if audio_bytes else None
-                    ),
-                    "viseme_b64": viseme.get("viseme_b64"),
-                    "viseme_fps": viseme.get("viseme_fps", 30),
-                    "viseme_frames": viseme.get("viseme_frames", 0),
-                })
-                chunk_idx += 1
+                # Scrub + synth + emit (via the helper), unless we're holding the
+                # model's pre-tool lead-in to see if a tool_call follows.
+                if _buffering:
+                    _pretool_buf.append(ev["text"])
+                    # Two chunks in with no tool_call → this is a real (direct)
+                    # answer, not a brief lead-in: flush and stream the rest live.
+                    if len(_pretool_buf) >= 2:
+                        await _flush_pretool()
+                else:
+                    await _emit_speech_chunk(ev["text"])
             elif t == "tool_call":
+                _tool_seen = True
+                # Drop the buffered lead-in — the stall filler already gave the one
+                # acknowledgment; the model's "let me look it up" is the redundant
+                # second/third stall the user complained about.
+                if _pretool_buf:
+                    log.info("[graph] job=%s suppressed %d redundant pre-tool lead-in chunk(s)",
+                             state["job_id"], len(_pretool_buf))
+                    _pretool_buf.clear()
+                _buffering = False
                 pass_tool_calls.append(ev)
                 # Abort the rest of this pass — anything after <tool_call> is
                 # speculation without tool results. The tool-loop re-fire is the
@@ -323,6 +355,10 @@ async def llm_pass_node(state: TurnState) -> dict:
                 await _emit(state, {"type": "reads_debug", "state": ev.get("state")})
             elif t == "end":
                 pass
+        # Stream ended with no tool_call → it was a direct answer; emit anything
+        # we were still holding (buffered but under the flush threshold).
+        if _pretool_buf and not _tool_seen:
+            await _flush_pretool()
     except httpx.ConnectError as e:
         pass_error = str(e)
         log.error("LLM unreachable: %s", e)

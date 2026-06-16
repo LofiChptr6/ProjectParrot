@@ -1392,6 +1392,9 @@ async function gchatSend() {
                     }
                     div.innerHTML = `<div class="gchat-bubble tool-status">${body}</div>`;
                     groupEl.appendChild(div);
+                    // Post-tool speech should start a FRESH bubble below this status,
+                    // not append to the pre-tool ack bubble.
+                    gchatExchanges[exIdx]._speechTextEl = null;
                     if (!gchatExchanges[exIdx].tool_events) gchatExchanges[exIdx].tool_events = [];
                     gchatExchanges[exIdx].tool_events.push(evt);
 
@@ -1426,14 +1429,23 @@ async function gchatSend() {
                         chunk_idx: evt.chunk_idx,
                     };
                     gchatExchanges[exIdx].segments.push(segShape);
-                    const sdiv = document.createElement('div');
-                    sdiv.className = 'gchat-msg assistant';
-                    const emo = segShape.emotion
-                        ? `<span class="gchat-emotion">${escapeHtml(segShape.emotion)}</span>` : '';
-                    const play = segShape.audio_base64
-                        ? ` <button class="gchat-seg-play" onclick="gchatPlaySeg(${exIdx},${chunkIdx})">&#x1f50a;</button>` : '';
-                    sdiv.innerHTML = `<div class="gchat-bubble">${emo}${escapeHtml(segShape.text)}${play}</div>`;
-                    groupEl.appendChild(sdiv);
+                    // Coalesce a turn's chunks into ONE assistant bubble instead of
+                    // one bubble per chunk (which read as machine-gun fragments).
+                    // A fresh bubble starts after each tool_status (see below), so a
+                    // tool turn renders as: ack · tool status · one answer bubble.
+                    let txtEl = gchatExchanges[exIdx]._speechTextEl;
+                    if (!txtEl) {
+                        const sdiv = document.createElement('div');
+                        sdiv.className = 'gchat-msg assistant';
+                        const emo = segShape.emotion
+                            ? `<span class="gchat-emotion">${escapeHtml(segShape.emotion)}</span>` : '';
+                        sdiv.innerHTML =
+                            `<div class="gchat-bubble">${emo}<span class="gchat-speech-text">${escapeHtml(segShape.text)}</span></div>`;
+                        groupEl.appendChild(sdiv);
+                        gchatExchanges[exIdx]._speechTextEl = sdiv.querySelector('.gchat-speech-text');
+                    } else {
+                        txtEl.textContent += ' ' + segShape.text;
+                    }
 
                     // Stream audio immediately for a live-conversational feel.
                     if (segShape.audio_base64) {
