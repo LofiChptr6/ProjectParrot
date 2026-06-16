@@ -33,6 +33,7 @@ Design:
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import uuid
@@ -41,14 +42,47 @@ from typing import Optional
 
 log = logging.getLogger(__name__)
 
+
+_ATTR_RE = re.compile(r'([A-Za-z_][\w-]*)\s*=\s*"([^"]*)"')
+
+
+def _parse_attrs(blob: Optional[str]) -> dict:
+    """Parse `key="val"` pairs from a tag's attribute span into a lowercased dict."""
+    return {k.lower(): v for k, v in _ATTR_RE.findall(blob or "")}
+
+
+def _merge_attrs_into_args(body: str, extra: dict) -> str:
+    """Fold extra tag attributes into a tool_call's JSON arguments.
+
+    The model sometimes writes a tool param as a TAG attribute instead of a JSON
+    key — e.g. `<tool_call name="video_player" action="open">{"query": "..."}` —
+    which used to leave `action` stranded (and, before the regex was widened,
+    leaked the whole tag as text). We merge those stray attributes into the args
+    so the tool still receives them; explicit JSON keys win on conflict.
+    """
+    body = (body or "").strip()
+    if not extra:
+        return body
+    try:
+        obj = json.loads(body) if body else {}
+    except Exception:
+        obj = None
+    if isinstance(obj, dict):
+        for k, v in extra.items():
+            obj.setdefault(k, v)
+        return json.dumps(obj)
+    # Body isn't a JSON object — keep it if present, else synthesize from attrs.
+    return body or json.dumps(extra)
+
 _KNOWN_TAGS = frozenset({"reads", "emotion", "gesture", "tool_call", "think", "escalate"})
 _SIMPLE_BODY_TAGS = frozenset({"reads", "emotion", "gesture"})  # close by exact </name>
 _MAX_TAG_LOOKAHEAD = 128
 _SENTENCE_TERMINATORS = frozenset(".!?")
 
 _TAG_OPEN_RE = re.compile(
-    r"<\s*(/?)\s*(reads|emotion|gesture|tool_call|think|escalate)\s*"
-    r"(?:name\s*=\s*\"([^\"]*)\")?\s*(/?)\s*>",
+    r"<\s*(/?)\s*(reads|emotion|gesture|tool_call|think|escalate)\b"
+    r"((?:\s+[A-Za-z_][\w-]*\s*=\s*\"[^\"]*\")*)"   # group 3: any attributes
+    r"\s*(/?)\s*>",
     re.IGNORECASE,
 )
 
@@ -70,6 +104,7 @@ class InlineTagParser:
         self._state: _State = _State.TEXT
         self._body_accum: str = ""
         self._tool_call_name: Optional[str] = None
+        self._tool_call_extra_attrs: dict = {}
         self._pending: list[dict] = []
         self._last_text_ended_on_terminator: bool = False
         # Track the tail of the last emitted text_delta so finish() can detect
@@ -117,7 +152,7 @@ class InlineTagParser:
                 self._pending.append({
                     "kind": "tool_call",
                     "name": self._tool_call_name or "",
-                    "arguments": body,
+                    "arguments": _merge_attrs_into_args(body, self._tool_call_extra_attrs),
                     "id": f"tc_{uuid.uuid4().hex[:12]}",
                 })
                 self._emit_flush_on_tag_boundary()
@@ -125,6 +160,7 @@ class InlineTagParser:
                          self._tool_call_name)
             self._body_accum = ""
             self._tool_call_name = None
+            self._tool_call_extra_attrs = {}
             self._state = _State.TEXT
         elif self._state in (_State.EMOTION_BODY, _State.GESTURE_BODY, _State.READS_BODY):
             # Stream ended inside a simple tag body — the body is a short ID
@@ -271,7 +307,11 @@ class InlineTagParser:
         if m:
             is_close = bool(m.group(1))
             tag = m.group(2).lower()
-            attr_name = m.group(3)
+            attrs = _parse_attrs(m.group(3))
+            attr_name = attrs.get("name")
+            # Non-`name` attributes on a <tool_call> (e.g. a stray action="open")
+            # are folded into the tool arguments rather than dropped.
+            extra_attrs = {k: v for k, v in attrs.items() if k != "name"}
             is_self_close = bool(m.group(4))
             end = m.end()
 
@@ -292,7 +332,7 @@ class InlineTagParser:
                         self._pending.append({
                             "kind": "tool_call",
                             "name": attr_name,
-                            "arguments": "",
+                            "arguments": _merge_attrs_into_args("", extra_attrs),
                             "id": f"tc_{uuid.uuid4().hex[:12]}",
                         })
                     else:
@@ -322,6 +362,7 @@ class InlineTagParser:
             elif tag == "tool_call":
                 self._state = _State.TOOL_CALL_BODY
                 self._tool_call_name = attr_name or ""
+                self._tool_call_extra_attrs = extra_attrs
             elif tag == "escalate":
                 # Tolerate a non-self-closed <escalate> — it carries no body; emit
                 # the signal and stay in TEXT (a trailing </escalate> is harmless).
@@ -414,11 +455,12 @@ class InlineTagParser:
                 self._pending.append({
                     "kind": "tool_call",
                     "name": self._tool_call_name or "",
-                    "arguments": body,
+                    "arguments": _merge_attrs_into_args(body, self._tool_call_extra_attrs),
                     "id": f"tc_{uuid.uuid4().hex[:12]}",
                 })
                 self._emit_flush_on_tag_boundary()
             self._tool_call_name = None
+            self._tool_call_extra_attrs = {}
 
         self._body_accum = ""
         self._state = _State.TEXT
