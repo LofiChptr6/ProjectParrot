@@ -59,7 +59,12 @@ _DEFAULTS = {
     # Default OFF: she only speaks unprompted when she has a genuinely fresh item,
     # never ambient filler.
     "allow_empty_checkins": False,
-    "reconnect_debounce_s": 300,
+    # Reconnect "welcome back" greetings are a SEPARATE budget from news/check-ins
+    # so a flurry of web reconnects (tab focus, network blips, deploys) can't spam
+    # greetings AND can't starve the news budget. Debounce raised 300→1800 (≤ one
+    # greeting per 30 min) and capped per day.
+    "reconnect_debounce_s": 1800,
+    "reconnect_max_per_day": 4,
     "modes": {
         "drift": True,
         "bored": True,
@@ -107,12 +112,13 @@ def _load_persist() -> dict:
         if _STATE_PATH.exists():
             d = json.loads(_STATE_PATH.read_text(encoding="utf-8"))
             d.setdefault("day", "")
-            d.setdefault("turns", 0)
+            d.setdefault("turns", 0)            # news / check-in budget
+            d.setdefault("reconnect_turns", 0)  # separate "welcome back" budget
             d.setdefault("recent", [])
             return d
     except Exception as exc:
         log.warning("autonomy: failed to read state (%s) — starting fresh", exc)
-    return {"day": "", "turns": 0, "recent": []}
+    return {"day": "", "turns": 0, "reconnect_turns": 0, "recent": []}
 
 
 def _save_persist() -> None:
@@ -145,10 +151,12 @@ def _maybe_reset_daily_counter() -> None:
     if today != p.get("day"):
         p["day"] = today
         p["turns"] = 0
+        p["reconnect_turns"] = 0
         p["recent"] = []
         _save_persist()
     # Restart-proofing: seed the in-memory mirror from the persisted truth.
     _mocha_state["autonomous_turns_today"] = int(p.get("turns", 0))
+    _mocha_state["reconnect_turns_today"] = int(p.get("reconnect_turns", 0))
 
 
 # ---------------------------------------------------------------------------
@@ -646,19 +654,24 @@ def _segments_text(segments: list[dict]) -> str:
                     for s in segments if s.get("text")).strip()
 
 
-def _mark_spoke(text: str = "") -> None:
+def _mark_spoke(text: str = "", *, reconnect: bool = False) -> None:
     from bridge.server import _mocha_state
     _mocha_state["last_autonomous_spoke_at"] = time.monotonic()
-    # Persisted truth (survives restarts); mirror into _mocha_state for the
-    # existing cap check.
+    # Persisted truth (survives restarts); mirror into _mocha_state for the cap
+    # checks. Reconnect greetings draw on their OWN budget so they never consume
+    # (or get blocked by) the news/check-in budget.
     p = _get_persist()
-    p["turns"] = int(p.get("turns", 0)) + 1
+    if reconnect:
+        p["reconnect_turns"] = int(p.get("reconnect_turns", 0)) + 1
+    else:
+        p["turns"] = int(p.get("turns", 0)) + 1
     if text:
         recent = p.setdefault("recent", [])
         recent.append(text)
         del recent[:-_RECENT_MAX]
     _save_persist()
     _mocha_state["autonomous_turns_today"] = int(p.get("turns", 0))
+    _mocha_state["reconnect_turns_today"] = int(p.get("reconnect_turns", 0))
 
 
 # ---------------------------------------------------------------------------
@@ -793,6 +806,13 @@ async def handle_client_hello(user_id: str | None = None,
     if now < _mocha_state.get("muted_until_monotonic", 0.0):
         return
 
+    # Greetings have their OWN small daily budget (separate from news), so a
+    # storm of web reconnects/deploys can't spam them or eat the news budget.
+    _maybe_reset_daily_counter()
+    if int(_get_persist().get("reconnect_turns", 0)) >= int(cfg.get("reconnect_max_per_day", 4)):
+        log.info("autonomy: reconnect greeting daily cap reached — skipping hello")
+        return
+
     # Brand-new user (anon, never named) → fire a warm first-meeting greeting
     # immediately, bypassing the reconnect debounce. Otherwise the standard
     # rage-refresh cooldown applies.
@@ -804,7 +824,7 @@ async def handle_client_hello(user_id: str | None = None,
         res = await _deliver(segments, "first_hello")
         if res["spoke"]:
             _mocha_state["last_hello_at"] = now
-            _mark_spoke(_segments_text(segments))
+            _mark_spoke(_segments_text(segments), reconnect=True)
             _mocha_state["mood"] = "curious"
         return
 
@@ -860,7 +880,7 @@ async def handle_client_hello(user_id: str | None = None,
     res = await _deliver(segments, "reconnect")
     if res["spoke"]:
         _mocha_state["last_hello_at"] = now
-        _mark_spoke(_segments_text(segments))
+        _mark_spoke(_segments_text(segments), reconnect=True)
         _mocha_state["mood"] = "happy"
         if preview_items:
             await notifications.mark_delivered([it["id"] for it in preview_items])

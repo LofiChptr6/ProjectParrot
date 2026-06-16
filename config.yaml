@@ -363,8 +363,11 @@ autonomy:
   # Probability a bored/lonely fallback check-in fires when the curiosity pool is
   # empty AND allow_empty_checkins is on. Lower = more silence.
   checkin_probability: 0.5
-  # Reconnect hello fires at most once per this window (avoids rage-refresh spam).
-  reconnect_debounce_s: 300
+  # Reconnect "welcome back" greetings: their OWN budget, separate from news, so a
+  # storm of web reconnects (tab focus, network blips, deploys) can't spam them or
+  # starve the news budget. At most one per debounce window, capped per day.
+  reconnect_debounce_s: 1800        # ≤ one greeting per 30 min
+  reconnect_max_per_day: 4
   # Presence gate (autonomy/presence.py) — the load-bearing "don't talk over me"
   # knob. Mocha is only proactive once Ika has been silent (no message, no
   # in-flight turn) for this long; the instant he speaks she's CONVERSING and
