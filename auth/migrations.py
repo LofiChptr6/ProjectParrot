@@ -1,6 +1,7 @@
 """Run once to create the users table, indexes, and the ika_admin superuser."""
 
 import json
+import os
 import shutil
 import uuid
 from pathlib import Path
@@ -63,8 +64,10 @@ ADMIN_USERNAME = "ika_admin"
 ADMIN_EMAIL    = "ika_admin@local"
 ADMIN_PASSWORD = "9999"
 
-# The existing telegram token migrates to ika_admin's settings.
-ADMIN_TELEGRAM_TOKEN = "***REMOVED***"
+# The admin telegram bot token is read from the env (set in .env, gitignored);
+# never hardcode it here. Falls back to TELEGRAM_BOT_TOKEN, else empty (the
+# admin is seeded without a bot — register one later via PUT /api/user/telegram).
+ADMIN_TELEGRAM_TOKEN = os.environ.get("ADMIN_TELEGRAM_TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN", "")
 
 
 def _seed_user_dir(user_id: str) -> None:
@@ -92,7 +95,13 @@ def _run() -> None:
         else:
             admin_user_id = str(uuid.uuid4())
             pw_hash = bcrypt.hashpw(ADMIN_PASSWORD.encode(), bcrypt.gensalt()).decode()
-            settings = json.dumps({"telegram_bot_token": ADMIN_TELEGRAM_TOKEN})
+            settings_d = {}
+            if ADMIN_TELEGRAM_TOKEN:
+                settings_d["telegram_bot_token"] = ADMIN_TELEGRAM_TOKEN
+            else:
+                print("WARNING: no ADMIN_TELEGRAM_TOKEN/TELEGRAM_BOT_TOKEN in env — "
+                      "seeding ika_admin without a Telegram bot.")
+            settings = json.dumps(settings_d)
             cur.execute(
                 """INSERT INTO users (user_id, email, username, password_hash, settings)
                    VALUES (%s, %s, %s, %s, %s::jsonb)""",

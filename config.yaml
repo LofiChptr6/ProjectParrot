@@ -3,10 +3,12 @@
 
 # ---------------------------------------------------------------------------
 # Auth — JWT secret for user authentication.
-# Change jwt_secret to a long random string before deploying.
+# The secret is read from the JWT_SECRET env var (set in .env, which is
+# gitignored); leave this blank so no credential is ever committed. Only used
+# as a last-resort fallback if JWT_SECRET is unset.
 # ---------------------------------------------------------------------------
 auth:
-  jwt_secret: "***REMOVED***"
+  jwt_secret: ""
 
 # ---------------------------------------------------------------------------
 # Network — single place to set addresses for LAN / WAN deployment.

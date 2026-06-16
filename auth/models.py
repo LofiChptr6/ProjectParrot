@@ -14,7 +14,14 @@ from pydantic import BaseModel
 
 ROOT = Path(__file__).resolve().parent.parent
 _cfg = yaml.safe_load((ROOT / "config.yaml").read_text())
-_JWT_SECRET: str = _cfg.get("auth", {}).get("jwt_secret", "change-me-in-config")
+# Prefer the JWT_SECRET env var (set in .env, gitignored). Fall back to the
+# config value (now blank) only if unset — keeps the secret out of version
+# control while preserving existing tokens (same secret value as before).
+_JWT_SECRET: str = (
+    os.environ.get("JWT_SECRET")
+    or (_cfg.get("auth", {}) or {}).get("jwt_secret")
+    or "change-me-in-config"
+)
 _JWT_ALGORITHM = "HS256"
 _JWT_EXPIRY_DAYS = 30
 
