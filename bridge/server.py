@@ -290,6 +290,7 @@ def _clean_spoken(text: str) -> str:
     s = _HTML_TAG_RE.sub("", s)
     s = _MD_BOLD_RE.sub(r"\1", s)
     s = _round_decimals(s)
+    s = _clean_leaked_handles(s)   # scrub fabricated/leaked num:/vid: handles LIVE
     return re.sub(r"[ \t]{2,}", " ", s)
 
 
@@ -333,6 +334,7 @@ def _sanitize_outgoing(text: str) -> str:
     s = _HTML_TAG_RE.sub("", s)      # drop leaked HTML (<strong>/<em>/…) — wrong for TTS
     s = _MD_BOLD_RE.sub(r"\1", s)    # **bold** → bold
     s = _round_decimals(s)          # 1.1389465 → 1.14 (≤2 decimals everywhere)
+    s = _clean_leaked_handles(s)    # scrub fabricated/leaked num:/vid: handles
     s = _FENCE_RE.sub("", s).strip()
     return re.sub(r"[ \t]{2,}", " ", s).strip()
 
@@ -343,8 +345,16 @@ def _sanitize_outgoing(text: str) -> str:
 # e.g. `num:513.3236726242992` (the `.` breaks the 8-char match, so it never
 # resolves and leaks verbatim). And a valid handle can fail to resolve (registry
 # expiry). Both must be scrubbed before the user sees them.
-_LEAKED_NUM_RE = re.compile(r"\bnum:(-?\d[\d,]*\.?\d*)")
+_LEAKED_NUM_RE = re.compile(r"\bnum:\s*(-?\d[\d,]*\.?\d*)")
+# Fabricated PLACEHOLDER handles the model templates when it has no real value —
+# e.g. `num: [recent price]`, `num:<id>`, `url: [link]`. They never resolve and
+# leak verbatim (the space/brackets dodge the value/handle regexes below).
+_LEAKED_PLACEHOLDER_RE = re.compile(
+    r"\b(?:vid|img|url|num):\s*(?:\[[^\]]{0,60}\]|<[^>]{0,60}>)", re.IGNORECASE)
 _LEAKED_HANDLE_RE = re.compile(r"\b(?:vid|img|url|num):[A-Za-z0-9._-]{2,40}")
+# Catch-all for a dangling handle PREFIX with no valid 8-char id after it (e.g.
+# left behind when the HTML scrub already stripped `<id>` from `num:<id>`).
+_LEAKED_BARE_RE = re.compile(r"\b(?:vid|img|url|num):(?![A-Za-z0-9]{8}\b)", re.IGNORECASE)
 
 
 def _fmt_leaked_num(raw: str) -> str:
@@ -364,8 +374,11 @@ def _clean_leaked_handles(text: str) -> str:
     if not text:
         return text
     text, _ = substitute_handles_in_text(text)          # resolve real 8-char handles
+    text = _LEAKED_PLACEHOLDER_RE.sub("", text)         # drop `num: [recent price]` / `<id>`
     text = _LEAKED_NUM_RE.sub(lambda m: _fmt_leaked_num(m.group(1)), text)  # num:513.32 → 513.32
     text = _LEAKED_HANDLE_RE.sub("", text)              # drop fabricated/expired leftovers
+    text = _LEAKED_BARE_RE.sub("", text)                # drop a dangling `num:`/`url:` prefix
+    text = re.sub(r"\s+([,.;!?])", r"\1", text)         # tidy space-before-punct from removals
     return re.sub(r"\s{2,}", " ", text).strip()
 
 

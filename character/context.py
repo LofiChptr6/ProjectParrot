@@ -609,7 +609,10 @@ JSON has values like `"conviction": 1.14`, `"unrealized_pnl": -11.39`. Write
 those exactly as they appear, as ordinary digits.
 The rule that ALWAYS holds: **never invent a `num:…` handle.** If a value is not
 already a `num:` handle in the tool result, just write the number. A made-up
-handle resolves to nothing and the user hears a blank. Also never quote a number
+handle resolves to nothing and the user hears a blank. And NEVER write a
+placeholder like `num: [recent price]`, `num:<id>`, or `num:` + anything that
+isn't an exact 8-char id from THIS turn's tool result — if you don't have the
+number, leave it out or call a tool; do not template a fake one. Also never quote a number
 you only "remember" from earlier — use this turn's tool result.
 - OK (handle in the result): `SOXL is trading at num:<id>, down num:<id> from yesterday.`
 - OK (plain number in the result): `BIRK's conviction is 1.14, expecting a 3.2% return in 2 days.`
