@@ -55,6 +55,10 @@ llm:
   deep:
     base_url: http://127.0.0.1:8000/v1
     model: Qwen/Qwen3-32B-FP8
+    # Bigger budget than the 3B's 2048: Qwen *thinks* (a <think> block) before
+    # answering, and on a hard/escalated reasoning turn 2048 truncates mid-thought
+    # → no answer reaches TTS (the empty-fallback fires). 4096 lets think+answer fit.
+    max_tokens: 4096
     # STRICT guard — this path hits the SHARED trading vLLM, so bound Mocha's
     # load so a Mocha bug can never starve the desk (the prime directive).
     isolation:
@@ -72,6 +76,25 @@ llm:
                conviction, attribution, briefing, hedge, exposure, drawdown,
                earnings, catalyst, stock, ticker, price, market, analyze,
                explain, compare, forecast, valuation]
+    # Tool/lookup intent → route the tool-EMITTING pass to Qwen (not the 3B,
+    # which fumbles inline tool-call JSON). Kept narrow so casual chat stays on
+    # the 3B and off opus's shared GPU. Omit to use the in-code default list.
+    tool_keywords: [news, headline, weather, forecast, temperature, "look up",
+                    lookup, search, google, schedule, remind, reminder, calendar,
+                    diary, "show me", "pull up", "what's the", "whats the",
+                    "how much", "how many", "price of", latest, "who won", score,
+                    stock, chart, "play "]
+  # Output verifier — on NON-realtime surfaces (telegram/discord/cli, cron, and
+  # the eval harness) Qwen re-reads the drafted reply before it's sent and repairs
+  # leaked artifacts (<think>, raw JSON, stray tags) + claims not backed by the
+  # tool results. The webapp (typed + live voice) streams live and skips this.
+  # Fail-open: any verifier error keeps the original draft. See graph.py:verify_node.
+  verifier:
+    enabled: true
+    realtime_sources: [web, ws_live, voice, voice-stream]
+    # The verifier only fires when a tool ran (data fidelity) or the draft looks
+    # malformed (leaked <think>/JSON/tags). Clean tool-free prose is sent as-is,
+    # so her voice on personal replies is never reprocessed.
 
 stt:
   # Voice INPUT removed (text-only) to free ~5.5GB VRAM for Mocha's own LLM.
@@ -132,9 +155,11 @@ memory:
   max_results: 5
   # How many recent exchanges to keep in short-term context
   short_term_limit: 22
-  # Single-operator assistant: all channels funnel into one user_id, with
-  # `channel` in metadata for filtering.
-  mem0_user_id: primary
+  # Single-operator assistant: every channel funnels into ONE user_id — Ika —
+  # so memory, history, and shared-news records all share one namespace and a
+  # Telegram reply lands where the news was stored. (`channel` stays in metadata
+  # for filtering.) bridge/server.py:IKA_USER_ID reads this value.
+  mem0_user_id: ika
 
 # ---------------------------------------------------------------------------
 # diary — Mocha's per-day activity memory ("her diary")
@@ -246,11 +271,15 @@ tools:
     # Mocha's diary (per-day activity memory)
     - recall_diary
     - show_diary
+    # Recall news she's SHARED before (semantic search over shared_news mem0)
+    - recall_news
     # Save the user's preferred name once they introduce themselves
     - set_display_name
     # Personalized trading desk (proxies opus trading MCP — read-only, PG-only).
     - get_trading_briefing
     - get_position_dossier
+    - get_ticker_valuation   # desk's Damodaran/Sonnet intrinsic-value verdict, distilled (hand-written wrapper)
+    - get_position_brief     # one call = position dossier + valuation, for strategy questions (hand-written wrapper)
     - get_agent_overview
     - get_pnl_attribution
     - get_trade_activity
@@ -321,16 +350,35 @@ autonomy:
   lonely_after_s: 300
   # Minimum seconds between LLM-driven autonomy evaluations (decides whether
   # to speak). Keeps cost bounded.
-  eval_interval_s: 45
-  # Hard floor between any two autonomous utterances.
-  min_interval_between_autonomous_turns_s: 180
-  # Safety ceiling — counter resets at local midnight.
-  daily_max_autonomous_turns: 12
+  eval_interval_s: 90
+  # Hard floor between any two SPOKEN autonomous turns (news share or check-in).
+  # Raised 180 -> 600 so she's genuinely rare, not chatty.
+  min_interval_between_autonomous_turns_s: 600
+  # Safety ceiling — counter is now PERSISTED to data/autonomy_state.json so it
+  # actually survives bridge restarts (it used to reset to 0 on every restart,
+  # which is how a churny day produced 70+ check-ins against a "12" cap).
+  daily_max_autonomous_turns: 10
+  # Probability a bored/lonely fallback check-in fires when the curiosity pool is
+  # empty AND allow_empty_checkins is on. Lower = more silence.
+  checkin_probability: 0.5
   # Reconnect hello fires at most once per this window (avoids rage-refresh spam).
   reconnect_debounce_s: 300
-  # Suppress drift/bored/lonely for this long after the last tool execution —
-  # so autonomy never interrupts an active design / research session.
-  task_quiet_after_s: 180
+  # Presence gate (autonomy/presence.py) — the load-bearing "don't talk over me"
+  # knob. Mocha is only proactive once Ika has been silent (no message, no
+  # in-flight turn) for this long; the instant he speaks she's CONVERSING and
+  # silent, and after idle_after_s of quiet she returns to IDLE. This replaced
+  # the old never-armed task_quiet_after_s guard.
+  idle_after_s: 600
+  # When the curiosity pool is empty, may she still fire a content-free check-in?
+  # Default OFF — she only speaks unprompted when she has a genuinely fresh item,
+  # never ambient "still there?" filler.
+  allow_empty_checkins: false
+  # Mood — a soft emotional prior from the desk's COMBINED day P&L (read-only,
+  # cached). Colors her tone (brighter up, more careful down) in BOTH the chat
+  # graph and the idle composer; she never recites P&L numbers unprompted.
+  mood:
+    enabled: true
+    refresh_s: 180   # min seconds between read-only get_balances reads
   # Per-mode toggles so you can disable any single autonomy mode without
   # killing the whole feature.
   modes:
@@ -338,6 +386,31 @@ autonomy:
     bored: true
     lonely: true
     reconnect_hello: true
+  # Curiosity — when idle, surface a genuinely interesting news item instead of
+  # content-free "it's been quiet" filler. Items are fetched via the get_news
+  # tool, deduped against a seen-set, and pulled from a rotating MIX of her-taste
+  # topics (science/space/odd) and desk-relevant topics (markets/macro).
+  # Fail-safe: any error here degrades to "no item" and never breaks the tick.
+  curiosity:
+    enabled: true
+    refill_interval_s: 2700   # ~45 min between Brave refills
+    pool_target: 6            # only refill when fewer than this remain unseen
+    fetch_per_topic: 5        # articles requested per refill
+    max_seen: 500             # cap on the dedup ledger
+    topics_self:
+      - "latest space exploration discovery"
+      - "new neuroscience study brain"
+      - "physics discovery this week"
+      - "recent archaeology discovery"
+      - "strange offbeat science news"
+      - "deep sea creature discovery"
+      - "AI research breakthrough this week"
+      - "new astronomy discovery telescope"
+    topics_desk:
+      - "stock market today"
+      - "federal reserve interest rates"
+      - "technology company earnings"
+      - "global economy outlook"
 
 # Notifications queue — deliveries that were fired by cron jobs while no
 # surface was reachable (web closed, Telegram unknown). Consumed on next

@@ -30,12 +30,16 @@ class Channel(abc.ABC):
         """Gracefully shut down the channel."""
 
     @abc.abstractmethod
-    async def send(self, text: str, user_id: Optional[str] = None) -> None:
+    async def send(self, text: str, user_id: Optional[str] = None) -> Optional[int]:
         """Push a message out through this channel.
 
         *user_id* is optional — for broadcast channels (like CLI) it can be
         ignored; for DM-oriented channels (Telegram, Discord) it routes the
         reply to the right conversation.
+
+        Returns the platform message id of the sent message when the channel can
+        provide one (Telegram), so callers can later resolve a reply back to it;
+        returns None for channels that don't expose one (CLI broadcast).
         """
 
     def __repr__(self) -> str:

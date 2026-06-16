@@ -199,6 +199,8 @@ async def drive_inline_stream(
                     "arguments": ev["arguments"],
                     "id": ev["id"],
                 }
+            elif kind == "escalate":
+                yield {"type": "escalate"}
 
     # Drain parser
     for ev in parser.finish():
@@ -224,6 +226,8 @@ async def drive_inline_stream(
                 "arguments": ev["arguments"],
                 "id": ev["id"],
             }
+        elif kind == "escalate":
+            yield {"type": "escalate"}
 
     for chunk in chunker.flush_final():
         yield _make_chunk(chunk)

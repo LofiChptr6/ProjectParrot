@@ -37,6 +37,15 @@ EXPOSED_TOOLS: set[str] = {
     "get_trading_briefing",
     # Curated companion views (raw data + analyst_note) — auto-registered.
     "get_position_dossier",
+    # NOTE: "get_ticker_valuation" (the desk's Damodaran/Sonnet valuation report,
+    # read-only, by ticker) is deliberately NOT in this allowlist. opus DOES expose
+    # it (mcp_server.py imports mcp_tools.ticker_valuation), but it returns raw
+    # markdown prose, not JSON — the generic _opus_proxy path does json.loads() on
+    # every result and would reject it as "non-JSON output". It also needs
+    # distilling (the full report is ~16 KB, far too big for a voice turn). So it's
+    # served by a hand-written wrapper instead: tools/custom/get_ticker_valuation.py
+    # (raw-text subprocess + TL;DR/Verdict extraction), allowlisted in config.yaml
+    # tools.allowed and wired into the desk_block in context.py.
     "get_agent_overview",
     "get_pnl_attribution",
     "get_trade_activity",

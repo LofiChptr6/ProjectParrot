@@ -19,15 +19,21 @@ class TurnState(TypedDict, total=False):
     user_id: Optional[str]      # hard partition key (history, memory, tools)
     job_id: int                 # also the conversation_id
     source: str                 # "web" | "channel" | "voice" | "eval" | ...
+    realtime: bool              # webapp/voice (stream live, no verifier) vs
+                                # telegram/discord/cli (buffered → verify before send)
     base_ctx: Any               # bridge.call_log.CallContext (base)
 
     # ── Inputs ──────────────────────────────────────────────────────────────
     user_text: str
     memories: list              # pre-fetched mem0 facts (caller supplies)
+    reply_context: Optional[str]  # set when Ika replies to a Mocha message (the
+                                  # resolved shared article, injected as source data)
 
     # ── Routing (which model serves this turn) ──────────────────────────────
     route: str                  # "fast" (Llama-3B) | "deep" (Qwen-32B)
     pass_model: str             # model id actually used this pass (for logging)
+    escalate_requested: bool    # fast model emitted <escalate/> this pass
+    escalated: bool             # already handed off to deep once (no re-escalate)
 
     # ── Working set (mutated across the ReAct loop) ─────────────────────────
     messages: list              # OpenAI-format message array

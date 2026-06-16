@@ -41,13 +41,13 @@ from typing import Optional
 
 log = logging.getLogger(__name__)
 
-_KNOWN_TAGS = frozenset({"reads", "emotion", "gesture", "tool_call", "think"})
+_KNOWN_TAGS = frozenset({"reads", "emotion", "gesture", "tool_call", "think", "escalate"})
 _SIMPLE_BODY_TAGS = frozenset({"reads", "emotion", "gesture"})  # close by exact </name>
 _MAX_TAG_LOOKAHEAD = 128
 _SENTENCE_TERMINATORS = frozenset(".!?")
 
 _TAG_OPEN_RE = re.compile(
-    r"<\s*(/?)\s*(reads|emotion|gesture|tool_call|think)\s*"
+    r"<\s*(/?)\s*(reads|emotion|gesture|tool_call|think|escalate)\s*"
     r"(?:name\s*=\s*\"([^\"]*)\")?\s*(/?)\s*>",
     re.IGNORECASE,
 )
@@ -297,6 +297,11 @@ class InlineTagParser:
                         })
                     else:
                         log.debug("inline-tag: self-closing <tool_call/> without name; ignored")
+                elif tag == "escalate":
+                    # Self-handoff signal: the model judged this beyond it. Emit
+                    # once; the graph re-runs the turn on the deep model.
+                    self._emit_flush_on_tag_boundary()
+                    self._pending.append({"kind": "escalate"})
                 else:
                     # Self-closing reads/emotion/gesture/think — ignore content, emit nothing
                     log.debug("inline-tag: self-closing <%s/> ignored", tag)
@@ -317,6 +322,10 @@ class InlineTagParser:
             elif tag == "tool_call":
                 self._state = _State.TOOL_CALL_BODY
                 self._tool_call_name = attr_name or ""
+            elif tag == "escalate":
+                # Tolerate a non-self-closed <escalate> — it carries no body; emit
+                # the signal and stay in TEXT (a trailing </escalate> is harmless).
+                self._pending.append({"kind": "escalate"})
             self._buf = self._buf[end:]
             return True
 

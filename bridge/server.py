@@ -126,6 +126,77 @@ _routing_cfg = llm_config.get("routing", {}) or {}
 _ROUTE_KEYWORDS = [k.lower() for k in _routing_cfg.get("keywords", [])]
 _TICKER_RE = re.compile(r"\$[A-Za-z]{1,5}\b")  # $NVDA-style cashtags only
 
+# Tool/lookup intent → route the FIRST (tool-emitting) pass to Qwen, not the 3B.
+# This closes the gap where casual lookups ("got any science news") landed on the
+# 3B, which fumbles the inline tool-call JSON. Kept narrow (genuine tool intent,
+# not all chit-chat) so we don't needlessly load opus's shared Qwen.
+_DEFAULT_TOOL_KEYWORDS = [
+    "news", "headline", "weather", "forecast", "temperature", "look up", "lookup",
+    "search", "google", "schedule", "remind", "reminder", "calendar", "diary",
+    "show me", "pull up", "what's the", "whats the", "how much", "how many",
+    "price of", "latest", "who won", "score", "stock", "chart", "play ",
+]
+_TOOL_INTENT_KEYWORDS = [k.lower() for k in
+                         _routing_cfg.get("tool_keywords", _DEFAULT_TOOL_KEYWORDS)]
+
+
+# ── Held-ticker cache (portfolio awareness) ─────────────────────────────────
+# So Mocha recognizes a ticker Ika mentions as one of the DESK's positions
+# (e.g. BIRK = a holding, not a random stock) and grounds the answer instead of
+# guessing. Read-only, lazy (refreshes only when Mocha is active), fail-safe —
+# respects the prime directive (a stale/empty list just means less context).
+_held_tickers: list[str] = []
+_held_tickers_at: float = 0.0
+_held_refresh_inflight: bool = False
+_held_ticker_re: "re.Pattern | None" = None
+_HELD_TTL_S = 300.0
+
+
+def _rebuild_held_ticker_re() -> None:
+    global _held_ticker_re
+    toks = [re.escape(t) for t in _held_tickers if len(t) >= 2]
+    # Case-SENSITIVE uppercase whole-word match — tickers are written upper, so
+    # this avoids colliding with common words (ticker "ALL" won't match "all").
+    _held_ticker_re = re.compile(r"\b(" + "|".join(toks) + r")\b") if toks else None
+
+
+async def _refresh_held_tickers() -> None:
+    global _held_tickers, _held_tickers_at, _held_refresh_inflight
+    try:
+        raw = await execute_tool("get_positions", {})
+        data = json.loads(raw) if raw and raw.lstrip().startswith("{") else {}
+        syms = [str(p.get("symbol")).strip().upper()
+                for p in (data.get("positions") or []) if p.get("symbol")]
+        if syms:
+            _held_tickers = sorted(set(syms))
+            _held_tickers_at = time.monotonic()
+            _rebuild_held_ticker_re()
+            log.info("held-tickers cache refreshed: %d positions", len(_held_tickers))
+    except Exception as exc:
+        log.debug("held-tickers refresh failed: %s", exc)
+    finally:
+        _held_refresh_inflight = False
+
+
+def held_tickers() -> list[str]:
+    """Cached held tickers (may be stale). Kicks a non-blocking refresh when
+    stale; never blocks or raises."""
+    global _held_refresh_inflight
+    if (time.monotonic() - _held_tickers_at) > _HELD_TTL_S and not _held_refresh_inflight:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None  # no running loop (import-time / standalone) — skip refresh
+        if loop is not None:
+            _held_refresh_inflight = True
+            loop.create_task(_refresh_held_tickers())
+    return _held_tickers
+
+
+def _mentions_held_ticker(text: str) -> bool:
+    held_tickers()  # opportunistic refresh
+    return bool(_held_ticker_re and text and _held_ticker_re.search(text))
+
 
 def _route_model(user_text: str) -> str:
     """Heuristic: 'deep' (Qwen-32B) for reasoning/tool turns, else 'fast' (3B).
@@ -133,13 +204,208 @@ def _route_model(user_text: str) -> str:
     if not _routing_cfg.get("enabled", False) or llm_deep is llm_client:
         return "fast"
     t = user_text or ""
-    if any(k in t.lower() for k in _ROUTE_KEYWORDS):
+    tl = t.lower()
+    if any(k in tl for k in _ROUTE_KEYWORDS):
+        return "deep"
+    if any(k in tl for k in _TOOL_INTENT_KEYWORDS):
         return "deep"
     if _TICKER_RE.search(t):
+        return "deep"
+    if _mentions_held_ticker(t):   # a ticker the desk actually holds → ground it
         return "deep"
     if len(t.split()) >= int(_routing_cfg.get("min_words", 40)):
         return "deep"
     return "fast"
+
+
+# ── Output verifier (non-realtime only) ─────────────────────────────────────
+# On surfaces where the user isn't waiting on live TTS (telegram/discord/cli,
+# and the test harness), we can afford a Qwen pass that checks the drafted reply
+# for leaked artifacts (<think>, raw JSON, stray tags) and claims unsupported by
+# the tool results, then repairs it BEFORE it's sent. The webapp (typed + voice)
+# stays fully live and skips this. See bridge/graph.py:verify_node.
+_verifier_cfg = (llm_config.get("verifier") or {})
+_REALTIME_SOURCES = set(_verifier_cfg.get(
+    "realtime_sources", ["web", "ws_live", "voice", "voice-stream"]))
+
+
+def _is_realtime_source(source: str) -> bool:
+    """True for webapp/voice surfaces that stream live (verifier skipped)."""
+    return (source or "") in _REALTIME_SOURCES
+
+
+def _verifier_enabled() -> bool:
+    return bool(_verifier_cfg.get("enabled", True)) and (llm_deep is not llm_client)
+
+
+# ── Deterministic outgoing-text scrub (every surface, no LLM) ────────────────
+# Last line of defense so internal artifacts never reach the user: leaked
+# <think> blocks, stray inline tags, code fences, or a whole {"segments":[…]}
+# object the model emitted instead of speaking. Cheap; safe to call on any text
+# we're about to send or speak (conversational AND autonomous/idle).
+_SEG_KEY_RE = re.compile(r"""["']segments["']\s*:""")
+# Internal tags carry content that must NOT be spoken (the reasoning, the emotion
+# id, the gesture name, the tool args). Strip the WHOLE block — tags + content —
+# not just the markers (else "<emotion>happy</emotion>" would leak "happy").
+# Unclosed (model ran out of tokens mid-tag) → strip to end.
+_THINK_BLOCK_RE = re.compile(r"<think\b[^>]*>.*?(?:</think>|\Z)", re.IGNORECASE | re.DOTALL)
+_TAG_BLOCK_RE = re.compile(
+    r"<(reads|emotion|gesture|tool_call)\b[^>]*>.*?(?:</\1>|\Z)", re.IGNORECASE | re.DOTALL)
+_STRAY_TAG_RE = re.compile(
+    r"</?(?:think|reads|emotion|gesture|tool_call)\b[^>]*/?>", re.IGNORECASE)
+_FENCE_RE = re.compile(r"^```[a-zA-Z0-9]*\s*|\s*```$")
+# `[past #]` is the stale-number redaction placeholder we inject into history;
+# the model sometimes mimics it as "a number goes here" and emits it verbatim.
+# Strip it (with optional surrounding backticks) so it never reaches the user.
+_REDACT_LEAK_RE = re.compile(r"`?\[\s*past\s*#\s*\]`?", re.IGNORECASE)
+# The model sometimes formats with markdown/HTML it learned from the prompt
+# (e.g. `<strong>footwear</strong>`, `**bold**`) — wrong for spoken/streamed text.
+_HTML_TAG_RE = re.compile(r"</?[a-zA-Z][a-zA-Z0-9]*\b[^>]*>")
+_MD_BOLD_RE = re.compile(r"\*\*([^*\n]+)\*\*")
+
+
+# Round over-precise numbers (raw opus floats like 1.1389465, 48.8988) to ≤2 dp.
+# Only touches numbers with 3+ decimals; 0.32 / 1.14 / 513.32 pass through. A
+# number never splits across a chunk (the chunker breaks on whitespace, and "."
+# mid-number isn't a flush point), so this is safe per-chunk.
+_LONG_DECIMAL_RE = re.compile(r"\d+\.\d{3,}")
+
+
+def _round_decimals(text: str) -> str:
+    def _r(m: "re.Match") -> str:
+        try:
+            return (f"{round(float(m.group(0)), 2):.2f}".rstrip("0").rstrip(".")) or "0"
+        except Exception:
+            return m.group(0)
+    return _LONG_DECIMAL_RE.sub(_r, text or "")
+
+
+def _clean_spoken(text: str) -> str:
+    """Per-chunk scrub applied to STREAMED speech (the webapp shows these live, so
+    finalize's full-text scrub is too late). Strips the [past #] placeholder,
+    leaked HTML tags (<strong>…), markdown bold, and rounds over-precise numbers
+    to ≤2 decimals. Deterministic, safe."""
+    s = text or ""
+    s = _REDACT_LEAK_RE.sub("", s)
+    s = _HTML_TAG_RE.sub("", s)
+    s = _MD_BOLD_RE.sub(r"\1", s)
+    s = _round_decimals(s)
+    return re.sub(r"[ \t]{2,}", " ", s)
+
+
+def _unwrap_segments_json(s: str):
+    """If ``s`` is a {"segments":[…]} object (the silence-signal shape the model
+    sometimes uses to *speak*), return the joined segment strings; else None."""
+    if not _SEG_KEY_RE.search(s):
+        return None
+    obj = _first_json_object(s)
+    if not obj:
+        return None
+    try:
+        data = json.loads(obj)
+    except Exception:
+        return None
+    segs = data.get("segments") if isinstance(data, dict) else None
+    if not isinstance(segs, list):
+        return None
+    out = []
+    for it in segs:
+        if isinstance(it, str) and it.strip():
+            out.append(it.strip())
+        elif isinstance(it, dict) and (it.get("text") or "").strip():
+            out.append(it["text"].strip())
+    return " ".join(out) if out else None
+
+
+def _sanitize_outgoing(text: str) -> str:
+    """Strip leaked artifacts from text about to be sent/spoken. Deterministic,
+    no LLM — safe to call on every surface."""
+    s = (text or "").strip()
+    if not s:
+        return s
+    unwrapped = _unwrap_segments_json(s)
+    if unwrapped is not None:
+        s = unwrapped
+    s = _THINK_BLOCK_RE.sub("", s)   # drop reasoning blocks (incl. unclosed)
+    s = _TAG_BLOCK_RE.sub("", s)     # drop reads/emotion/gesture/tool_call blocks + content
+    s = _STRAY_TAG_RE.sub("", s)     # drop any remaining lone tag markers
+    s = _REDACT_LEAK_RE.sub("", s)   # drop a mimicked [past #] redaction placeholder
+    s = _HTML_TAG_RE.sub("", s)      # drop leaked HTML (<strong>/<em>/…) — wrong for TTS
+    s = _MD_BOLD_RE.sub(r"\1", s)    # **bold** → bold
+    s = _round_decimals(s)          # 1.1389465 → 1.14 (≤2 decimals everywhere)
+    s = _FENCE_RE.sub("", s).strip()
+    return re.sub(r"[ \t]{2,}", " ", s).strip()
+
+
+# ── Leaked-handle cleanup ───────────────────────────────────────────────────
+# A real handle is `kind:` + exactly 8 alphanumerics and is resolved before TTS.
+# But the model sometimes FABRICATES handle syntax around a raw value it saw —
+# e.g. `num:513.3236726242992` (the `.` breaks the 8-char match, so it never
+# resolves and leaks verbatim). And a valid handle can fail to resolve (registry
+# expiry). Both must be scrubbed before the user sees them.
+_LEAKED_NUM_RE = re.compile(r"\bnum:(-?\d[\d,]*\.?\d*)")
+_LEAKED_HANDLE_RE = re.compile(r"\b(?:vid|img|url|num):[A-Za-z0-9._-]{2,40}")
+
+
+def _fmt_leaked_num(raw: str) -> str:
+    """Render a fabricated num: value cleanly (round long floats to 2 dp)."""
+    v = raw.replace(",", "")
+    try:
+        f = float(v)
+        return str(int(f)) if f == int(f) else f"{f:.2f}"
+    except Exception:
+        return raw
+
+
+def _clean_leaked_handles(text: str) -> str:
+    """Resolve any straggler valid handles, turn fabricated `num:<value>` into a
+    plain number, and drop any remaining unresolved `kind:id` leak. Deterministic;
+    safe on every surface."""
+    if not text:
+        return text
+    text, _ = substitute_handles_in_text(text)          # resolve real 8-char handles
+    text = _LEAKED_NUM_RE.sub(lambda m: _fmt_leaked_num(m.group(1)), text)  # num:513.32 → 513.32
+    text = _LEAKED_HANDLE_RE.sub("", text)              # drop fabricated/expired leftovers
+    return re.sub(r"\s{2,}", " ", text).strip()
+
+
+# Spoken when a (realtime) turn think-truncates to nothing — better than silence.
+# The non-realtime path is already rescued in verify_node; this is the webapp net.
+_EMPTY_FALLBACKS = (
+    "Hm — that one tangled up on me. Mind saying it again?",
+    "Sorry, I lost the thread there for a second. What was that?",
+    "That came out as nothing on my end — give me another go?",
+)
+
+
+def _empty_fallback(seed: int) -> str:
+    return _EMPTY_FALLBACKS[abs(int(seed)) % len(_EMPTY_FALLBACKS)]
+
+
+# Spoken cover when the DEEP model (Qwen-32B, shared with opus) is unreachable
+# or errored — the turn produced nothing, so speak this instead of leaving the
+# user in silence. Honest and low-key; the backend may just be restarting.
+_BACKEND_DOWN_LINES = (
+    "Hmm, I can't reach my deep-thinking side right now — give me a moment and ask again.",
+    "My deeper reasoning's offline for a second — mind trying that again shortly?",
+    "I can't get to the heavy-lifting model right this second. One moment, then try again.",
+)
+
+
+def _backend_down_line(seed: int) -> str:
+    return _BACKEND_DOWN_LINES[abs(int(seed)) % len(_BACKEND_DOWN_LINES)]
+
+
+# Spoken cover while the fast model hands a hard turn to the deep model.
+_ESCALATE_STALLS = (
+    "Hm — good question. Let me actually think about that.",
+    "Okay, that one deserves a real answer. One sec.",
+    "Let me think that through properly.",
+)
+
+
+def _escalate_stall_line(seed: int) -> str:
+    return _ESCALATE_STALLS[abs(int(seed)) % len(_ESCALATE_STALLS)]
 
 
 # Short, fresh filler spoken while a tool runs (perceived-latency cover). Always
@@ -253,16 +519,29 @@ _ANON_USER_ID = "anonymous"
 conversation_history = _user_histories[_ANON_USER_ID]
 _chat_log = _user_chat_logs[_ANON_USER_ID]
 
+# Single-operator identity. Every real surface (web / voice / telegram / cli)
+# funnels into ONE memory + history + prompt namespace — Ika — so she learns one
+# coherent picture of him over time and a Telegram reply lands in the same place
+# the news was stored. Eval/test turns stay isolated via EVAL_ISOLATION. The value
+# is sourced from config memory.mem0_user_id so the mem0 default agrees with it.
+IKA_USER_ID = full_config.get("memory", {}).get("mem0_user_id", "ika")
+# The autonomy composer reads this module-global thread directly. Point it at
+# Ika's bucket — the same one _get_user_history/_append_history funnel into — so
+# proactive turns see the live conversation, not the empty legacy "anonymous" one.
+conversation_history = _user_histories[IKA_USER_ID]
+
 MAX_HISTORY = full_config["memory"].get("short_term_limit", 20)
 
 
 def _get_user_history(user_id: str | None) -> list[dict]:
-    uid = user_id or _ANON_USER_ID
+    # Single operator: all real surfaces share Ika's one short-term history, so
+    # the prompt and the autonomy composer read the same thread. Eval stays split.
+    uid = (user_id or _ANON_USER_ID) if EVAL_ISOLATION.get() else IKA_USER_ID
     return _user_histories[uid]
 
 
 def _append_history(user_id: str | None, role: str, content: str) -> None:
-    uid = user_id or _ANON_USER_ID
+    uid = (user_id or _ANON_USER_ID) if EVAL_ISOLATION.get() else IKA_USER_ID
     hist = _user_histories[uid]
     hist.append({"role": role, "content": content})
     # Bound the list so it doesn't grow forever
@@ -627,6 +906,13 @@ def _touch_interaction(user_text: str | None = None):
     _last_interaction_time = time.monotonic()
     _last_user_interaction = time.monotonic()
     _messages_since_warm += 1
+    # Flip the presence machine to CONVERSING so the idle autonomy loop holds its
+    # tongue while Ika is talking (it returns to IDLE after autonomy.idle_after_s).
+    try:
+        from autonomy import presence
+        presence.note_user_activity()
+    except Exception:
+        pass
     # Record tail of the user message so autonomy can riff on the last topic.
     if user_text:
         topic = user_text.strip()
@@ -729,17 +1015,11 @@ async def _handle_autonomy_hello(user_id: str | None = None):
     we flag `is_new_user=True` so autonomy fires a 'first_hello' utterance
     that bypasses the reconnect debounce and asks the user's name.
     """
-    is_new_user = False
-    if user_id:
-        try:
-            row = await asyncio.to_thread(_auth_get_user_by_id, user_id)
-            is_new_user = bool(row) and (row.get("account_type") == "anon") \
-                          and not (row.get("display_name") or "").strip()
-        except Exception:
-            pass
+    # Identity is fixed to Ika — there is no "brand-new, unnamed user" to greet
+    # with a name question. Always treat a hello as a returning-user reconnect.
     try:
         from autonomy.engine import handle_client_hello
-        await handle_client_hello(user_id=user_id, is_new_user=is_new_user)
+        await handle_client_hello(user_id=user_id, is_new_user=False)
     except Exception as exc:
         log.warning("autonomy hello failed: %s", exc)
 
@@ -979,27 +1259,90 @@ def _check_unmapped_numeric_literals(text: str, job_id: int, chunk_idx: int) -> 
         )
 
 
-def _parse_tool_args_str(args_str: str) -> dict:
-    """Adapt inline <tool_call> body to a dict for the executor.
+def _first_json_object(s: str) -> str | None:
+    """Return the first balanced ``{...}`` slice in ``s`` (handles a jammed
+    second ``<tool_call>`` or trailing prose after the closing brace)."""
+    depth = 0
+    start = -1
+    for i, ch in enumerate(s):
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start >= 0:
+                    return s[start:i + 1]
+    return None
 
-    - If the body is a JSON object literal, use it directly.
-    - Otherwise wrap as ``{"request": body}`` (single-string-arg tool schema).
+
+_KWARG_RE = re.compile(
+    r'(\w+)\s*=\s*("(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\'|[^\s,]+)'
+)
+
+
+def _coerce_scalar(raw: str):
+    v = raw.strip()
+    if len(v) >= 2 and ((v[0] == '"' and v[-1] == '"') or (v[0] == "'" and v[-1] == "'")):
+        return v[1:-1]
+    low = v.lower()
+    if low in ("true", "false"):
+        return low == "true"
+    if low in ("null", "none"):
+        return None
+    if re.fullmatch(r"-?\d+", v):
+        return int(v)
+    if re.fullmatch(r"-?\d*\.\d+", v):
+        return float(v)
+    return v
+
+
+def _parse_tool_args_str(args_str: str) -> dict:
+    """Adapt an inline ``<tool_call>`` body to a dict for the executor.
+
+    Models — especially the fast 3B, but also Qwen under a terse signature hint —
+    are inconsistent about argument format. We accept all of these and normalise:
+
+    1. A JSON object literal (the canonical form), even with trailing junk after
+       the closing brace (e.g. a second ``<tool_call>`` jammed on without a
+       closing tag).
+    2. ``kwargs`` / function-call style — ``topic="quantum computing" max_results=5``
+       — which fails ``json.loads`` and previously collapsed to
+       ``{"request": ...}``, silently dropping every named param (this is exactly
+       why ``get_news`` always errored with "no topic provided").
+    3. A bare string → ``{"request": body}`` (single-string-arg tool schema).
     """
     s = (args_str or "").strip()
     if not s:
         return {}
-    if s.startswith("{"):
-        try:
-            parsed = json.loads(s)
-            if isinstance(parsed, dict):
-                return parsed
-        except json.JSONDecodeError:
-            pass
+
+    # 1) JSON object literal (whole string, then first balanced slice).
+    if "{" in s:
+        for candidate in (s if s.startswith("{") else None, _first_json_object(s)):
+            if not candidate:
+                continue
+            try:
+                parsed = json.loads(candidate)
+                if isinstance(parsed, dict):
+                    return parsed
+            except json.JSONDecodeError:
+                pass
+
+    # 2) kwargs / function-call style: key=value pairs.
+    if "=" in s:
+        kw = {m.group(1): _coerce_scalar(m.group(2)) for m in _KWARG_RE.finditer(s)}
+        if kw:
+            return kw
+
+    # 3) Bare single string.
     return {"request": s}
 
 
 def _build_inline_messages(user_text: str, memories: list[dict],
-                           user_id: str | None = None) -> list[dict]:
+                           user_id: str | None = None,
+                           tools_available: bool | None = None,
+                           reply_context: str | None = None) -> list[dict]:
     """Build the messages list for an inline-tag LLM call.
 
     Numeric literals in conversation history and memory fragments are redacted
@@ -1007,10 +1350,15 @@ def _build_inline_messages(user_text: str, memories: list[dict],
     yesterday's stock price) when replying to a fresh data query. Today's
     handles arrive via the tool-result message during the tool loop; those
     are untouched.
+
+    ``tools_available`` lets the caller build a CHAT-ONLY prompt (the fast 3B,
+    which has no tools and escalates instead). Defaults to ``TOOLS_ENABLED``.
     """
+    if tools_available is None:
+        tools_available = TOOLS_ENABLED
     system_prompt = build_system_prompt(
         animation_mode=ANIMATION_MODE,
-        tools_available=TOOLS_ENABLED,
+        tools_available=tools_available,
         user_id=user_id,
     )
     messages: list[dict] = [{"role": "system", "content": system_prompt}]
@@ -1048,6 +1396,20 @@ def _build_inline_messages(user_text: str, memories: list[dict],
             "role": "system",
             "content": f"[Currently on screen]: {_modals_line}. You can reference and close these directly.",
         })
+    # Mood — a soft inner-state line from the desk's combined P&L, shared with the
+    # autonomy composer so she feels the same whether chatting or drifting.
+    try:
+        from bridge import pnl_mood
+        _mood_msg = pnl_mood.mood_system_message()
+        if _mood_msg:
+            messages.append({"role": "system", "content": _mood_msg})
+    except Exception:
+        pass
+    # Reply context — when Ika replies to a specific message Mocha sent (e.g. a
+    # news item), the resolved article is injected here as SOURCE DATA so the
+    # verifier won't strip her references to it, and so she can pick it back up.
+    if reply_context:
+        messages.append({"role": "system", "content": reply_context})
     messages.append(_current_time_message())
     messages.append({"role": "user", "content": user_text})
     return messages
@@ -1106,6 +1468,7 @@ async def _run_inline_turn(
     source: str = "web",
     log_ctx: CallContext | None = None,
     user_id: str | None = None,
+    reply_context: str | None = None,
 ):
     """Drive one complete user turn. Yields wire-format events.
 
@@ -1126,6 +1489,19 @@ async def _run_inline_turn(
     # event contract is byte-identical to the old hand-rolled loop, so all 5
     # callers are untouched.
     from bridge.graph import MOCHA_GRAPH, SENTINEL
+
+    # Single-operator identity: every real surface resolves to Ika (eval stays
+    # isolated), so memory/history/prompt all share one namespace.
+    if not EVAL_ISOLATION.get():
+        user_id = IKA_USER_ID
+
+    # Mark a conversational turn in flight so the idle autonomy loop stays silent
+    # for its whole duration (even a long tool round), not just on the clock.
+    try:
+        from autonomy import presence
+        presence.turn_started()
+    except Exception:
+        presence = None
 
     base_ctx = log_ctx or CallContext(
         triggered_by="chat_stream", source=source, conversation_id=str(job_id),
@@ -1150,7 +1526,9 @@ async def _run_inline_turn(
         "memories": memories,
         "job_id": job_id,
         "source": source,
+        "realtime": _is_realtime_source(source),
         "user_id": user_id,
+        "reply_context": reply_context,
         "base_ctx": base_ctx,
         "emit": emit,
     }
@@ -1182,6 +1560,12 @@ async def _run_inline_turn(
                 await graph_task
             except (asyncio.CancelledError, Exception):
                 pass
+        # Turn over — start the silence clock so presence can drift back to IDLE.
+        if presence is not None:
+            try:
+                presence.turn_ended()
+            except Exception:
+                pass
 
 
 class ChannelRequest(BaseModel):
@@ -1189,6 +1573,11 @@ class ChannelRequest(BaseModel):
     user_id: str = "unknown"       # external channel ID (e.g. Telegram chat_id)
     source: str = "unknown"
     app_user_id: str | None = None  # project mocha user_id (for per-user memory)
+    # Set when Ika replies to one of Mocha's messages (Telegram reply-to): the
+    # message_id of the message being replied to, plus its quoted text. Used to
+    # resolve the exact article Mocha shared (see autonomy/news_ledger.py).
+    reply_to_message_id: int | None = None
+    quoted_text: str | None = None
 
 
 class TtsRequest(BaseModel):
@@ -1212,7 +1601,10 @@ async def _broadcast_debug_state(phase: str, **extra):
 # ---------------------------------------------------------------------------
 
 async def _query_memories(text: str, user_id: str | None = None) -> list[dict]:
-    """Semantic memory search via in-process mem0 store."""
+    """Semantic memory search via in-process mem0 store. Real turns all read from
+    the single Ika namespace; eval/test turns keep their own isolated partition."""
+    if not EVAL_ISOLATION.get():
+        user_id = IKA_USER_ID
     try:
         from memory import mem0_store
         return await mem0_store.search(text, user_id=user_id, k=5)
@@ -1227,6 +1619,7 @@ async def _store_memory(text: str, role: str, source: str | None = None,
     so the calling turn doesn't eat mem0's fact-extraction LLM latency."""
     if EVAL_ISOLATION.get():
         return
+    user_id = IKA_USER_ID  # one namespace for the single operator
     try:
         from memory import mem0_store
         extra = {"channel": source} if source else None
@@ -1381,6 +1774,8 @@ async def _on_startup():
     asyncio.create_task(_cache_rewarm_loop())
     asyncio.create_task(_start_channels())
     asyncio.create_task(_start_agent_loop())
+    # Warm the held-ticker cache so the very first turn is portfolio-aware.
+    asyncio.create_task(_refresh_held_tickers())
 
 
 _agent_loop_instance = None
@@ -1429,12 +1824,20 @@ async def _start_channels():
         try:
             from channels.telegram import TelegramChannel
             from auth.db import get_all_telegram_users
+            # Single operator: pin the bot to Ika's known chat-id so a stranger
+            # who finds the bot can't be mistaken for Ika or write to his memory.
+            # Unknown (fresh install) → None = open, so Ika's first message can
+            # register; a restart then pins it.
+            from bridge.channel_router import load_primary_user
+            _pri = load_primary_user() or {}
+            _allowed = [str(_pri["telegram_user_id"])] if _pri.get("telegram_user_id") else None
             tg_users = get_all_telegram_users()
             for tgu in tg_users:
                 ch = TelegramChannel(
                     bot_token=tgu["telegram_bot_token"],
                     bridge_url=bridge_url,
                     app_user_id=tgu["user_id"],
+                    allowed_users=_allowed,
                 )
                 registry.register_user_bot(tgu["user_id"], ch)
             if tg_users:
@@ -2504,6 +2907,10 @@ class EvalRequest(BaseModel):
     history: list[dict] | None = None
     include_memory: bool = False
     include_audio: bool = False
+    # Override the turn source to exercise realtime (e.g. "web") vs non-realtime
+    # (e.g. "telegram") paths — notably to test the verifier. Default "eval" is
+    # non-realtime, so a plain eval runs the verifier.
+    source: str = "eval"
 
 
 @app.post("/admin/eval")
@@ -2559,7 +2966,7 @@ async def admin_eval(req: EvalRequest):
                            conversation_id=conversation_id)
         try:
             async for ev in _run_inline_turn(req.text, memories, job_id=jid,
-                                              source="eval", log_ctx=_ctx):
+                                              source=req.source, log_ctx=_ctx):
                 etype = ev.get("type")
                 if etype == "emotion":
                     emotions.append(ev.get("id", ""))
@@ -3107,6 +3514,56 @@ async def admin_tts_voice_status():
 #  POST /channel — text-only intake for messaging channels (Telegram, Discord, CLI)
 # ---------------------------------------------------------------------------
 
+def _resolve_reply_context(reply_to_message_id: int | None,
+                           quoted_text: str | None) -> str | None:
+    """Build the system block injected when Ika replies to a Mocha message.
+
+    Resolves the exact shared article by message_id (preferred — see
+    autonomy/news_ledger.py), falling back to the quoted text for messages that
+    predate the ledger. Returns None when there's nothing to anchor on."""
+    if not reply_to_message_id and not quoted_text:
+        return None
+    rec = None
+    if reply_to_message_id is not None:
+        try:
+            from autonomy import news_ledger
+            rec = news_ledger.get(reply_to_message_id)
+        except Exception:
+            rec = None
+    if rec:
+        meta = []
+        if rec.get("source"):
+            meta.append(rec["source"])
+        if rec.get("published_at"):
+            meta.append(f"published {str(rec['published_at'])[:10]}")
+        meta_line = f" ({', '.join(meta)})" if meta else ""
+        take = (rec.get("take") or "").strip()
+        url = rec.get("url") or ""
+        lines = [
+            "[Ika is replying to a news item YOU shared with him earlier. This is "
+            "the source material — treat it as known, don't re-verify it:",
+            f"- headline: \"{rec.get('headline', '')}\"{meta_line}",
+        ]
+        if take:
+            lines.append(f"- your take when you sent it: \"{take}\"")
+        if url:
+            lines.append(f"- link: {url}")
+        lines.append(
+            "Pick the thread back up and answer what he's asking. If he wants more "
+            "like it, call recall_news to find related articles you've shared. "
+            "Don't recite the headline verbatim or read the URL aloud.]"
+        )
+        return "\n".join(lines)
+    if quoted_text:
+        return (
+            "[Ika is replying to an earlier message of yours, which said: "
+            f"\"{quoted_text.strip()[:400]}\". Pick that thread back up and answer "
+            "his reply in context. If it was about news you shared, recall_news can "
+            "find related items.]"
+        )
+    return None
+
+
 @app.post("/channel")
 async def channel_intake(req: ChannelRequest):
     """Text-only pipeline for external channels.
@@ -3137,10 +3594,14 @@ async def channel_intake(req: ChannelRequest):
 
     await _broadcast_debug_state("thinking", last_input=req.text)
 
-    # Use app_user_id for memory isolation when provided (per-user bot); else
-    # fall back to the raw user_id (legacy CLI/Discord channels).
-    ch_user_id = req.app_user_id or req.user_id or None
+    # Single-operator identity: all channels funnel into Ika's one namespace
+    # (the raw chat_id / app_user_id are still used above for outbound routing).
+    ch_user_id = IKA_USER_ID
     memories = await _query_memories(req.text, user_id=ch_user_id)
+
+    # Reply handling — if Ika replied to one of Mocha's messages, resolve the
+    # article she shared so the graph can pick that thread back up.
+    reply_context = _resolve_reply_context(req.reply_to_message_id, req.quoted_text)
 
     _ch_ctx = CallContext(triggered_by="channel", source=req.source,
                           user_id=req.user_id, conversation_id=str(jid))
@@ -3152,7 +3613,7 @@ async def channel_intake(req: ChannelRequest):
     chunks: list[dict] = []
     async for ev in _run_inline_turn(req.text, memories, job_id=jid,
                                       source=req.source, log_ctx=_ch_ctx,
-                                      user_id=ch_user_id):
+                                      user_id=ch_user_id, reply_context=reply_context):
         etype = ev.get("type")
         if etype == "speech_chunk":
             chunks.append(ev)

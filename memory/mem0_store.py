@@ -185,16 +185,24 @@ async def search(
     query: str,
     user_id: Optional[str] = None,
     k: int = 5,
+    filters: Optional[dict] = None,
 ) -> list[dict]:
-    """Semantic search. Returns list of {text, role, timestamp, relevance}."""
+    """Semantic search. Returns list of {text, role, timestamp, relevance, metadata}.
+
+    ``filters`` merges extra metadata-equality constraints on top of the user_id
+    partition — e.g. ``filters={"kind": "shared_news"}`` to retrieve only news
+    items Mocha has shared (mem0 2.x accepts arbitrary metadata filters)."""
     if not query or not query.strip():
         return []
     uid = user_id or _default_user_id()
+    flt = {"user_id": uid}
+    if filters:
+        flt.update(filters)
 
     def _sync_search() -> list[dict]:
         try:
             store = get_store()
-            raw = store.search(query=query, top_k=k, filters={"user_id": uid})
+            raw = store.search(query=query, top_k=k, filters=flt)
             if isinstance(raw, dict):
                 return raw.get("results", []) or []
             return raw or []
@@ -211,6 +219,7 @@ async def search(
             "role": meta.get("role", "memory"),
             "timestamp": float(meta.get("timestamp", 0) or 0),
             "relevance": round(float(r.get("score") or 0.0), 4),
+            "metadata": meta,
         })
     return out
 

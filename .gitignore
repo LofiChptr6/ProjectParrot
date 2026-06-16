@@ -36,6 +36,11 @@ data/cron_jobs.json
 data/notifications.jsonl
 data/primary_user.json
 data/recordings/
+# Daily autonomy counter, idle news pool, and the shared-news ledger (message_id
+# -> article map). Generated at runtime; the ledger can hold URLs Mocha sent.
+data/autonomy_state.json
+data/curiosity_pool.json
+data/news_ledger.json
 
 # Per-user runtime data (diary entries, soul.md/behaviors.yaml overrides,
 # conversation context). Contains personal info — never commit.

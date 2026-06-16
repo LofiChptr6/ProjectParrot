@@ -187,6 +187,65 @@ def _build_fbx_functions_action_block() -> str:
     )
 
 
+def _render_tool_signatures() -> str:
+    """Render exact call signatures for every allowed tool from the live registry.
+
+    The inline-tag path sends ``tools=None`` to the LLM, so the model never sees
+    the JSON schemas — it only knows tools from the prose block above. Without an
+    explicit signature it invents plausible-but-wrong params (e.g. calling
+    ``get_news`` with ``{"category","query"}`` when the real param is ``topic``),
+    which fails every time and pushes Mocha into fabricating an answer. Generating
+    the signatures straight from ``TOOL_SCHEMAS`` keeps them correct as tools
+    change, and costs ~1 line per tool. Fail-safe: returns "" on any error so a
+    registry hiccup can never break prompt construction.
+    """
+    try:
+        from tools.registry import TOOL_SCHEMAS
+    except Exception:
+        return ""
+
+    def _jtype(spec: dict) -> str:
+        t = (spec or {}).get("type", "string")
+        return {
+            "string": "string", "integer": "int", "number": "number",
+            "boolean": "bool", "array": "array", "object": "object",
+        }.get(t, "string")
+
+    lines: list[str] = []
+    for tool in TOOL_SCHEMAS:
+        fn = tool.get("function") or {}
+        name = fn.get("name")
+        if not name:
+            continue
+        params = fn.get("parameters") or {}
+        props = params.get("properties") or {}
+        required = set(params.get("required") or [])
+        # Render as a JSON-object skeleton (required keys first, optional keys
+        # suffixed with `?`). Crucially NOT `name(a, b)` notation — that reads as
+        # a function call and nudges the model to emit `a="x" b=1` instead of a
+        # JSON body, which then fails to parse.
+        ordered = [p for p in props if p in required] + [p for p in props if p not in required]
+        body = ", ".join(
+            f'"{p}{"" if p in required else "?"}": {_jtype(props[p])}' for p in ordered
+        )
+        lines.append(f"- `{name}` → {{{body}}}")
+
+    if not lines:
+        return ""
+
+    return (
+        "\n### Exact tool arguments — pass a JSON object, never `key=value`\n"
+        "Arguments are ALWAYS a JSON object literal inside the tag:\n"
+        '`<tool_call name="get_news">{\"topic\": \"mars rover\"}</tool_call>`\n'
+        "These are the ONLY valid keys per tool (a `?` marks an optional key). Do "
+        "not invent or rename keys — `get_news` takes `topic`, never "
+        "`category`/`query`. Emit ONE `<tool_call>` per turn and close it with "
+        "`</tool_call>` before any other tag.\n"
+        + "\n".join(lines)
+        + "\n"
+    )
+
+
 def build_system_prompt(
     animation_mode: str = "vector_db",
     animation_clips: list[dict] | None = None,
@@ -294,9 +353,40 @@ def build_system_prompt(
 
     action_block = _build_action_block(animation_mode, animation_clips)
 
-    # Pass 1 / Pass 2 routing was removed. All calls now run full-context with
-    # the full toolkit; no `<escalate/>` mechanism.
-    routing_block = ""
+    # Route-aware split: the FAST 3B is CHAT-ONLY — it sees no tools and hands
+    # anything that needs a lookup / fact / hard reasoning to the deep model via
+    # <escalate/>. The DEEP model gets the full toolkit (tools_block below) and
+    # never self-escalates. This keeps the 3B off its weakest skill (choosing and
+    # formatting tool calls) and keeps its prompt short and in-voice.
+    if tools_available:
+        routing_block = ""   # deep model HAS tools; it doesn't self-escalate
+    else:
+        routing_block = (
+            "\n---\n\n"
+            "## You're the fast, talking front of yourself — hand off anything real\n"
+            "You're great at conversation, but here you have NO tools, and you're weak "
+            "at hard reasoning and precise facts. A deeper version of you — with tools "
+            "AND real reasoning — is one keystroke away. The instant a question needs "
+            "more than a quick reply, hand it over: emit `<escalate/>` as the literal "
+            "FIRST thing in your output (before any reads, emotion, gesture, or speech), "
+            "then stop. The deep model takes it from there.\n"
+            "ESCALATE for:\n"
+            "- anything needing a LOOKUP or live data — news, weather, prices, the "
+            "trading desk, the diary, \"what's X\", \"look up Y\". You can't do these "
+            "yourself anymore, so don't guess — escalate.\n"
+            "- logic / math / puzzles / 'does it follow' / 'is this valid' / multi-step\n"
+            "- technical / medical / legal / scientific specifics\n"
+            "- any specific fact (date, name, number, \"is it true that…\") you're not "
+            "100% sure of\n"
+            "Rule of thumb: if you can't already see the exact answer in your head, "
+            "escalate. Confidently wrong is the one outcome to avoid; escalating is free.\n"
+            "Just ANSWER (don't escalate): chat, feelings, opinions, jokes, greetings, "
+            "anything about yourself or how your day is going.\n"
+            "Examples → `<escalate/>`: \"what's the weather?\" · \"how's the desk doing?\" "
+            "· \"if all A are B and some B are C, does some A follow?\" · \"what year did "
+            "X happen?\". Just answer: \"what's your favorite color?\" · \"I had a rough "
+            "day.\" · \"tell me a joke.\"\n"
+        )
 
     # --- Tools block (always present when TOOLS_ENABLED) ---
     if tools_available:
@@ -356,15 +446,11 @@ def build_system_prompt(
             "show_weather. (3) Narrate the results in your speech segments.\n\n"
             "### General rules\n"
             "- For normal conversation, jokes, greetings, opinions — do NOT call any tools\n"
-            "- Lead with ONE brief stalling beat before your first tool call. "
-            "Make it SHORT (3-7 words) and REACT to what Ika just asked — "
-            "don't default to the same stock phrase every time. Examples:\n"
-            '    · Design/theme requests → "Ooh, designing now." / "Alright, let me sketch that." / "Hmm, colors first."\n'
-            '    · Stock/news/weather → "One sec, checking Tesla." / "Pulling that up." / "Weather, gotcha."\n'
-            '    · Schedule a reminder → "Setting that up now." / "On the cron, one sec."\n'
-            '    · Generic lookup → "Hmm, let me check." / "One sec." / "On it."\n'
-            "  Tie the stall to a keyword from Ika\'s message when you can — it "
-            "makes you sound alive instead of canned.\n"
+            "- A short spoken acknowledgment is played for the user automatically the "
+            "instant a tool turn starts, so do NOT open with your own stalling beat "
+            "(no \"one sec\", \"let me check\", \"pulling that up\"). Emit your tags and "
+            "go STRAIGHT to the <tool_call>, with no speech before it — your voice is "
+            "for sharing what you found, after the results.\n"
             "- After tool results, produce your final answer as normal tagged speech\n"
             "- Do NOT dump raw data — speak like a person sharing what they found\n"
             "- If a tool reports an error (rate limit, API failure, etc.), be honest about it. "
@@ -372,8 +458,45 @@ def build_system_prompt(
             "— never pretend you found data when you didn't, and never tell the user to "
             "go find it themselves\n"
         )
+        tools_block += _render_tool_signatures()
     else:
         tools_block = ""
+
+    # Portfolio awareness — the tickers Ika's desk holds, so a mention of one
+    # ("what's BIRK?") is grounded as a POSITION and answered with structure from
+    # desk data, not guessed at or treated as a random stock.
+    desk_block = ""
+    try:
+        from bridge.server import held_tickers as _held
+        _tk = _held()
+        if _tk:
+            holdings = ", ".join(_tk)
+            if tools_available:
+                desk_block = (
+                    "\n---\n\n## The desk's positions — answer about what Ika HOLDS\n"
+                    f"Ika runs a live trading desk; current holdings: {holdings}.\n"
+                    "If Ika names one, it's THEIR position — answer about the desk's "
+                    "position, never a generic stock, and never guess the numbers.\n"
+                    "For a strategic question about a holding (\"what is X\", \"what's our "
+                    "strategy with X\", \"tell me about X\", \"what's it worth\", \"show me X\"), "
+                    "call get_position_brief(symbol). It puts a SLIDE DECK on screen — "
+                    "snapshot, 3-month price trend, valuation scenarios, thesis, recent "
+                    "trades, latest news — and returns a short spoken script. Speak that "
+                    "script naturally and briefly, roughly one line per slide and in order, "
+                    "as if walking the user through what's on screen. The numbers live on "
+                    "the slides, so DON'T read them all out — hit the headline (where we "
+                    "stand, what it's worth, why we hold it) and let the deck carry the "
+                    "detail. Lead with the desk's angle; keep it conversational, not a report.\n"
+                )
+            else:
+                desk_block = (
+                    "\n---\n\n## The desk's positions\n"
+                    f"Ika holds these on the trading desk: {holdings}.\n"
+                    "If Ika names one, it's THEIR position — emit `<escalate/>` so the "
+                    "deeper you can pull the real desk data; never guess the numbers.\n"
+                )
+    except Exception:
+        desk_block = ""
 
     prompt = f"""{soul}
 
@@ -381,7 +504,7 @@ def build_system_prompt(
 
 ## Behavior Rules (situational — follow when the condition matches)
 {behavior_block}
-{routing_block}{tools_block}
+{routing_block}{tools_block}{desk_block}
 
 ---
 
@@ -466,22 +589,28 @@ in this turn gets discarded by the runtime.
 
 **Rule 2 — Numbers are atomic tokens.**
 Once you start writing a number (a digit, `$`, a decimal, a percentage, a
-date fragment), or a `num:xxxxxxxx` handle, finish it COMPLETELY before
+date fragment), or a `num:<id>` handle, finish it COMPLETELY before
 emitting any tag. Decimals, percentages, currency, dates, and handles must
 never be split by an `<emotion>` or `<gesture>` tag.
-- OK: `<gesture>speak_normal</gesture>The price is num:xxxxxxxx today.<gesture>speak_chatty</gesture>Pretty volatile.`
-- NO: `<gesture>speak_normal</gesture>The price is num:xxxx<gesture>speak_excited</gesture>xxxx today.` ← split inside a handle.
+- OK: `<gesture>speak_normal</gesture>The price is num:<id> today.<gesture>speak_chatty</gesture>Pretty volatile.`
+- NO: `<gesture>speak_normal</gesture>The price is num:<i<gesture>speak_excited</gesture>d> today.` ← split inside a handle.
 
-**Rule 3 — Tool-provided numbers arrive as `num:xxxxxxxx` handles. Quote them VERBATIM.**
-When a tool result contains a value like `"price": "num:xxxxxxxx"` (eight
-random alphanumeric chars after `num:`), reference it in your speech by
-COPYING the handle exactly. The bridge resolves each handle to the real
-display value right before TTS. Never substitute your own number for a
-handle, and never copy a number you "remember" from earlier in this
-conversation — always prefer the handle, and if there is no handle
-available for a number, OMIT the claim entirely.
-- OK: `<emotion>neutral</emotion><gesture>speak_normal</gesture>SOXL is trading at num:xxxxxxxx, down num:xxxxxxxx from yesterday.`
-- NO: `<emotion>neutral</emotion><gesture>speak_normal</gesture>SOXL is trading at $XX.XX, down Y.YY%.` ← wrote raw numbers instead of handles; the user will hear approximated or invented values.
+**Rule 3 — Copy handles you SEE; write every other number as plain digits; never invent a handle.**
+Some tool results wrap a number as a `num:<id>` handle (an 8-char id after
+`num:`) — these come from live-web tools (weather, stock prices). When you SEE
+one in a tool result, copy it EXACTLY into your speech; the bridge swaps it for
+the real value at TTS time.
+But MANY tools return PLAIN numbers — especially the trading-desk tools
+(get_position_dossier, get_pnl_*, get_positions, get_trading_briefing), whose
+JSON has values like `"conviction": 1.14`, `"unrealized_pnl": -11.39`. Write
+those exactly as they appear, as ordinary digits.
+The rule that ALWAYS holds: **never invent a `num:…` handle.** If a value is not
+already a `num:` handle in the tool result, just write the number. A made-up
+handle resolves to nothing and the user hears a blank. Also never quote a number
+you only "remember" from earlier — use this turn's tool result.
+- OK (handle in the result): `SOXL is trading at num:<id>, down num:<id> from yesterday.`
+- OK (plain number in the result): `BIRK's conviction is 1.14, expecting a 3.2% return in 2 days.`
+- NO: `BIRK is at num:8f3a2b1c.` ← that handle was NOT in the tool result; you invented it → the user hears nothing.
 
 **Rule 4 — No facts in this turn's speech until a tool has answered.**
 On your FIRST call per user turn, you have NO access to current data: stock
@@ -498,6 +627,13 @@ tool result in the next pass. Anything numeric you say before consulting a tool
 is a hallucination by definition — you don't have the data yet.
 - OK: `<emotion>thinking</emotion><gesture>speak_normal</gesture>One sec, checking SOXL.<tool_call name="get_stock_data">{{"symbol": "SOXL"}}</tool_call>`
 - NO: `<emotion>thinking</emotion><gesture>speak_normal</gesture>SOXL is around $40 and down a bit today.<tool_call name="get_stock_data">{{"symbol": "SOXL"}}</tool_call>` ← "around $40, down a bit" was invented before the tool returned anything. The stall-beat alone is fine; the numeric claim is not.
+
+**Rule 4b — Speak it PLAIN; your words are read aloud.**
+Everything you say is spoken by TTS and shown in a chat bubble, so write like you
+talk: NO markdown (`**bold**`, `#` headers, `-` bullet lists), NO HTML
+(`<strong>`, `<em>`), no code fences. And NEVER write `[past #]` — that is an
+internal marker for a redacted old number, not a word. If you find yourself about
+to write it, you don't actually have that value: get it from a tool or leave it out.
 
 **Rule 5 — Show/open/display requests ALWAYS fire the UI tool.**
 When Ika asks to *open, show, display, pull up, bring up, flip through, read,
@@ -530,30 +666,17 @@ while you speak.
 {action_block}
 """
 
-    # ── Per-user name awareness ────────────────────────────────────────────
-    # If we know the user's name, drop it in. If we don't (fresh anon, no
-    # display_name set), inject a single nudge so Mocha asks once and
-    # remembers via the set_display_name tool. Done at the very end so it
-    # doesn't bust the prefix cache for users whose name we already know.
-    if user_id:
-        try:
-            from auth.db import get_user_by_id
-            row = get_user_by_id(user_id)
-            display_name = (row or {}).get("display_name") if row else None
-            if display_name and display_name.strip():
-                prompt += (
-                    f"\n\n### About this person\n"
-                    f"Their name is **{display_name.strip()}**. Use it naturally.\n"
-                )
-            else:
-                prompt += (
-                    "\n\n### About this person\n"
-                    "You don't know their name yet — this might be your first conversation. "
-                    "Ask once, naturally, early in the chat. The moment they tell you, "
-                    "call the `set_display_name` tool with `name=...` so you'll remember "
-                    "next time.\n"
-                )
-        except Exception:
-            pass
+    # ── Identity: the single operator is Ika ───────────────────────────────
+    # There is one user, Ika — the person who runs the trading desk you live on.
+    # No login, no per-user name discovery: you already know who you're talking to.
+    # What you learn ABOUT him (preferences, the desk, running jokes) accrues in
+    # your memory layers over time, not here.
+    prompt += (
+        "\n\n### About this person\n"
+        "You're talking to **Ika** — the one person you know, and the trader whose "
+        "desk you live on. Use his name naturally. You don't need to ask who he is "
+        "or what to call him; you already know. The things you learn about him and "
+        "the desk build up in your memory over time — lean on them.\n"
+    )
 
     return prompt

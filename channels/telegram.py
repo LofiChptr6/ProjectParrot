@@ -72,6 +72,16 @@ class TelegramChannel(Channel):
         if self._app_user_id:
             payload["app_user_id"] = self._app_user_id
 
+        # If Ika is REPLYING to one of Mocha's messages, carry the replied-to
+        # message_id (+ its text) so the bridge can resolve it back to the exact
+        # news item Mocha shared (see autonomy/news_ledger.py) and talk about it.
+        reply_to = update.message.reply_to_message
+        if reply_to is not None:
+            payload["reply_to_message_id"] = reply_to.message_id
+            quoted = reply_to.text or reply_to.caption or ""
+            if quoted:
+                payload["quoted_text"] = quoted[:500]
+
         try:
             resp = await self._http.post(
                 f"{self._bridge_url}/channel",
@@ -107,11 +117,16 @@ class TelegramChannel(Channel):
             await self._app.shutdown()
         await self._http.aclose()
 
-    async def send(self, text: str, user_id: Optional[str] = None) -> None:
-        """Proactively send a message.  Requires a chat_id (user_id)."""
+    async def send(self, text: str, user_id: Optional[str] = None) -> Optional[int]:
+        """Proactively send a message.  Requires a chat_id (user_id).
+
+        Returns the sent message's Telegram message_id (so a proactive news share
+        can be recorded against it and a later reply resolved back), or None."""
         if not self._app or not user_id:
-            return
+            return None
         try:
-            await self._app.bot.send_message(chat_id=int(user_id), text=text)
+            msg = await self._app.bot.send_message(chat_id=int(user_id), text=text)
+            return getattr(msg, "message_id", None)
         except Exception as exc:
             log.warning("Telegram send failed (user_id=%s): %s", user_id, exc)
+            return None

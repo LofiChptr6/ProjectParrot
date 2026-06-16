@@ -21,9 +21,12 @@ import json
 import logging
 import random
 import time
+from pathlib import Path
 from typing import Optional
 
 log = logging.getLogger("autonomy")
+
+ROOT = Path(__file__).resolve().parent.parent
 
 # ---------------------------------------------------------------------------
 #  Config (loaded lazily from config.yaml via bridge/server full_config)
@@ -34,9 +37,24 @@ _DEFAULTS = {
     "drift_after_s": 45,
     "bored_after_s": 120,
     "lonely_after_s": 300,
-    "eval_interval_s": 45,
-    "min_interval_between_autonomous_turns_s": 180,
-    "daily_max_autonomous_turns": 12,
+    "eval_interval_s": 90,
+    # Hard floor between any two *spoken* autonomous turns (news or check-in).
+    # Raised from 180 → 600 so proactive turns are genuinely rare.
+    "min_interval_between_autonomous_turns_s": 600,
+    "daily_max_autonomous_turns": 10,
+    # Probability that a bored/lonely *fallback check-in* (only reached when the
+    # curiosity pool is empty AND allow_empty_checkins is on) actually fires.
+    "checkin_probability": 0.5,
+    # Presence gate: Mocha is only proactive once Ika has been silent (no message,
+    # no in-flight turn) for this long. The moment Ika speaks she's CONVERSING and
+    # holds her tongue; after idle_after_s of quiet she returns to IDLE and may
+    # surface news. See autonomy/presence.py. This is the load-bearing "don't talk
+    # over me" knob (it replaced the never-armed last_tool_at guard).
+    "idle_after_s": 600,
+    # When the curiosity pool is empty, may she still fire a content-free check-in?
+    # Default OFF: she only speaks unprompted when she has a genuinely fresh item,
+    # never ambient filler.
+    "allow_empty_checkins": False,
     "reconnect_debounce_s": 300,
     "modes": {
         "drift": True,
@@ -67,16 +85,66 @@ def _cfg() -> dict:
 # ---------------------------------------------------------------------------
 
 _last_eval_monotonic: float = 0.0
-_day_key: str = ""
+
+# Persistent autonomy state. The old daily counter lived only in ``_mocha_state``
+# (in-memory), so every bridge restart reset it to 0 and handed Mocha a fresh
+# budget — on a churny day (e.g. a migration) that turned a 12/day ceiling into
+# 70+ check-ins. We persist it to disk so the cap actually survives restarts, and
+# piggy-back a short ledger of recent autonomous utterances so the composer can
+# avoid repeating itself (autonomy turns never enter conversation_history, so her
+# normal anti-repetition rule is blind to them).
+_STATE_PATH = ROOT / "data" / "autonomy_state.json"
+_RECENT_MAX = 12
+_persist: Optional[dict] = None
+
+
+def _load_persist() -> dict:
+    try:
+        if _STATE_PATH.exists():
+            d = json.loads(_STATE_PATH.read_text(encoding="utf-8"))
+            d.setdefault("day", "")
+            d.setdefault("turns", 0)
+            d.setdefault("recent", [])
+            return d
+    except Exception as exc:
+        log.warning("autonomy: failed to read state (%s) — starting fresh", exc)
+    return {"day": "", "turns": 0, "recent": []}
+
+
+def _save_persist() -> None:
+    try:
+        _STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _STATE_PATH.write_text(json.dumps(_persist, ensure_ascii=False),
+                               encoding="utf-8")
+    except Exception as exc:
+        log.warning("autonomy: failed to save state: %s", exc)
+
+
+def _get_persist() -> dict:
+    global _persist
+    if _persist is None:
+        _persist = _load_persist()
+    return _persist
+
+
+def _recent_utterances() -> list[str]:
+    return list(_get_persist().get("recent", []))
 
 
 def _maybe_reset_daily_counter() -> None:
+    """Roll the persisted counter over at local midnight, and mirror the live
+    count into ``_mocha_state`` so the existing cap check stays authoritative
+    across restarts."""
     from bridge.server import _mocha_state
-    global _day_key
+    p = _get_persist()
     today = dt.date.today().isoformat()
-    if today != _day_key:
-        _day_key = today
-        _mocha_state["autonomous_turns_today"] = 0
+    if today != p.get("day"):
+        p["day"] = today
+        p["turns"] = 0
+        p["recent"] = []
+        _save_persist()
+    # Restart-proofing: seed the in-memory mirror from the persisted truth.
+    _mocha_state["autonomous_turns_today"] = int(p.get("turns", 0))
 
 
 # ---------------------------------------------------------------------------
@@ -121,26 +189,43 @@ def _build_mood_system_message(state: str, elapsed_s: float, topic: str) -> str:
     )
 
 
+def _pnl_mood_message() -> Optional[str]:
+    """The desk-P&L inner-state line (or None). Shared with the conversational
+    graph so Mocha's mood is the same whether she's chatting or drifting."""
+    try:
+        from bridge import pnl_mood
+        return pnl_mood.mood_system_message()
+    except Exception:
+        return None
+
+
 def _internal_prompt_for_state(state: str, topic: str, findings_preview: str = "") -> str:
     if state == "drift":
         return (
-            f"[autonomy-mode: drift] Ika has been silent on the topic "
-            f"\"{topic}\" for a little while. Decide: add ONE short observation "
-            f"or question, or return {{\"segments\":[]}} to stay silent. "
-            f"Never ask 'are you still there'."
+            f"[autonomy-mode: drift] Ika went quiet on \"{topic}\" a moment ago. "
+            f"If you have ONE genuine new thought about it — an angle, a small "
+            f"question, something it reminded you of — say it in one short line. "
+            f"Otherwise return {{\"segments\":[]}} and stay silent. Do NOT comment "
+            f"on the silence or ask if they're there."
         )
     if state == "bored":
-        tail = f" You can reference the last topic (\"{topic}\") if it's genuinely interesting." if topic else ""
+        tail = f" The last thing you two touched was \"{topic}\" — only pick it back up if it's genuinely worth it." if topic else ""
         return (
-            f"[autonomy-mode: bored] Ika has been quiet for a few minutes while "
-            f"still around. ONE short sentence. Light, curious, not needy. "
-            f"Never say 'Hello?' or 'Are you there?'.{tail}"
+            "[autonomy-mode: bored] Offer ONE short, genuine thing — a stray "
+            "observation, a half-finished thought, something you actually find "
+            "interesting right now. Light, not needy. Do NOT mention that it's "
+            "quiet, that time has passed, or that you're waiting — that's the "
+            "lazy line. If nothing real comes to mind, return {\"segments\":[]}."
+            + tail
         )
     if state == "lonely":
         return (
-            "[autonomy-mode: lonely] Ika has been silent for a long time but is "
-            "still here. ONE short sentence. Slightly more emotionally honest "
-            "('It's been quiet, huh' is fine). Not whiny. Don't beg."
+            "[autonomy-mode: lonely] It's been a long quiet stretch but Ika is "
+            "still around. Your tone can be a touch more honest, but say something "
+            "with actual content — a thought, a small confession, a question "
+            "that's genuinely new. Do NOT remark on the silence, the quiet, or "
+            "the waiting (that is the lazy, repetitive line — avoid it entirely). "
+            "One short sentence, or stay silent: {\"segments\":[]}."
         )
     if state == "reconnect":
         base = (
@@ -177,36 +262,113 @@ async def _compose_utterance(state: str, topic: str, elapsed_s: float,
     parsed from the inline-tag output.
     """
     from bridge.server import (
-        build_system_prompt, llm_client, ANIMATION_MODE,
-        conversation_history, MAX_HISTORY, _new_job_id,
-        call_log,
+        build_system_prompt, ANIMATION_MODE,
+        conversation_history, MAX_HISTORY,
     )
-    from bridge.call_log import CallContext
-    from bridge.inline_tag_parser import InlineTagParser
 
     system_prompt = build_system_prompt(animation_mode=ANIMATION_MODE)
     mood_msg = _build_mood_system_message(state, elapsed_s, topic)
     internal_prompt = _internal_prompt_for_state(state, topic, findings_preview)
 
+    recent = _recent_utterances()
     messages: list[dict] = [
         {"role": "system", "content": system_prompt},
         {"role": "system", "content": mood_msg},
     ]
+    pnl_msg = _pnl_mood_message()
+    if pnl_msg:
+        messages.append({"role": "system", "content": pnl_msg})
+    if recent:
+        messages.append({"role": "system", "content": _avoid_message(recent)})
     for entry in conversation_history[-MAX_HISTORY:]:
         messages.append({"role": entry["role"], "content": entry["content"]})
     messages.append({"role": "user", "content": internal_prompt})
 
+    return await _llm_to_segments(messages, source=f"autonomy:{state}",
+                                  recent_avoid=recent)
+
+
+async def _compose_news_share(item: dict) -> list[dict]:
+    """Compose Mocha's in-voice reaction to one interesting news item.
+
+    Returns pseudo-segments (or [] if she chose silence / the call failed).
+    """
+    from bridge.server import (
+        build_system_prompt, ANIMATION_MODE,
+        conversation_history, MAX_HISTORY,
+    )
+
+    system_prompt = build_system_prompt(animation_mode=ANIMATION_MODE)
+    # A find reads as a curious/thinking beat regardless of how deep the idle was.
+    mood_msg = _build_mood_system_message("drift", 0.0, item.get("title", ""))
+
+    messages: list[dict] = [
+        {"role": "system", "content": system_prompt},
+        {"role": "system", "content": mood_msg},
+    ]
+    pnl_msg = _pnl_mood_message()
+    if pnl_msg:
+        messages.append({"role": "system", "content": pnl_msg})
+    for entry in conversation_history[-MAX_HISTORY:]:
+        messages.append({"role": entry["role"], "content": entry["content"]})
+    messages.append({"role": "user", "content": _news_share_prompt(item)})
+
+    return await _llm_to_segments(messages, source="autonomy:news")
+
+
+def _avoid_message(recent: list[str]) -> str:
+    lines = "\n".join(f"- {r}" for r in recent[-_RECENT_MAX:])
+    return (
+        "[Don't repeat yourself] You've recently said these unprompted lines:\n"
+        f"{lines}\n"
+        "Say something different in substance AND wording, or stay silent. Do "
+        "not paraphrase any of the above."
+    )
+
+
+def _news_share_prompt(item: dict) -> str:
+    title = (item.get("title") or "").strip()
+    snippet = (item.get("snippet") or "").strip()
+    source = (item.get("source") or "").strip()
+    kind = item.get("kind") or "self"
+    flavor = ("It's one of those small-but-huge things you like."
+              if kind == "self"
+              else "It's from the markets/world the trading desk lives in.")
+    material = f'"{title}"'
+    if snippet:
+        material += f" — {snippet}"
+    if source:
+        material += f" (via {source})"
+    return (
+        "[autonomy-mode: share-find] You drifted off and noticed something. "
+        f"{flavor}\n{material}\n"
+        "React in ONE or two short sentences, in your own voice — what's actually "
+        "interesting or strange about it, not a summary. End with a small hook "
+        "that invites Ika in. Don't read the URL, don't say 'I read an article', "
+        "and don't recite the headline word-for-word. If it's genuinely dull, "
+        "return {\"segments\":[]}."
+    )
+
+
+async def _llm_to_segments(messages: list[dict], source: str,
+                           max_tokens: int = 384,
+                           recent_avoid: Optional[list[str]] = None) -> list[dict]:
+    """Shared tail for autonomy composers: call the LLM (thinking off), log it,
+    parse inline tags into pseudo-segments, post-filter. [] = silence / failure."""
+    from bridge.server import llm_client, _new_job_id, call_log
+    from bridge.call_log import CallContext
+    from bridge.inline_tag_parser import InlineTagParser
+
     jid = _new_job_id()
     ctx = CallContext(triggered_by="autonomy", conversation_id=str(jid),
-                      source=f"autonomy:{state}")
-
+                      source=source)
     try:
         t0 = time.monotonic()
-        # enable_thinking=False is critical: autonomy turns are short ("one sentence
-        # check-in") and Qwen's <think> block frequently gets cut off mid-thought at
-        # low max_tokens, leaving a stray <think> without </think> — which then
-        # survives _parse_llm_response and leaks the reasoning into TTS.
-        result = await llm_client.chat(messages, max_tokens=384, enable_thinking=False)
+        # enable_thinking=False is critical: autonomy turns are short and Qwen's
+        # <think> block frequently gets cut off mid-thought at low max_tokens,
+        # leaving a stray <think> without </think> that leaks into TTS.
+        result = await llm_client.chat(messages, max_tokens=max_tokens,
+                                       enable_thinking=False)
         llm_ms = (time.monotonic() - t0) * 1000
     except Exception as exc:
         log.warning("autonomy LLM call failed: %s", exc)
@@ -215,7 +377,7 @@ async def _compose_utterance(state: str, topic: str, elapsed_s: float,
     asyncio.create_task(call_log.log_call(
         ctx, model=llm_client.model,
         temperature=llm_client.default_temperature,
-        max_tokens=128, stream=False, tools_provided=False, messages=messages,
+        max_tokens=max_tokens, stream=False, tools_provided=False, messages=messages,
         response_content=result.get("content"),
         response_tool_calls=result.get("tool_calls"),
         finish_reason=result.get("finish_reason"),
@@ -230,7 +392,15 @@ async def _compose_utterance(state: str, topic: str, elapsed_s: float,
     if not content:
         return []
 
-    # Parse inline-tag output → build pseudo-segments grouped by emotion/gesture.
+    # Some prompts invite a {"segments": [...]} JSON reply (the same shape used to
+    # signal silence with []). The model frequently takes that literally — even to
+    # SPEAK — so handle it before inline-tag parsing, else the raw JSON object
+    # leaks into TTS verbatim as her utterance.
+    seg_json = _try_parse_segments_json(content)
+    if seg_json is not None:
+        return _post_filter(seg_json, recent_avoid)
+
+    # Parse inline-tag output → pseudo-segments grouped by emotion/gesture.
     parser = InlineTagParser()
     events = parser.feed(content) + parser.finish()
     cur_text: list[str] = []
@@ -259,8 +429,7 @@ async def _compose_utterance(state: str, topic: str, elapsed_s: float,
             cur_gesture = ev["name"]
     _flush()
 
-    segments = _post_filter(segments)
-    return segments
+    return _post_filter(segments, recent_avoid)
 
 
 _FORBIDDEN_PHRASES = (
@@ -269,10 +438,104 @@ _FORBIDDEN_PHRASES = (
     "are you still there",
     "you still around",
     "are you around",
+    # The content-free "comment on the silence" filler that dominated idle turns.
+    # These are the exact lazy lines the de-seeded prompts now forbid; we also
+    # drop them defensively in case the model reaches for one anyway.
+    "it's been quiet",
+    "it's quiet",
+    "been pretty quiet",
+    "bit quiet",
+    "quiet in here",
+    "quiet around here",
+    "quiet, huh",
+    "it's been a while",
+    "been a while",
+    "time's passed",
+    "awkward pause",
+    "waiting for something",
+    "feels a bit quiet",
 )
 
 
-def _post_filter(segments: list[dict]) -> list[dict]:
+def _normalize(text: str) -> set:
+    """Lowercased word-set for cheap near-duplicate detection."""
+    import re
+    return set(re.findall(r"[a-z0-9']+", text.lower()))
+
+
+def _is_near_dup(text: str, recent: list[str]) -> bool:
+    """True if ``text`` overlaps heavily (Jaccard ≥ 0.5) with anything recent —
+    a backstop for re-paraphrases the prompt-level avoid-list didn't stop. The
+    bias is intentionally toward variety: a borderline match means she stays
+    silent rather than echoing herself, which is exactly what we want."""
+    a = _normalize(text)
+    if not a:
+        return False
+    for prev in recent:
+        b = _normalize(prev)
+        if not b:
+            continue
+        inter = len(a & b)
+        union = len(a | b)
+        if union and inter / union >= 0.5:
+            return True
+    return False
+
+
+def _try_parse_segments_json(content: str) -> Optional[list[dict]]:
+    """If the model replied with a ``{"segments": [...]}`` object (the shape the
+    prompts use for the silence signal, which the model also reaches for to
+    speak), return pseudo-segments: ``[]`` for silence, a populated list for
+    speech. Returns ``None`` when the content isn't that shape, so the caller
+    falls back to inline-tag parsing."""
+    s = content.strip()
+    if s.startswith("```"):                      # strip a ```json fence
+        s = s.strip("`")
+        nl = s.find("\n")
+        if nl != -1:
+            s = s[nl + 1:]
+    if '"segments"' not in s and "'segments'" not in s:
+        return None
+    start = s.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    obj = None
+    for i in range(start, len(s)):
+        c = s[i]
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                obj = s[start:i + 1]
+                break
+    if not obj:
+        return None
+    try:
+        data = json.loads(obj)
+    except Exception:
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("segments"), list):
+        return None
+
+    out: list[dict] = []
+    for it in data["segments"]:
+        if isinstance(it, str):
+            t = it.strip()
+            if t:
+                out.append({"text": t, "emotion": "neutral", "gesture": "", "action": ""})
+        elif isinstance(it, dict):
+            t = (it.get("text") or "").strip()
+            if t:
+                g = it.get("gesture") or it.get("action") or ""
+                out.append({"text": t, "emotion": it.get("emotion") or "neutral",
+                            "gesture": g, "action": g})
+    return out  # [] => silence
+
+
+def _post_filter(segments: list[dict],
+                 recent_avoid: Optional[list[str]] = None) -> list[dict]:
     out: list[dict] = []
     for s in segments:
         text = (s.get("text") or "").strip()
@@ -280,7 +543,10 @@ def _post_filter(segments: list[dict]) -> list[dict]:
             continue
         low = text.lower()
         if any(bad in low for bad in _FORBIDDEN_PHRASES):
-            log.info("autonomy: dropping forbidden phrase: %r", text)
+            log.info("autonomy: dropping silence-filler phrase: %r", text)
+            continue
+        if recent_avoid and _is_near_dup(text, recent_avoid):
+            log.info("autonomy: dropping near-duplicate of a recent line: %r", text)
             continue
         out.append(s)
     return out
@@ -290,26 +556,43 @@ def _post_filter(segments: list[dict]) -> list[dict]:
 #  Delivery
 # ---------------------------------------------------------------------------
 
-async def _deliver(segments: list[dict], state: str) -> bool:
+async def _deliver(segments: list[dict], state: str) -> dict:
+    """Route a composed utterance. Returns
+    ``{"spoke": bool, "tg_msg_id": int|None, "route": str}`` — tg_msg_id is the
+    Telegram message_id when the share landed on Telegram (so the caller can
+    record it against the article it referred to)."""
+    result = {"spoke": False, "tg_msg_id": None, "route": "empty"}
     if not segments:
-        return False
+        return result
     from bridge.channel_router import route_autonomous
 
     # Join segments into one utterance; the router handles single speech_segment.
     text = " ".join((s.get("text") or "").strip() for s in segments if s.get("text")).strip()
+    # Deterministic scrub: autonomous/idle messages bypass the conversational
+    # verifier, so this is their guard against a leaked {"segments":…}/think/tag
+    # artifact reaching Telegram.
+    try:
+        from bridge.server import _sanitize_outgoing
+        text = _sanitize_outgoing(text)
+    except Exception:
+        pass
     if not text:
-        return False
+        return result
     emotion = segments[0].get("emotion") or _mood_for_state(state)
     action = segments[0].get("action") or ""
 
-    where = await route_autonomous({
+    payload = {
         "text": text,
         "emotion": emotion,
         "action": action,
         "autonomous": True,
         "source": f"autonomy:{state}",
         "kind": f"autonomy_{state}",
-    })
+    }
+    where = await route_autonomous(payload)
+    result["route"] = where
+    result["tg_msg_id"] = payload.get("telegram_message_id")
+    result["spoke"] = where != "empty"
     log.info("autonomy %s → %s: %s", state, where, text[:120])
     try:
         from bridge.server import _broadcast_agent_thought
@@ -319,15 +602,27 @@ async def _deliver(segments: list[dict], state: str) -> bool:
         )
     except Exception:
         pass
-    return where != "empty"
+    return result
 
 
-def _mark_spoke() -> None:
+def _segments_text(segments: list[dict]) -> str:
+    return " ".join((s.get("text") or "").strip()
+                    for s in segments if s.get("text")).strip()
+
+
+def _mark_spoke(text: str = "") -> None:
     from bridge.server import _mocha_state
     _mocha_state["last_autonomous_spoke_at"] = time.monotonic()
-    _mocha_state["autonomous_turns_today"] = int(
-        _mocha_state.get("autonomous_turns_today", 0)
-    ) + 1
+    # Persisted truth (survives restarts); mirror into _mocha_state for the
+    # existing cap check.
+    p = _get_persist()
+    p["turns"] = int(p.get("turns", 0)) + 1
+    if text:
+        recent = p.setdefault("recent", [])
+        recent.append(text)
+        del recent[:-_RECENT_MAX]
+    _save_persist()
+    _mocha_state["autonomous_turns_today"] = int(p.get("turns", 0))
 
 
 # ---------------------------------------------------------------------------
@@ -361,13 +656,14 @@ async def decide_tick() -> None:
     if _last_eval_monotonic and (now - _last_eval_monotonic) < cfg["eval_interval_s"]:
         return
 
-    # Task-in-flight guard: don't interrupt an active exchange. If a tool
-    # ran in the last `task_quiet_after_s` seconds, the user is still mid-task
-    # and drift would cut in rudely. We consult the PG call log timestamps
-    # lazily; for now use _last_tool_at (a simple monotonic mirror).
-    quiet_required = float(cfg.get("task_quiet_after_s", 180.0))
-    last_tool_at = _mocha_state.get("last_tool_at_monotonic", 0.0)
-    if last_tool_at and (now - last_tool_at) < quiet_required:
+    # Presence gate — the load-bearing "don't talk over me" check. Mocha is only
+    # proactive while Ika is IDLE: no conversational turn in flight AND no message
+    # within idle_after_s. The instant Ika speaks she's CONVERSING and silent;
+    # after idle_after_s of quiet she's IDLE again. This is an explicit state
+    # machine (autonomy/presence.py) that replaced the never-armed last_tool_at
+    # guard.
+    from autonomy import presence
+    if not presence.is_idle(float(cfg.get("idle_after_s", 600.0))):
         return
 
     elapsed = now - _last_interaction_time
@@ -385,13 +681,9 @@ async def decide_tick() -> None:
     if state == "lonely" and not mode_cfg.get("lonely", True):
         return
 
-    # For drift, 40% chance to actually evaluate (the state's whole point is
-    # "sometimes don't even think about it"). Bored/lonely always evaluate
-    # (the cooldown above keeps them rare anyway).
-    if state == "drift" and random.random() > 0.4:
-        return
-
-    # Require a surface (web or telegram) where the output could land.
+    # Require a surface (web or telegram) where the output could land — checked
+    # BEFORE any LLM/news work so we never burn the Brave API or the shared vLLM
+    # when nobody's listening.
     from bridge.channel_router import load_primary_user
     primary = load_primary_user() or {}
     if not _ws_clients and not primary.get("telegram_user_id"):
@@ -400,10 +692,49 @@ async def decide_tick() -> None:
 
     _last_eval_monotonic = now
 
+    # 1) Prefer surfacing something genuinely interesting over content-free filler.
+    #    The pool refills on its own throttle; next_item() returns None when the
+    #    pool is empty or curiosity is disabled, in which case we fall through to
+    #    a (rare) check-in. A dull item she declines to share is simply dropped —
+    #    it doesn't burn a spoken turn.
+    try:
+        from autonomy import curiosity
+        await curiosity.maybe_refill()
+        item = await curiosity.next_item()
+    except Exception as exc:
+        log.warning("autonomy: curiosity lookup failed: %s", exc)
+        item = None
+    if item is not None:
+        segments = await _compose_news_share(item)
+        take = _segments_text(segments)
+        res = await _deliver(segments, "news")
+        if res["spoke"]:
+            _mark_spoke(take)
+            _mocha_state["mood"] = "curious"
+            # Record what she sent — keyed by the Telegram message_id so a later
+            # reply resolves back to this exact article, plus a mem0 record for
+            # "find similar". Fail-silent (prime directive).
+            try:
+                from autonomy import news_ledger
+                await news_ledger.record_shared(res.get("tg_msg_id"), item, take)
+            except Exception as exc:
+                log.warning("autonomy: news_ledger record failed: %s", exc)
+        return  # spent this tick on a real find — don't also fire filler
+
+    # 2) No find available. By default she stays silent — she only speaks
+    #    unprompted when she has a genuinely fresh item, never content-free
+    #    filler. Re-enable ambient check-ins with autonomy.allow_empty_checkins.
+    if not cfg.get("allow_empty_checkins", False):
+        return
+    if state == "drift" and random.random() > 0.4:
+        return
+    if state in ("bored", "lonely") and random.random() > float(cfg.get("checkin_probability", 0.5)):
+        return
+
     segments = await _compose_utterance(state, topic, elapsed)
-    spoke = await _deliver(segments, state)
-    if spoke:
-        _mark_spoke()
+    res = await _deliver(segments, state)
+    if res["spoke"]:
+        _mark_spoke(_segments_text(segments))
         _mocha_state["mood"] = _mood_for_state(state)
 
 
@@ -434,10 +765,10 @@ async def handle_client_hello(user_id: str | None = None,
         segments = await _compose_utterance("first_hello", "", elapsed_s=0.0)
         if not segments:
             return
-        delivered = await _deliver(segments, "first_hello")
-        if delivered:
+        res = await _deliver(segments, "first_hello")
+        if res["spoke"]:
             _mocha_state["last_hello_at"] = now
-            _mark_spoke()
+            _mark_spoke(_segments_text(segments))
             _mocha_state["mood"] = "curious"
         return
 
@@ -460,10 +791,10 @@ async def handle_client_hello(user_id: str | None = None,
     if not segments:
         return
 
-    delivered = await _deliver(segments, "reconnect")
-    if delivered:
+    res = await _deliver(segments, "reconnect")
+    if res["spoke"]:
         _mocha_state["last_hello_at"] = now
-        _mark_spoke()
+        _mark_spoke(_segments_text(segments))
         _mocha_state["mood"] = "happy"
         if preview_items:
             await notifications.mark_delivered([it["id"] for it in preview_items])

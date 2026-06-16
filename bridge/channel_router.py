@@ -172,18 +172,20 @@ async def _deliver_to_web(payload: dict) -> None:
     await _srv._broadcast_clients({"type": "speech_end", "job_id": job_id, "autonomous": True})
 
 
-async def _deliver_to_telegram(text: str, tg_chat_id: str, app_user_id: str | None = None) -> bool:
+async def _deliver_to_telegram(text: str, tg_chat_id: str, app_user_id: str | None = None):
+    """Send proactively over Telegram. Returns the sent message_id (int) on
+    success, or None on failure — so the caller can record what was sent against
+    its message_id (for the news ledger / reply resolution)."""
     from channels.base import registry
     # Prefer the per-user bot; fall back to the legacy global bot.
     tg = (registry.get_user_bot(app_user_id) if app_user_id else None) or registry.get("telegram")
     if not tg:
-        return False
+        return None
     try:
-        await tg.send(text, user_id=tg_chat_id)
-        return True
+        return await tg.send(text, user_id=tg_chat_id)
     except Exception as exc:
         log.warning("Telegram send failed (chat_id=%s): %s", tg_chat_id, exc)
-        return False
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -223,9 +225,10 @@ async def route_autonomous_for_user(app_user_id: str, payload: dict[str, Any]) -
             from auth.db import get_user_setting
             tg_chat_id = get_user_setting(app_user_id, "telegram_chat_id")
             if tg_chat_id:
-                ok = await _deliver_to_telegram(text, str(tg_chat_id), app_user_id=app_user_id)
-                if ok:
+                mid = await _deliver_to_telegram(text, str(tg_chat_id), app_user_id=app_user_id)
+                if mid is not None:
                     results.append("telegram")
+                    payload["telegram_message_id"] = mid
         except Exception as exc:
             log.warning("Per-user Telegram delivery failed for %s: %s", app_user_id, exc)
 
@@ -291,9 +294,12 @@ async def route_autonomous(payload: dict[str, Any]) -> str:
     tg_user = primary.get("telegram_user_id")
     tg_app_user = primary.get("telegram_app_user_id")
     if tg_user and (cron_origin or "web" not in results):
-        ok = await _deliver_to_telegram(text, tg_user, app_user_id=tg_app_user)
-        if ok:
+        mid = await _deliver_to_telegram(text, tg_user, app_user_id=tg_app_user)
+        if mid is not None:
             results.append("telegram")
+            # Expose the sent message_id to the caller (autonomy news shares
+            # record it so a later reply resolves back to the article).
+            payload["telegram_message_id"] = mid
 
     # --- 3. Last-resort queue (only if nothing landed) ---
     if not results:
