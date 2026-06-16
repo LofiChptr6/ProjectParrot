@@ -9,8 +9,12 @@ every ~5s). We do not spawn our own background task. On each tick we check
 rate-limits, decide the current state, and (sometimes) call the LLM to compose
 a short autonomous utterance that's routed through ``bridge/channel_router``.
 
-Autonomy turns NEVER append to ``conversation_history`` — they're observations,
-not conversation. They DO get logged via ``call_log`` with ``triggered_by='autonomy'``.
+Delivered autonomy turns ARE appended to ``conversation_history`` (as assistant
+turns) so that when Ika replies to something Mocha said on her own, the next
+conversational turn has the context — otherwise she's blind to her own proactive
+lines (e.g. she mentions Micron, Ika says "micron??", and she has no idea why).
+They are also logged via ``call_log`` with ``triggered_by='autonomy'``. The
+composer keeps its own separate anti-repeat ledger (data/autonomy_state.json).
 """
 
 from __future__ import annotations
@@ -593,6 +597,17 @@ async def _deliver(segments: list[dict], state: str) -> dict:
     result["route"] = where
     result["tg_msg_id"] = payload.get("telegram_message_id")
     result["spoke"] = where != "empty"
+    if result["spoke"]:
+        # Make proactive utterances visible to the NEXT conversational turn, so
+        # when Ika replies to something Mocha said on her own ("micron??") she has
+        # the context. (Autonomy used to be excluded from conversation_history,
+        # which left her blind to her own proactive lines.) The composer's
+        # separate anti-repeat ledger is unaffected.
+        try:
+            from bridge.server import _append_history, IKA_USER_ID
+            _append_history(IKA_USER_ID, "assistant", text)
+        except Exception:
+            pass
     log.info("autonomy %s → %s: %s", state, where, text[:120])
     try:
         from bridge.server import _broadcast_agent_thought
@@ -772,10 +787,13 @@ async def handle_client_hello(user_id: str | None = None,
             _mocha_state["mood"] = "curious"
         return
 
-    # Returning-user reconnect path — debounce rage-refreshes.
+    # Returning-user reconnect path — debounce rage-refreshes. Claim the slot
+    # BEFORE the compose/deliver await, so two near-simultaneous client_hello
+    # events (reconnects, two tabs) can't both pass the check and double-greet.
     if (now - _mocha_state.get("last_hello_at", 0.0)) < cfg["reconnect_debounce_s"]:
         log.info("autonomy: hello debounced")
         return
+    _mocha_state["last_hello_at"] = now
 
     pending = await notifications.list_undelivered()
     # Cap to the 2 most recent items for the preview — leave the rest queued.
