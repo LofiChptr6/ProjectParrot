@@ -378,6 +378,7 @@ def _clean_leaked_handles(text: str) -> str:
     text = _LEAKED_NUM_RE.sub(lambda m: _fmt_leaked_num(m.group(1)), text)  # num:513.32 → 513.32
     text = _LEAKED_HANDLE_RE.sub("", text)              # drop fabricated/expired leftovers
     text = _LEAKED_BARE_RE.sub("", text)                # drop a dangling `num:`/`url:` prefix
+    text = re.sub(r"^\s*\[(?!past)\s*", "", text)       # strip a leaked leading "[" artifact
     text = re.sub(r"\s+([,.;!?])", r"\1", text)         # tidy space-before-punct from removals
     return re.sub(r"\s{2,}", " ", text).strip()
 
@@ -1355,7 +1356,8 @@ def _parse_tool_args_str(args_str: str) -> dict:
 def _build_inline_messages(user_text: str, memories: list[dict],
                            user_id: str | None = None,
                            tools_available: bool | None = None,
-                           reply_context: str | None = None) -> list[dict]:
+                           reply_context: str | None = None,
+                           intent_read: dict | None = None) -> list[dict]:
     """Build the messages list for an inline-tag LLM call.
 
     Numeric literals in conversation history and memory fragments are redacted
@@ -1423,6 +1425,24 @@ def _build_inline_messages(user_text: str, memories: list[dict],
     # verifier won't strip her references to it, and so she can pick it back up.
     if reply_context:
         messages.append({"role": "system", "content": reply_context})
+    # Read intent — interpret_node's resolved understanding of what Ika is asking,
+    # injected as a directive so the synthesis answers THAT (not a misread of a
+    # terse/reply message) and fetches data instead of deflecting.
+    if intent_read and (intent_read.get("asking") or intent_read.get("refers_to")):
+        bits = []
+        if intent_read.get("asking"):
+            bits.append(f"- He wants: {intent_read['asking']}")
+        if intent_read.get("refers_to"):
+            bits.append(f"- Refers to: {intent_read['refers_to']}")
+        if intent_read.get("note"):
+            bits.append(f"- Note: {intent_read['note']}")
+        messages.append({"role": "system", "content": (
+            "[Read of what Ika is asking — already resolved against the conversation; "
+            "answer THIS, don't re-interpret a terse line as a new topic:\n"
+            + "\n".join(bits) +
+            "\nIf it needs fresh data, call the right tool; do NOT deflect with "
+            "'nothing stands out'.]"
+        )})
     messages.append(_current_time_message())
     messages.append({"role": "user", "content": user_text})
     return messages

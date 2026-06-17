@@ -179,6 +179,7 @@ async def build_messages_node(state: TurnState) -> dict:
     state["messages"] = S._build_inline_messages(
         state["user_text"], state["memories"], user_id=state.get("user_id"),
         tools_available=tools_available, reply_context=state.get("reply_context"),
+        intent_read=state.get("intent_read"),
     )
     state["tool_round"] = 0
     state["chunk_idx"] = 0
@@ -746,9 +747,87 @@ async def verify_node(state: TurnState) -> dict:
     return state
 
 
+_INTERPRET_SYS = (
+    "You are Mocha's quick UNDERSTANDING step — NOT the speaker; you produce no "
+    "user-facing words. Given the conversation, anything Mocha just shared (the "
+    "reply context), and Ika's latest message, output a COMPACT read as STRICT "
+    "JSON and nothing else:\n"
+    '{"asking": "<one sentence: what Ika actually wants right now>", '
+    '"refers_to": "<what his message points at: the item Mocha just shared / a '
+    'prior topic / a new topic>", "needs_data": true|false, '
+    '"tool_hint": "<e.g. get_stock_data AMZN, or empty>", '
+    '"note": "<any gotcha, e.g. a named company is private so has no stock price>"}\n'
+    "Resolve terse messages ('what about it?', 'why?', 'Anthropic?') AGAINST the "
+    "reply context and history — a one-word reply to a news item is almost always "
+    "about THAT item, not a new subject. Never invent facts. Output ONLY the JSON."
+)
+
+
+def _needs_interpret(state: TurnState) -> bool:
+    """Run the read-intent step only where it earns its keep: a reply to one of
+    Mocha's messages, or a terse/ambiguous line that leans on context."""
+    if state.get("reply_context"):
+        return True
+    t = (state.get("user_text") or "").strip()
+    return bool(t) and len(t.split()) <= 6
+
+
+def _parse_interpret(content: str) -> dict | None:
+    import json
+    from bridge import server as S
+    if not content:
+        return None
+    try:
+        obj_str = S._first_json_object(content)
+        if obj_str:
+            obj = json.loads(obj_str)
+            if isinstance(obj, dict) and (obj.get("asking") or obj.get("refers_to")):
+                return obj
+    except Exception:
+        pass
+    txt = content.strip()
+    return {"asking": txt[:240]} if txt else None
+
+
+async def interpret_node(state: TurnState) -> dict:
+    """Resolve what Ika is actually asking BEFORE composing, so terse/reply turns
+    aren't misread (e.g. a one-word 'Anthropic?' reply to the Amazon news must map
+    to the Amazon item, not a confabulated Anthropic stock). Deep Qwen on
+    non-realtime surfaces (Telegram) for sharper reads; the fast 3B on realtime
+    (web) for snappiness. Gated to ambiguous turns; fail-silent."""
+    from bridge import server as S
+    if not _needs_interpret(state):
+        return state
+    client = S.llm_client if state.get("realtime") else S.llm_deep
+    msgs = [{"role": "system", "content": _INTERPRET_SYS}]
+    rc = state.get("reply_context")
+    if rc:
+        msgs.append({"role": "system", "content": rc})
+    try:
+        for entry in S._get_user_history(state.get("user_id"))[-6:]:
+            msgs.append({"role": entry["role"], "content": entry["content"]})
+    except Exception:
+        pass
+    msgs.append({"role": "user", "content": state.get("user_text", "")})
+    try:
+        r = await client.chat(msgs, max_tokens=220, enable_thinking=False)
+        read = _parse_interpret((r.get("content") or "").strip())
+    except Exception as e:
+        log.warning("[graph] interpret_node failed: %s", e)
+        read = None
+    if read:
+        state["intent_read"] = read
+        if read.get("needs_data"):
+            state["route"] = "deep"   # ensure tools are available to actually fetch
+        log.info("[graph] job=%s read intent: %s", state.get("job_id"),
+                 str(read.get("asking", ""))[:90])
+    return state
+
+
 def _build_graph():
     g = StateGraph(TurnState)
     g.add_node("router", route_node)
+    g.add_node("interpret", interpret_node)
     g.add_node("build_messages", build_messages_node)
     g.add_node("llm_pass", llm_pass_node)
     g.add_node("log_pass", log_pass_node)
@@ -758,7 +837,8 @@ def _build_graph():
     g.add_node("finalize", finalize_node)
 
     g.add_edge(START, "router")
-    g.add_edge("router", "build_messages")
+    g.add_edge("router", "interpret")
+    g.add_edge("interpret", "build_messages")
     g.add_edge("build_messages", "llm_pass")
     g.add_edge("llm_pass", "log_pass")
     g.add_conditional_edges(

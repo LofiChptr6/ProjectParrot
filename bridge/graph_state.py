@@ -28,6 +28,8 @@ class TurnState(TypedDict, total=False):
     memories: list              # pre-fetched mem0 facts (caller supplies)
     reply_context: Optional[str]  # set when Ika replies to a Mocha message (the
                                   # resolved shared article, injected as source data)
+    intent_read: Optional[dict]   # interpret_node's resolved read of what Ika is
+                                  # actually asking {asking, refers_to, needs_data, …}
 
     # ── Routing (which model serves this turn) ──────────────────────────────
     route: str                  # "fast" (Llama-3B) | "deep" (Qwen-32B)

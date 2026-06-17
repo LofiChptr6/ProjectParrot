@@ -575,6 +575,11 @@ def _post_filter(segments: list[dict],
         if not text:
             continue
         low = text.lower()
+        import re as _re
+        if not _re.search(r"[A-Za-z]{4,}", text):
+            # No real word (≥4 letters) — a malformed fragment like "353 hed?".
+            log.info("autonomy: dropping garbage fragment: %r", text)
+            continue
         if any(bad in low for bad in _FORBIDDEN_PHRASES):
             log.info("autonomy: dropping silence-filler phrase: %r", text)
             continue
