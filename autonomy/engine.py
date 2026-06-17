@@ -345,7 +345,57 @@ async def _compose_news_share(item: dict) -> list[dict]:
         messages.append({"role": entry["role"], "content": entry["content"]})
     messages.append({"role": "user", "content": _news_share_prompt(item)})
 
+    # Knowledge-graph garnish: if the item names a company we have a cited
+    # relationship for, hand Mocha that ONE grounded fact (read-only proxy).
+    kg_line = await _kg_news_annotation(item)
+    if kg_line:
+        messages.insert(len(messages) - 1, {"role": "system", "content": (
+            "[Knowledge graph — a CITED relationship from the desk's shared graph; "
+            "trust this over guessing. Weave it into ONE clause ONLY if it's relevant "
+            "to the item; do not read the evidence id aloud]:\n- " + kg_line)})
+
     return await _llm_to_segments(messages, source="autonomy:news")
+
+
+# All-caps tokens that look like tickers but aren't — keeps the regex fallback
+# from annotating a news item with an unrelated company's relationships.
+_TICKER_STOPWORDS = frozenset({
+    "AI", "CEO", "CFO", "COO", "CTO", "IPO", "ETF", "GDP", "CPI", "FED", "SEC",
+    "FDA", "USA", "EPS", "NYSE", "ESG", "SPAC", "YOY", "FY", "USD", "API", "EV",
+    "AND", "THE", "FOR", "NEW", "Q1", "Q2", "Q3", "Q4",
+})
+
+
+async def _kg_news_annotation(item: dict) -> str | None:
+    """One-line CITED KG relationship for the company in a news item, via the
+    read-only opus proxy (kg_neighbors). Fail-silent + bounded — never blocks the
+    autonomy heartbeat and never writes the desk DB. Returns None when there's no
+    confidently-identified ticker or no grounded relationship to add."""
+    try:
+        import json
+        import re
+        ent = (item.get("symbol") or item.get("ticker") or "").strip().upper()
+        if not ent:   # fallback: a clean ALL-CAPS token in the title, minus stopwords
+            for m in re.findall(r"\b([A-Z]{2,5})\b", item.get("title") or ""):
+                if m not in _TICKER_STOPWORDS:
+                    ent = m
+                    break
+        if not ent:
+            return None
+        from tools.custom._opus_proxy import call_opus
+        out = await call_opus("kg_neighbors", {"entity": ent, "caller": "mocha"}, "Knowledge graph")
+        obj = json.loads(out)
+        if obj.get("__panel__") or "error" in obj or not obj.get("found") or not obj.get("edges"):
+            return None
+        e = obj["edges"][0]   # highest-confidence edge (kg_query sorts)
+        subj = e.get("subject_ticker") or e.get("subject")
+        objn = e.get("object_ticker") or e.get("object")
+        ev = e.get("evidence_id")
+        cite = f" [desk evidence #{ev}]" if ev else ""
+        return f"{subj} {e.get('rel')} {objn}{cite}"
+    except Exception as exc:  # noqa: BLE001 — annotation is best-effort
+        log.info("autonomy: kg news annotation skipped: %s", exc)
+        return None
 
 
 def _avoid_message(recent: list[str]) -> str:

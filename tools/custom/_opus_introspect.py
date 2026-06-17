@@ -73,6 +73,39 @@ EXPOSED_TOOLS: set[str] = {
     "kg_neighbors",           # 1-hop neighborhood of an entity
 }
 
+# ── Runtime proxy allowlist (PRIME DIRECTIVE enforcement) ────────────────────
+# EXPOSED_TOOLS above only governs the LLM's tool *menu*. It is NOT a runtime
+# gate: call_opus()/call_opus_raw() f-string the tool name into
+# `from mcp_server import {tool}`, and mcp_server re-exports EVERY desk tool
+# (place_order, kill-switch, submit_conviction, …). So the proxies MUST gate the
+# tool name against the sets below BEFORE spawning the subprocess — that is the
+# structural boundary that keeps Mocha read-only, not the menu.
+#
+# Read tools served via the RAW-text proxy (_opus_raw) that are intentionally
+# NOT in the JSON menu (they return prose distilled by hand-written wrappers).
+_RAW_READ_EXTRA: frozenset[str] = frozenset({
+    "get_ticker_valuation",   # Damodaran/Sonnet report → summarize_valuation()
+})
+
+# The ONE sanctioned Mocha→desk WRITE: an append-only research-backlog row in
+# kg_gap (never an edge/entity/order/accounting row). It is deliberately NOT in
+# EXPOSED_TOOLS — the LLM cannot *choose* to call it; only interpret_node's
+# deterministic gap detection invokes it via call_opus(). See mcp_tools/knowledge.py.
+WRITE_ALLOWLIST: frozenset[str] = frozenset({
+    "kg_raise_gap",
+})
+
+# The complete set of opus tools either proxy may dispatch. Default-deny:
+# anything not here (place_order, set_kill_switch, …) is refused at the proxy.
+ALLOWED_PROXY_TOOLS: frozenset[str] = EXPOSED_TOOLS | _RAW_READ_EXTRA | WRITE_ALLOWLIST
+
+
+def is_tool_allowed(tool: str) -> bool:
+    """Runtime gate for the subprocess proxies. True iff `tool` is an
+    explicitly-allowlisted read tool or the one sanctioned append-only write."""
+    return tool in ALLOWED_PROXY_TOOLS
+
+
 _BOOTSTRAP = """
 import asyncio, json
 from mcp_server import mcp

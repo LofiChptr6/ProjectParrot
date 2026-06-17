@@ -68,6 +68,17 @@ async def call_opus(tool: str, arguments: dict, error_title: str) -> str:
     if not OPUS_PY.exists():
         return _error_envelope(error_title, f"opus_trading venv not found at {OPUS_PY}")
 
+    # PRIME-DIRECTIVE GATE (structural, not menu-only): the tool name is about to
+    # be f-string'd into `from mcp_server import {tool}`, which can reach ANY desk
+    # tool (place_order, kill-switch, …). Default-deny everything that is not an
+    # allowlisted read tool or the one sanctioned append-only write (kg_raise_gap).
+    from tools.custom._opus_introspect import is_tool_allowed
+    if not is_tool_allowed(tool):
+        return _error_envelope(
+            error_title,
+            f"tool {tool!r} is not on Mocha's allowlist (read-only boundary)",
+        )
+
     arguments = arguments or {}
 
     env = {

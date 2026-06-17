@@ -140,11 +140,52 @@ def test_interpret_node_flags_gap_when_unknown(monkeypatch):
         return {"found": True, "entity": {"name": "AMAZON COM INC"},
                 "related": {"query": "Wakanda", "known": False}, "edges": []}
 
+    raised = {}
+
+    async def fake_raise(pair, question):
+        raised["pair"] = pair
+        raised["question"] = question
+
     monkeypatch.setattr(g, "_kg_consult", fake_consult)
+    monkeypatch.setattr(g, "_kg_raise_gap", fake_raise)
     state = {"user_text": "Wakanda?", "reply_context": "AMZN news", "realtime": False, "user_id": "ika"}
     out = asyncio.run(g.interpret_node(state))
     assert out["intent_read"].get("kg_gap") == ["AMZN", "Wakanda"]
     assert not out["intent_read"].get("kg_fact")
+    # the gap was appended to the desk backlog (the one sanctioned Mocha write)
+    assert raised.get("pair") == ["AMZN", "Wakanda"]
+
+
+def test_kg_raise_gap_calls_proxy_append_only(monkeypatch):
+    g = _graph()
+    import tools.custom._opus_proxy as proxy
+    seen = {}
+
+    async def fake_call(tool, args, title):
+        seen["tool"] = tool
+        seen["args"] = args
+        return json.dumps({"gap_id": 7, "deduped": False})
+
+    monkeypatch.setattr(proxy, "call_opus", fake_call)
+    asyncio.run(g._kg_raise_gap(["AMZN", "Anthropic"], "is AMZN tied to Anthropic?"))
+    assert seen["tool"] == "kg_raise_gap"           # the ONE write tool
+    assert seen["args"]["src_entity"] == "AMZN"
+    assert seen["args"]["dst_entity"] == "Anthropic"
+
+
+def test_kg_raise_gap_bad_pair_is_noop(monkeypatch):
+    g = _graph()
+    import tools.custom._opus_proxy as proxy
+    called = {"n": 0}
+
+    async def fake_call(tool, args, title):
+        called["n"] += 1
+        return "{}"
+
+    monkeypatch.setattr(proxy, "call_opus", fake_call)
+    asyncio.run(g._kg_raise_gap(["AMZN"], "q"))      # only one entity
+    asyncio.run(g._kg_raise_gap(None, "q"))
+    assert called["n"] == 0
 
 
 def test_interpret_node_skips_consult_on_realtime(monkeypatch):

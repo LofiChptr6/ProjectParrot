@@ -829,6 +829,30 @@ async def _kg_consult(pair: list) -> dict | None:
         return None
 
 
+async def _kg_raise_gap(pair: list, question: str | None) -> None:
+    """Append a missing-link gap to the desk's research backlog so the nightly
+    gap-worker can dispatch a cited search to fill it. This is the ONE sanctioned
+    Mocha→desk write (append-only, non-impactful — it inserts a kg_gap row, never
+    an edge/order). It is NOT on the LLM tool menu; interpret_node calls it
+    deterministically on a detected gap, through the proxy's WRITE_ALLOWLIST.
+    Fail-silent and bounded — never breaks a turn."""
+    if not (isinstance(pair, (list, tuple)) and len(pair) >= 2 and pair[0] and pair[1]):
+        return
+    try:
+        import json
+        from tools.custom._opus_proxy import call_opus
+        out = await call_opus(
+            "kg_raise_gap",
+            {"src_entity": str(pair[0]), "dst_entity": str(pair[1]),
+             "question": (question or "")[:240], "caller": "mocha"},
+            "Knowledge graph",
+        )
+        log.info("[graph] kg gap raised %s↔%s: %s", pair[0], pair[1],
+                 (json.loads(out) if out else {}))
+    except Exception as e:  # noqa: BLE001 — append is best-effort
+        log.info("[graph] kg_raise_gap skipped: %s", e)
+
+
 def _kg_fact_from(obj: dict) -> str | None:
     """Turn a kg_query result into a one-line, citation-bearing fact for the
     composer, or None when there's nothing grounded to say."""
@@ -894,10 +918,12 @@ async def interpret_node(state: TurnState) -> dict:
                 elif kg.get("found") is False or (
                     kg.get("related") and not kg["related"].get("known")
                 ):
-                    # entity (or its counterpart) is unknown → a gap. Phase B
-                    # will dispatch a search; for now just flag it so she can
-                    # say she'll look into it rather than confabulate.
+                    # entity (or its counterpart) is unknown → a gap. Flag it so
+                    # she says she'll look into it rather than confabulate, AND
+                    # append it to the desk's research backlog so the nightly
+                    # gap-worker can dispatch a cited search to fill it.
                     read["kg_gap"] = read.get("kg_pair")
+                    await _kg_raise_gap(read.get("kg_pair"), read.get("asking"))
         log.info("[graph] job=%s read intent: %s%s", state.get("job_id"),
                  str(read.get("asking", ""))[:90],
                  " [+kg]" if read.get("kg_fact") else (" [kg-gap]" if read.get("kg_gap") else ""))

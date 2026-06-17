@@ -49,6 +49,12 @@ async def call_opus_raw(tool: str, arguments: dict | None = None,
     """
     if not _TOOL_NAME_RE.match(tool or ""):
         return False, f"invalid tool name: {tool!r}"
+    # PRIME-DIRECTIVE GATE: same default-deny allowlist as _opus_proxy — this raw
+    # path was read-only by convention only; make it structural so no desk
+    # write-tool can ever be dispatched through it.
+    from tools.custom._opus_introspect import is_tool_allowed
+    if not is_tool_allowed(tool):
+        return False, f"tool {tool!r} is not on Mocha's allowlist (read-only boundary)"
     if not OPUS_PY.exists():
         return False, f"opus_trading venv not found at {OPUS_PY}"
 
