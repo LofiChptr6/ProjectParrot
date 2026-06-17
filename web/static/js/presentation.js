@@ -577,10 +577,38 @@
     //  + resizable via PanelManager. Mini state is a bottom-right pill.
     // ========================================================================
 
+    // YouTube IFrame Player API loader — lets the video player catch playback
+    // errors (removed / embed-disabled / region-locked / dead live stream) via
+    // onError and show a friendly message instead of YouTube's raw error frame.
+    // Resolves to the YT namespace, or null if the API can't load — in which case
+    // the player falls back to a plain iframe, identical to the old behavior.
+    let _ytApiPromise = null;
+    function loadYT() {
+        if (window.YT && window.YT.Player) return Promise.resolve(window.YT);
+        if (_ytApiPromise) return _ytApiPromise;
+        _ytApiPromise = new Promise((resolve) => {
+            let done = false;
+            const finish = (v) => { if (!done) { done = true; resolve(v); } };
+            const prev = window.onYouTubeIframeAPIReady;
+            window.onYouTubeIframeAPIReady = function () {
+                if (typeof prev === 'function') { try { prev(); } catch (_) {} }
+                finish(window.YT);
+            };
+            const tag = document.createElement('script');
+            tag.src = 'https://www.youtube.com/iframe_api';
+            tag.onerror = () => finish(null);
+            document.head.appendChild(tag);
+            // Safety net: don't hold the player blank forever if the API stalls.
+            setTimeout(() => finish(window.YT && window.YT.Player ? window.YT : null), 4000);
+        });
+        return _ytApiPromise;
+    }
+
     const VideoPlayer = {
         _state: 'hidden',  // 'hidden' | 'full' | 'mini'
         _videoId: '',
         _title: '',
+        _yt: null,         // active YT.Player instance (null when raw-iframe path)
         _registered: false,
         // Inline-style snapshot captured right before minimizing, so the full
         // state can restore the exact same rect (drag / resize position).
@@ -635,6 +663,8 @@
             if (next === 'hidden') {
                 el.classList.add('hidden');
                 el.removeAttribute('data-state');
+                try { if (this._yt && this._yt.destroy) this._yt.destroy(); } catch (_) {}
+                this._yt = null;
                 this._iframeWrap().innerHTML = '';  // stop audio/video
                 this._clearInline();
                 this._savedInline = null;
@@ -661,19 +691,59 @@
             this._title = title || 'Now playing';
             this._titleEl().textContent = this._title;
             this._thumbTitleEl().textContent = this._title;
-            // YouTube embed params:
-            //   autoplay=1  — start immediately (user gesture provided by the
-            //                 conversation that triggered this open).
-            //   rel=0       — suppress recommended videos at the end.
-            //   playsinline=1 — don't force fullscreen on iOS.
-            //   origin      — required for some embeds to dispatch API events.
+            this._mountPlayer(videoId);
+            this._setState('full');
+        },
+
+        // Plain autoplay iframe — the original embed path, used as the fallback
+        // when the IFrame Player API can't load.
+        //   autoplay=1  — start immediately (user gesture provided by the
+        //                 conversation that triggered this open).
+        //   rel=0       — suppress recommended videos at the end.
+        //   playsinline=1 — don't force fullscreen on iOS.
+        //   origin      — required for some embeds to dispatch API events.
+        _rawIframe(videoId) {
             const origin = encodeURIComponent(location.origin);
             const src = `https://www.youtube.com/embed/${encodeURIComponent(videoId)}`
                 + `?autoplay=1&rel=0&playsinline=1&origin=${origin}`;
             this._iframeWrap().innerHTML =
                 `<iframe src="${src}" title="${_escape(this._title)}" ` +
                 `allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>`;
-            this._setState('full');
+        },
+
+        _showError(msg) {
+            this._iframeWrap().innerHTML =
+                '<div style="display:flex;align-items:center;justify-content:center;'
+                + 'height:100%;padding:18px;text-align:center;font-size:13px;'
+                + `line-height:1.4;opacity:.85;">${_escape(msg)}</div>`;
+        },
+
+        // Mount via the IFrame Player API so playback errors surface a friendly
+        // message instead of YouTube's raw "video unavailable" frame. Falls back
+        // to a plain iframe whenever the API is unavailable.
+        _mountPlayer(videoId) {
+            const self = this;
+            try { if (this._yt && this._yt.destroy) this._yt.destroy(); } catch (_) {}
+            this._yt = null;
+            loadYT().then((YT) => {
+                // A newer open() may have superseded this one while the API loaded.
+                if (self._videoId !== videoId) return;
+                if (!YT || !YT.Player) { self._rawIframe(videoId); return; }
+                self._iframeWrap().innerHTML = '<div id="ytPlayerHost"></div>';
+                self._yt = new YT.Player('ytPlayerHost', {
+                    width: '100%', height: '100%', videoId: videoId,
+                    playerVars: { autoplay: 1, rel: 0, playsinline: 1, origin: location.origin },
+                    events: {
+                        onError: () => {
+                            if (self._videoId !== videoId) return;
+                            self._showError(
+                                "Couldn't play that one — it may have ended, gone "
+                                + 'private, or blocked embedding. Ask me to find another.'
+                            );
+                        },
+                    },
+                });
+            }).catch(() => self._rawIframe(videoId));
         },
 
         minimize() {

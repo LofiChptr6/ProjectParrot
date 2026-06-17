@@ -45,3 +45,34 @@ def test_resolve_youtube_id_no_brave_key(vp, monkeypatch):
     monkeypatch.delenv("BRAVE_API_KEY", raising=False)
     r = asyncio.run(vp._resolve_youtube_id("ambient music"))
     assert r["ok"] is False and "BRAVE_API_KEY" in r["reason"]
+
+
+def test_candidates_carry_titles(vp):
+    data = {"web": {"results": [
+        {"url": "https://www.youtube.com/watch?v=ABCDEFGHIJK", "title": "Ambient mix"},
+        {"url": "https://youtu.be/zzzzzzzzzzz", "title": "Lofi radio LIVE"},
+    ]}}
+    assert vp._yt_candidates_from_brave(data) == [
+        ("ABCDEFGHIJK", "Ambient mix"),
+        ("zzzzzzzzzzz", "Lofi radio LIVE"),
+    ]
+
+
+def test_ranking_pushes_live_last_and_vod_first(vp):
+    # Brave order: live first, plain second, VOD-ish ("1 hour mix") third.
+    cands = [
+        ("liveAAAAAAA", "lofi hip hop radio 📚 - beats to relax/study to"),
+        ("plainBBBBBB", "lofi hip hop"),
+        ("vodCCCCCCCC", "lofi hip hop 1 hour mix"),
+    ]
+    # Stable reorder → VOD first, plain middle, live last.
+    assert vp._rank_candidates_avoiding_live(cands) == [
+        "vodCCCCCCCC", "plainBBBBBB", "liveAAAAAAA",
+    ]
+
+
+def test_music_loop_intent_detection(vp):
+    assert vp._MUSIC_LOOP_RE.search("play some lofi hip hop radio")
+    assert vp._MUSIC_LOOP_RE.search("ambient study beats")
+    # A specific song/clip is not a continuous-music request → no query rewrite.
+    assert not vp._MUSIC_LOOP_RE.search("Rick Astley Never Gonna Give You Up")

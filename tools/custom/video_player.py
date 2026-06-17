@@ -92,16 +92,59 @@ _YT_WATCH_RE = re.compile(
 )
 
 
+# Continuous-music intent ("play some lofi", "ambient", "study beats"…). These
+# queries are the ones that surface 24/7 LIVE streams, which pass oEmbed but then
+# die in the embed with "This live stream recording is not available" the moment
+# the stream rotates its video id or goes offline. We bias such queries toward
+# long VOD uploads (mixes) instead.
+_MUSIC_LOOP_RE = re.compile(
+    r"\b(lofi|lo-fi|ambient|chill\w*|study|relax\w*|beats|white ?noise|"
+    r"rain|jazz|focus|sleep|background|radio|loop|playlist|mix)\b",
+    re.IGNORECASE,
+)
+# Title markers that scream "this is a live stream" (deprioritized) vs "this is a
+# finite recording that plays reliably in an embed" (preferred). "radio" is the
+# real-world tell for the 24/7 lofi streams ("lofi hip hop radio 📚 …"); it's only
+# applied AFTER the VOD check below, so "lofi radio MIX" still ranks as a VOD.
+_LIVE_TITLE_RE = re.compile(r"(🔴|\blive\b|live ?now|live ?stream|24/?7|24 ?hours?|\bradio\b)", re.IGNORECASE)
+_VOD_TITLE_RE = re.compile(r"\b(\d+\s*(?:hours?|hrs?|min)|mix|compilation|playlist|full album)\b", re.IGNORECASE)
+
+
+def _yt_candidates_from_brave(data: dict) -> list[tuple[str, str]]:
+    """Extract (video_id, title) pairs from a Brave web-search JSON payload, in
+    order, de-duplicated by id. Pure (no network) so it's unit-testable."""
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for res in (data.get("web", {}).get("results") or []):
+        title = res.get("title", "") or ""
+        for field in (res.get("url", ""), title, res.get("description", "")):
+            m = _YT_WATCH_RE.search(field or "")
+            if m and m.group(1) not in seen:
+                seen.add(m.group(1))
+                out.append((m.group(1), title))
+    return out
+
+
 def _yt_ids_from_brave(data: dict) -> list[str]:
     """Extract YouTube video IDs from a Brave web-search JSON payload, in order,
     de-duplicated. Pure (no network) so it's unit-testable."""
-    out: list[str] = []
-    for res in (data.get("web", {}).get("results") or []):
-        for field in (res.get("url", ""), res.get("title", ""), res.get("description", "")):
-            m = _YT_WATCH_RE.search(field or "")
-            if m and m.group(1) not in out:
-                out.append(m.group(1))
-    return out
+    return [vid for vid, _title in _yt_candidates_from_brave(data)]
+
+
+def _rank_candidates_avoiding_live(candidates: list[tuple[str, str]]) -> list[str]:
+    """Stable-reorder (id, title) candidates so finite recordings come first and
+    live streams come last, then drop titles. Stable sort preserves Brave's own
+    relevance order within each bucket."""
+    def _bucket(c: tuple[str, str]) -> int:
+        _id, title = c
+        # VOD check wins first, so "lofi radio MIX" ranks as a finite recording
+        # even though it also contains the live-ish word "radio".
+        if _VOD_TITLE_RE.search(title):
+            return 0
+        if _LIVE_TITLE_RE.search(title):
+            return 2
+        return 1
+    return [vid for vid, _t in sorted(candidates, key=_bucket)]
 
 
 async def _resolve_youtube_id(query: str) -> dict:
@@ -116,12 +159,17 @@ async def _resolve_youtube_id(query: str) -> dict:
     key = os.environ.get("BRAVE_API_KEY", "")
     if not key:
         return {"ok": False, "reason": "BRAVE_API_KEY not set — can't search YouTube"}
+    # For continuous-music requests, steer Brave toward finite VOD mixes rather
+    # than the 24/7 live streams that "lofi … radio" otherwise returns — those
+    # pass oEmbed but die in the embed once the stream rotates id / goes offline.
+    is_music_loop = bool(_MUSIC_LOOP_RE.search(query))
+    search_q = f"{query} mix 1 hour site:youtube.com" if is_music_loop else f"{query} site:youtube.com"
     import httpx
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(
                 "https://api.search.brave.com/res/v1/web/search",
-                params={"q": f"{query} site:youtube.com", "count": 10},
+                params={"q": search_q, "count": 10},
                 headers={"X-Subscription-Token": key, "Accept": "application/json"},
             )
             resp.raise_for_status()
@@ -129,9 +177,11 @@ async def _resolve_youtube_id(query: str) -> dict:
     except Exception as exc:
         return {"ok": False, "reason": f"YouTube search failed: {exc}"}
 
-    candidates = _yt_ids_from_brave(data)
-    if not candidates:
+    found = _yt_candidates_from_brave(data)
+    if not found:
         return {"ok": False, "reason": f"no YouTube videos found for '{query}'"}
+    # Music loops: deprioritize live-titled results so a finite recording wins.
+    candidates = _rank_candidates_avoiding_live(found) if is_music_loop else [v for v, _t in found]
     for vid in candidates[:6]:
         verdict = await _verify_embeddable(vid)
         if verdict.get("ok"):
