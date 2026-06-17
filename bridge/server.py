@@ -1428,7 +1428,8 @@ def _build_inline_messages(user_text: str, memories: list[dict],
     # Read intent — interpret_node's resolved understanding of what Ika is asking,
     # injected as a directive so the synthesis answers THAT (not a misread of a
     # terse/reply message) and fetches data instead of deflecting.
-    if intent_read and (intent_read.get("asking") or intent_read.get("refers_to")):
+    if intent_read and (intent_read.get("asking") or intent_read.get("refers_to")
+                        or intent_read.get("kg_fact")):
         bits = []
         if intent_read.get("asking"):
             bits.append(f"- He wants: {intent_read['asking']}")
@@ -1436,6 +1437,18 @@ def _build_inline_messages(user_text: str, memories: list[dict],
             bits.append(f"- Refers to: {intent_read['refers_to']}")
         if intent_read.get("note"):
             bits.append(f"- Note: {intent_read['note']}")
+        # Knowledge-graph fact — a CITED relationship from the desk's shared
+        # graph. This is ground truth: prefer it over any guess, and it carries
+        # an evidence id so it survives the anti-confabulation verifier.
+        if intent_read.get("kg_fact"):
+            bits.append(f"- {intent_read['kg_fact']}")
+        elif intent_read.get("kg_gap"):
+            pair = intent_read["kg_gap"]
+            bits.append(
+                f"- The link between {pair[0]} and {pair[1]} isn't in the desk's "
+                "knowledge graph yet. Say you're not certain of the connection and "
+                "you'll look into it — do NOT invent one."
+            )
         messages.append({"role": "system", "content": (
             "[Read of what Ika is asking — already resolved against the conversation; "
             "answer THIS, don't re-interpret a terse line as a new topic:\n"

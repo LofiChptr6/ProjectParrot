@@ -140,6 +140,13 @@ async def _emit_stall(state: TurnState, reserved_idx: int | None = None) -> None
             state["chunk_idx"] = idx + 1
         audio = await S._synthesize(line, user_id=state.get("user_id"))
         viseme = (await S._generate_visemes(audio, line) if audio else None) or {}
+        # Webapp only: nudge the VRM avatar into a visible "waiting / thinking"
+        # pose while the tool + (often deep) synthesis run. The stall speech_chunk
+        # below carries no gesture of its own, so without this she'd just keep
+        # idle-fidgeting through the wait. One-shot idle gestures aren't cut by the
+        # frontend's end-of-speech endGesture() (that only acts on LOOPING), so the
+        # clip plays through. Telegram has no avatar, so this is a no-op there.
+        await _emit(state, {"type": "gesture", "name": "idle_waiting"})
         await _emit(state, {
             "type": "speech_chunk", "chunk_idx": idx, "text": line,
             "audio_base64": base64.b64encode(audio).decode() if audio else None,
@@ -756,7 +763,13 @@ _INTERPRET_SYS = (
     '"refers_to": "<what his message points at: the item Mocha just shared / a '
     'prior topic / a new topic>", "needs_data": true|false, '
     '"tool_hint": "<e.g. get_stock_data AMZN, or empty>", '
+    '"kg_pair": ["<A>", "<B>"], '
     '"note": "<any gotcha, e.g. a named company is private so has no stock price>"}\n'
+    "kg_pair: when the question hinges on whether/how TWO entities are related — "
+    "e.g. a terse company mention ('Anthropic?') in reply to news about another "
+    "company — put both entities here so the desk's knowledge graph can be "
+    "consulted; use stock TICKERS for public companies (AMZN, not Amazon) and the "
+    "plain name for private ones (Anthropic). Otherwise [].\n"
     "Resolve terse messages ('what about it?', 'why?', 'Anthropic?') AGAINST the "
     "reply context and history — a one-word reply to a news item is almost always "
     "about THAT item, not a new subject. Never invent facts. Output ONLY the JSON."
@@ -789,6 +802,55 @@ def _parse_interpret(content: str) -> dict | None:
     return {"asking": txt[:240]} if txt else None
 
 
+async def _kg_consult(pair: list) -> dict | None:
+    """Consult the desk's shared knowledge graph (read-only, via the opus proxy)
+    for the relationship between two entities. Returns the parsed kg_query JSON
+    or None. Fail-silent and bounded — never breaks a turn.
+
+    This is the structural cure for the 'Anthropic?' confabulation: instead of
+    inventing 'Anthropic's stock', Mocha learns the real, CITED link (AMZN holds
+    a stake in Anthropic) — or learns there is no known link (a gap)."""
+    if not (isinstance(pair, (list, tuple)) and len(pair) >= 2 and pair[0] and pair[1]):
+        return None
+    try:
+        import json
+        from tools.custom._opus_proxy import call_opus
+        out = await call_opus(
+            "kg_query",
+            {"entity": str(pair[0]), "related_to": str(pair[1]), "caller": "mocha"},
+            "Knowledge graph",
+        )
+        obj = json.loads(out)
+        if obj.get("__panel__") or "error" in obj:  # proxy error envelope
+            return None
+        return obj
+    except Exception as e:  # noqa: BLE001 — consult is best-effort
+        log.info("[graph] kg_consult skipped: %s", e)
+        return None
+
+
+def _kg_fact_from(obj: dict) -> str | None:
+    """Turn a kg_query result into a one-line, citation-bearing fact for the
+    composer, or None when there's nothing grounded to say."""
+    if not obj or not obj.get("found"):
+        return None
+    rel = obj.get("related")
+    if not rel:
+        return None
+    if rel.get("known") and rel.get("connected") and obj.get("edges"):
+        e = obj["edges"][0]
+        quote = (e.get("quote") or "").strip()
+        ev = e.get("evidence_id")
+        cite = f" (desk evidence #{ev})" if ev else ""
+        return f"KNOWLEDGE GRAPH (cited, trust this over guessing): {quote}{cite}"
+    # known-but-unrelated, or the other entity is itself a gap
+    if rel.get("known") and not rel.get("connected"):
+        return (f"KNOWLEDGE GRAPH: no known relationship recorded between "
+                f"{obj.get('entity',{}).get('name')} and {rel.get('name')}. "
+                "Don't invent one.")
+    return None
+
+
 async def interpret_node(state: TurnState) -> dict:
     """Resolve what Ika is actually asking BEFORE composing, so terse/reply turns
     aren't misread (e.g. a one-word 'Anthropic?' reply to the Amazon news must map
@@ -819,8 +881,26 @@ async def interpret_node(state: TurnState) -> dict:
         state["intent_read"] = read
         if read.get("needs_data"):
             state["route"] = "deep"   # ensure tools are available to actually fetch
-        log.info("[graph] job=%s read intent: %s", state.get("job_id"),
-                 str(read.get("asking", ""))[:90])
+        # Knowledge-graph consult: when the question is about how two entities
+        # relate, ground it in the cited graph rather than guessing. Gated to
+        # non-realtime (Telegram) turns — the consult spawns a desk subprocess,
+        # too slow for the realtime web path (which prizes snappiness).
+        if read.get("kg_pair") and not state.get("realtime"):
+            kg = await _kg_consult(read.get("kg_pair"))
+            if kg is not None:
+                fact = _kg_fact_from(kg)
+                if fact:
+                    read["kg_fact"] = fact
+                elif kg.get("found") is False or (
+                    kg.get("related") and not kg["related"].get("known")
+                ):
+                    # entity (or its counterpart) is unknown → a gap. Phase B
+                    # will dispatch a search; for now just flag it so she can
+                    # say she'll look into it rather than confabulate.
+                    read["kg_gap"] = read.get("kg_pair")
+        log.info("[graph] job=%s read intent: %s%s", state.get("job_id"),
+                 str(read.get("asking", ""))[:90],
+                 " [+kg]" if read.get("kg_fact") else (" [kg-gap]" if read.get("kg_gap") else ""))
     return state
 
 

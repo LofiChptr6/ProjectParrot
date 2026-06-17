@@ -65,6 +65,12 @@ EXPOSED_TOOLS: set[str] = {
     "get_agent_list",         # configured agents + allocation + enabled status
     "get_market_status",      # NYSE hours: is_open, session bounds, next_open
     "get_kill_switch_status", # is the desk trading or halted (status only)
+    # Shared knowledge graph (read-only, 2026-06-16) — cited entity
+    # relationships. interpret_node consults kg_query to ground "is AMZN up
+    # because of Anthropic?"-style questions instead of confabulating. Both
+    # return plain JSON, so the generic _opus_proxy path serves them.
+    "kg_query",               # relationships of an entity / between two entities
+    "kg_neighbors",           # 1-hop neighborhood of an entity
 }
 
 _BOOTSTRAP = """

@@ -300,6 +300,11 @@ tools:
     - get_agent_list
     - get_market_status
     - get_kill_switch_status
+    # Shared knowledge graph (read-only) — cited entity relationships
+    # (e.g. AMZN —invested_in→ Anthropic). interpret_node also consults
+    # kg_query directly; exposing them lets the LLM query relationships too.
+    - kg_query
+    - kg_neighbors
   working_dir: /home/tianyizhang/opus trading/project_mocha
   max_rounds: 5
   timeout: 120  # generous: a tool round may need time for multi-step data fetches
