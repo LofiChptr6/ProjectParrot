@@ -140,13 +140,14 @@ async def _emit_stall(state: TurnState, reserved_idx: int | None = None) -> None
             state["chunk_idx"] = idx + 1
         audio = await S._synthesize(line, user_id=state.get("user_id"))
         viseme = (await S._generate_visemes(audio, line) if audio else None) or {}
-        # Webapp only: nudge the VRM avatar into a visible "waiting / thinking"
-        # pose while the tool + (often deep) synthesis run. The stall speech_chunk
-        # below carries no gesture of its own, so without this she'd just keep
-        # idle-fidgeting through the wait. One-shot idle gestures aren't cut by the
-        # frontend's end-of-speech endGesture() (that only acts on LOOPING), so the
-        # clip plays through. Telegram has no avatar, so this is a no-op there.
-        await _emit(state, {"type": "gesture", "name": "idle_waiting"})
+        # Webapp only: nudge the VRM avatar into a visible "thinking" pose (the
+        # calm/explaining loop pose) while the tool + (often deep) synthesis run.
+        # The stall speech_chunk below carries no gesture of its own, so without
+        # this she'd just keep idle-fidgeting through the wait. One-shot gestures
+        # aren't cut by the frontend's end-of-speech endGesture() (that only acts
+        # on LOOPING), so the clip plays through. Telegram has no avatar, so this
+        # is a no-op there.
+        await _emit(state, {"type": "gesture", "name": "thinking"})
         await _emit(state, {
             "type": "speech_chunk", "chunk_idx": idx, "text": line,
             "audio_base64": base64.b64encode(audio).decode() if audio else None,

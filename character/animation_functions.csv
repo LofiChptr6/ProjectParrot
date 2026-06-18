@@ -21,6 +21,8 @@ idle_lean_forward,Lean forward curiously,idle,FALSE,KA_Idle12_LeaningForward,,,,
 idle_lean_forward,Lean forward curiously,idle,FALSE,KA_Idle72_LeanForward,,,,
 idle_fidget,Small fidgety movement while standing,idle,FALSE,KA_Idle40_CrossLegs,,,,
 idle_lean_against,Lean casually against something,idle,FALSE,KA_Idle32_LeanAgainst,,,,
+thinking,Pensive calm pose while pondering,think,FALSE,KA_Speak04_Calm_Loop,,,,
+thinking,Thoughtful explanatory pose while pondering,think,FALSE,KA_Speak02_Explaining_Loop,,,,
 wave,Wave hands to greet or say goodbye,emote,FALSE,KA_Idle16_WaveHands,,,,2
 wave,Wave hands to greet or say goodbye,emote,FALSE,KA_Idle45_WaveHandSlightly,,,,2
 greet_bow,Bow politely as a greeting,emote,FALSE,KA_Idle44_GreetingBow,,,,1

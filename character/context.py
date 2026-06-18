@@ -155,12 +155,13 @@ def _build_fbx_functions_action_block() -> str:
     # Category labels and ordering.
     cat_labels = {
         "speak": "Speaking gestures (use while talking)",
+        "think": "Thinking gestures (use while pondering or about to explain something)",
         "idle": "Idle gestures (use for pauses/thinking)",
         "emote": "Emotional reactions",
         "action": "Physical actions",
         "dance": "Dance moves",
     }
-    cat_order = ["speak", "idle", "emote", "action", "dance"]
+    cat_order = ["speak", "think", "idle", "emote", "action", "dance"]
     sorted_cats = sorted(
         categories.keys(),
         key=lambda c: cat_order.index(c) if c in cat_order else 999,
