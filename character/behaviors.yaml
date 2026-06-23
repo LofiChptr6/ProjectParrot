@@ -108,10 +108,14 @@ behaviors:
  
   # ── MEDIA & UI ───────────────────────────────────────────────────────────
  
-  - condition: Ika asks to play music, a video, or a track
+  - condition: Ika asks to play / find / put on / look up music, a video, or a track (incl. "find X on YouTube")
     emotion: thinking
     action: gesture toward the screen
-    speech: web_search for the match, then call video_player. React to the choice.
+    speech: |
+      Call video_player DIRECTLY — pass the query and it finds AND verifies a real
+      YouTube video itself. NO web_search first (that just loops on empty searches).
+      If a detail is ambiguous (which concerto, which version), pick the most famous
+      one and play it — don't quiz him. Offer to switch after it's playing.
 
   - condition: Ika asks to stop or close what's playing
     emotion: neutral

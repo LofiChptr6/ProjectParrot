@@ -52,6 +52,69 @@ def test_streaming_by_char():
     assert _only_text(ev) == "Hi there."
 
 
+def _chunks(events: list[dict]) -> list[str]:
+    """Reconstruct flushed speech chunks (text between flush boundaries)."""
+    out: list[str] = []
+    cur = ""
+    for e in events:
+        if e["kind"] == "text_delta":
+            cur += e["text"]
+        elif e["kind"] == "flush":
+            if cur.strip():
+                out.append(cur.strip())
+            cur = ""
+    if cur.strip():
+        out.append(cur.strip())
+    return out
+
+
+def test_abbreviation_keeps_number_in_same_chunk():
+    # "No. 2" / "Op. 21" must NOT split — the bug was the user hearing
+    # "…Concerto No." then "2" as separate bubbles. Tested at realistic token
+    # sizes (whole-string and 3-char); chunk_size=1 is excluded because the
+    # parser pre-existingly can't flush any internal boundary at 1 char/feed
+    # (terminator + trailing space never share a scan), unrelated to this guard.
+    for chunk_size in (None, 3):
+        p = InlineTagParser()
+        ev = _collect(p, "Chopin Piano Concerto No. 2 is beautiful. Want it?",
+                      chunk_size=chunk_size)
+        ch = _chunks(ev)
+        assert ch[0] == "Chopin Piano Concerto No. 2 is beautiful.", (chunk_size, ch)
+        assert ch[1] == "Want it?", (chunk_size, ch)
+
+    p = InlineTagParser()
+    assert _chunks(_collect(p, "It is Op. 21 in F minor. A gem.")) == [
+        "It is Op. 21 in F minor.", "A gem."]
+
+    p = InlineTagParser()
+    assert _chunks(_collect(p, "Mr. Bond is here. Good.")) == [
+        "Mr. Bond is here.", "Good."]
+
+
+def test_non_abbreviation_still_splits():
+    # "cats." is a real sentence end even though a digit follows — the
+    # abbreviation set (not a blanket digit-follows rule) keeps this correct.
+    for chunk_size in (None, 3):
+        p = InlineTagParser()
+        assert _chunks(_collect(p, "I have 3 cats. 2 are black.", chunk_size)) == [
+            "I have 3 cats.", "2 are black."], chunk_size
+
+
+def test_lowercase_word_no_still_splits():
+    # The ordinary word "no." must still end a sentence — case-sensitivity is
+    # what separates it from the numbering abbreviation "No.".
+    for chunk_size in (None, 3):
+        p = InlineTagParser()
+        assert _chunks(_collect(p, "I told him no. Then I left.", chunk_size)) == [
+            "I told him no.", "Then I left."], chunk_size
+
+
+def test_decimal_still_protected():
+    p = InlineTagParser()
+    assert _chunks(_collect(p, "The price is $202.06 today. Nice.")) == [
+        "The price is $202.06 today.", "Nice."]
+
+
 # --------------------------------------------------------------------------
 #  Simple tags
 # --------------------------------------------------------------------------

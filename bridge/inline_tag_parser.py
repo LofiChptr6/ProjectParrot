@@ -79,12 +79,39 @@ _SIMPLE_BODY_TAGS = frozenset({"reads", "emotion", "gesture"})  # close by exact
 _MAX_TAG_LOOKAHEAD = 128
 _SENTENCE_TERMINATORS = frozenset(".!?")
 
+# Words that take a trailing "." but are NOT sentence ends. Without this, a label
+# like "Piano Concerto No. 2" or "Op. 21" flushes after the "." (it's a terminator
+# followed by whitespace), splitting the number into its own chunk/bubble — the
+# user hears "…Concerto No." then "2".
+#
+# CASE-SENSITIVE on the capitalized forms on purpose: it's how we tell the numbering
+# abbreviation "No." (→ "No. 2") from the ordinary word "no." (→ "say no. Then…"),
+# without needing to look ahead for a following digit (which isn't reliably in the
+# buffer yet during streaming). Titles ("Mr.", "Dr.") are likewise always capitalized.
+_ABBREVIATIONS = frozenset({
+    "No", "Nos", "Op", "Vol", "Vols", "Ch", "Chap", "Pt", "Pp", "Fig", "Figs",
+    "Mr", "Mrs", "Ms", "Dr", "Prof", "St", "Sr", "Jr", "Vs",
+})
+# Trailing alphabetic run of a string (the "word" ending just before a ".").
+_WORD_BEFORE_RE = re.compile(r"([A-Za-z]+)$")
+
 _TAG_OPEN_RE = re.compile(
     r"<\s*(/?)\s*(reads|emotion|gesture|tool_call|think|escalate)\b"
     r"((?:\s+[A-Za-z_][\w-]*\s*=\s*\"[^\"]*\")*)"   # group 3: any attributes
     r"\s*(/?)\s*>",
     re.IGNORECASE,
 )
+
+
+def _ends_with_abbreviation(prefix: str) -> bool:
+    """True when ``prefix`` (the text ending immediately before a ".") ends with a
+    known abbreviation, so the "." is a label dot, not a sentence end. ``prefix``
+    must include any carried-over tail from earlier stream buffers, because at
+    small token sizes the abbreviation's first letters may already be emitted
+    (e.g. buffer "o. 2" with "N" in the prior chunk). Case-sensitive: matches
+    "No"/"Mr", not the word "no"."""
+    m = _WORD_BEFORE_RE.search(prefix)
+    return bool(m) and m.group(1) in _ABBREVIATIONS
 
 
 class _State(Enum):
@@ -217,7 +244,15 @@ class InlineTagParser:
                         prev_char = text[i - 1] if i > 0 else ""
                         # (No next-char digit case possible here because we already
                         # checked whitespace follows — decimals fail that check.)
-                        if not prev_char.isdigit():
+                        # Abbreviation check: a single "." after a known abbreviation
+                        # ("No. 2", "Op. 21", "Mr. Bond") is not a sentence end — keep
+                        # the label and its number/name in one chunk. Only guards the
+                        # lone "." case (j == i); "?!"/"!!" runs still flush. The tail
+                        # carries cross-buffer context so it works mid-stream.
+                        if not prev_char.isdigit() and not (
+                            j == i and _ends_with_abbreviation(
+                                self._last_emitted_text_tail + text[idx:i])
+                        ):
                             term_idx = j
                     i = j + 1
                     if term_idx >= 0:
