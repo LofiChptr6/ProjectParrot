@@ -334,3 +334,41 @@ def test_pending_action_parts_extracts_tool_and_hint():
     name, hint = G._pending_action_parts(pending)
     assert name == "video_player" and hint == "chopin nocturne"
     assert G._pending_action_parts([]) == ("", "")
+
+
+# ── stall rephrase: 3B polishes the seed, but the seed is the floor ───────────
+
+class _FakeClient:
+    def __init__(self, content=None, boom=False):
+        self._content, self._boom = content, boom
+
+    async def chat(self, *a, **k):
+        if self._boom:
+            raise RuntimeError("3B down")
+        return {"content": self._content}
+
+
+class _FakeS:
+    def __init__(self, client):
+        self.llm_client = client
+
+
+def test_rephrase_stall_uses_llm_line_when_present():
+    import asyncio
+    s = _FakeS(_FakeClient(content="okay, finding you a fresh one"))
+    out = asyncio.run(G._rephrase_stall(s, "finding a track", "chopin", "get another one"))
+    assert out == "okay, finding you a fresh one"
+
+
+def test_rephrase_stall_falls_back_to_seed_on_failure():
+    import asyncio
+    s = _FakeS(_FakeClient(boom=True))
+    out = asyncio.run(G._rephrase_stall(s, "finding a track", "chopin", "get another one"))
+    assert out == "finding a track"          # seed preserved when the 3B errors
+
+
+def test_rephrase_stall_empty_llm_falls_back_to_seed():
+    import asyncio
+    s = _FakeS(_FakeClient(content="   "))
+    out = asyncio.run(G._rephrase_stall(s, "getting TSLA's price", "TSLA", "how's tesla"))
+    assert out == "getting TSLA's price"

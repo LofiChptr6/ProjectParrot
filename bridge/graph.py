@@ -144,8 +144,9 @@ def _generic_stall_phrases(name: str, hint: str) -> list[str]:
 
 
 def _stall_phrase(name: str, hint: str, seed: int = 0) -> str:
-    """Render the stall line from the action. ``seed`` (the job_id) rotates the
-    variants so consecutive turns don't repeat. Pure + deterministic → testable."""
+    """Render the grounded INTENTION phrase from the action — the seed the 3B then
+    rephrases. ``seed`` (the job_id) rotates the variants so consecutive turns don't
+    repeat. Pure + deterministic → testable."""
     name = (name or "").strip()
     if not name:
         variants = list(_COLD_STALL_LINES)            # cold: no action known yet
@@ -155,13 +156,55 @@ def _stall_phrase(name: str, hint: str, seed: int = 0) -> str:
     return variants[seed % len(variants)] if variants else ""
 
 
+# The 3B rephrases the grounded seed into a natural, in-the-moment line — KEEPING
+# the seed's intention (so it can't drift domains the way free-generation did) but
+# fitting it to what Ika just said. The seed is the floor; this is the polish.
+_STALL_REPHRASE_SYSTEM = (
+    "You are Mocha — warm, casual, a little playful. You're about to do something "
+    "for Ika and want to say ONE short line (3-8 words, present tense) as you start, "
+    "like a friend saying it while they do it. You're GIVEN the intention (what "
+    "you're doing) and what Ika just said. Rephrase the intention to fit the moment "
+    "— keep the SAME intention, do NOT switch the topic, and do NOT add any fact, "
+    "number, name, or ticker that wasn't given. Examples: intention \"finding a "
+    "track\" + Ika said \"get another one\" -> \"okay, finding you a fresh one\"; "
+    "intention \"checking the weather\" -> \"let me peek at the forecast\". Output "
+    "ONLY the line: no quotes, no emoji, no tags."
+)
+
+
+async def _rephrase_stall(S, seed: str, hint: str, user_text: str | None) -> str:
+    """Polish the grounded ``seed`` into a natural, contextual one-liner on the fast
+    3B (runs concurrently with the deep model's prefill — the stall covers that
+    wait). The seed pins the domain so the model only rephrases, never re-guesses;
+    on any failure / empty output we fall back to the seed verbatim."""
+    try:
+        ctx = f"Intention: {seed}"
+        if hint:
+            ctx += f"\nAbout: {hint[:80]}"
+        if user_text:
+            ctx += f"\nIka just said: {user_text[:200]}"
+        ctx += "\nSay your one short line now."
+        res = await S.llm_client.chat(
+            [{"role": "system", "content": _STALL_REPHRASE_SYSTEM},
+             {"role": "user", "content": ctx}],
+            temperature=0.7, max_tokens=20,
+        )
+        line = (res.get("content") or "").strip().strip('"').strip()
+        return line or seed
+    except Exception as e:  # noqa: BLE001 — the stall must never break a turn
+        log.warning("[graph] stall rephrase failed, using seed: %s", e)
+        return seed
+
+
 async def _emit_stall(state: TurnState, reserved_idx: int | None = None) -> None:
-    """Speak a short filler DERIVED from the action she's about to take — e.g.
-    "getting TSLA's price", "finding that", "checking the weather in Tokyo" — so the
-    user isn't left in silence while a tool + (often deep) synthesis run. Rendered
-    from the structured pending action (no LLM call → instant, and it can never
-    drift into the wrong domain). Best-effort: never blocks/breaks the turn. Not
-    added to full_text_parts (transient filler, not part of the recorded reply).
+    """Speak a short filler while a tool + (often deep) synthesis run, so the user
+    isn't left in silence. Two stages: (1) derive a grounded INTENTION seed from the
+    structured pending action (``_stall_phrase`` — e.g. "finding a track", "getting
+    TSLA's price"); (2) let the fast 3B rephrase that seed into a natural, contextual
+    line (``_rephrase_stall``), concurrently with the deep model. The seed pins the
+    domain so the rephrase can't drift (no "getting Tesla's price" while finding a
+    nocturne); the LLM just makes it pleasant. Falls back to the seed if the 3B
+    fails. Best-effort: never blocks/breaks the turn. Not added to full_text_parts.
 
     ``reserved_idx`` lets a caller pre-allocate this chunk's index (so the stall
     can run as a concurrent task without racing the main stream for chunk_idx);
@@ -169,7 +212,10 @@ async def _emit_stall(state: TurnState, reserved_idx: int | None = None) -> None
     from bridge import server as S
     try:
         name, hint = _pending_action_parts(state.get("pending_tool_calls") or [])
-        line = _stall_phrase(name, hint, seed=int(state.get("job_id") or 0))
+        seed = _stall_phrase(name, hint, seed=int(state.get("job_id") or 0))
+        if not seed:
+            return
+        line = await _rephrase_stall(S, seed, hint, state.get("user_text"))
         if not line:
             return
         if reserved_idx is not None:
