@@ -280,3 +280,57 @@ def test_sweep_only_drops_idle_parked_tasks():
     t.last_active_at = 1000.0
     assert ts.sweep_timeouts(ttl_seconds=600, now=1601.0) == 1
     assert not ts.has_active("u")
+
+
+# ── stall line: DERIVED from the action, never hallucinated ───────────────────
+
+def test_stall_phrase_video_player_never_says_stocks():
+    # The exact bug: finding another nocturne must NOT yield a stock-quote stall.
+    line = G._stall_phrase("video_player", "chopin nocturne op 9 no 2", seed=0)
+    low = line.lower()
+    assert "stock" not in low and "price" not in low and "tesla" not in low
+    assert line in ["finding that", "queuing that up", "pulling up a video", "finding a track"]
+
+
+def test_stall_phrase_stock_uses_the_real_ticker():
+    assert "TSLA" in G._stall_phrase("get_stock_data", "TSLA", seed=0)
+
+
+def test_stall_phrase_stock_no_hint_fabricates_nothing():
+    line = G._stall_phrase("get_stock_data", "", seed=0)
+    assert line and "TSLA" not in line and "NVIDIA" not in line
+
+
+def test_stall_phrase_weather_and_news_use_hint():
+    assert "Tokyo" in G._stall_phrase("get_weather", "Tokyo", seed=0)
+    assert "mars rover" in G._stall_phrase("get_news", "mars rover", seed=0)
+
+
+def test_stall_phrase_cold_is_a_safe_fixed_line():
+    assert G._stall_phrase("", "", seed=0) in G._COLD_STALL_LINES
+
+
+def test_stall_phrase_desk_family_fallback_is_deskish():
+    assert "desk" in G._stall_phrase("get_pnl_summary", "", seed=0).lower()
+
+
+def test_stall_phrase_unknown_tool_with_hint_names_it():
+    assert "weasels" in G._stall_phrase("frobnicate", "weasels", seed=0)
+
+
+def test_stall_phrase_unknown_tool_no_hint_is_vague():
+    assert G._stall_phrase("frobnicate", "", seed=0) in G._COLD_STALL_LINES
+
+
+def test_stall_phrase_seed_rotates_variants():
+    # 4 video_player variants → adjacent seeds shouldn't collide.
+    assert G._stall_phrase("video_player", "", 0) != G._stall_phrase("video_player", "", 1)
+
+
+def test_pending_action_parts_extracts_tool_and_hint():
+    import json
+    pending = [{"id": "t1", "name": "video_player",
+                "arguments": json.dumps({"action": "open", "query": "chopin nocturne"})}]
+    name, hint = G._pending_action_parts(pending)
+    assert name == "video_player" and hint == "chopin nocturne"
+    assert G._pending_action_parts([]) == ("", "")
