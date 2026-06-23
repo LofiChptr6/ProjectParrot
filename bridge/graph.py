@@ -35,6 +35,7 @@ from langgraph.graph import StateGraph, START, END
 
 from bridge.graph_state import TurnState
 from bridge.inline_route import drive_inline_stream
+from bridge import task_store, task_templates
 
 log = logging.getLogger("bridge.graph")
 
@@ -563,6 +564,10 @@ async def run_tools_node(state: TurnState) -> dict:
     if any("num:" in (m.get("content") or "") for m in messages[-len(pending):]):
         messages.append({"role": "system", "content": _HANDLE_REMINDER})
 
+    # Task runtime: a deterministic task tool just ran — advance the task FSM.
+    if state.get("task_acting"):
+        _complete_task_after_tools(state)
+
     # A tool fired → synthesize the result on the deep model (Qwen-32B), which is
     # far more reliable at the inline-tag format + handle-quoting than the 3B.
     state["route"] = "deep"
@@ -776,10 +781,55 @@ _INTERPRET_SYS = (
     "about THAT item, not a new subject. Never invent facts. Output ONLY the JSON."
 )
 
+# Appended to _INTERPRET_SYS only when the task runtime is on. Adds the cross-turn
+# task-routing decision: is this message just talk, the start of a doable task, an
+# answer continuing the open one, an interrupt, or a give-up? See
+# docs/task_runtime_design.md §4.3. ``{kinds}`` / ``{active}`` are filled per-turn.
+_TASK_ROUTING_ADDENDUM = (
+    "\n\nALSO decide task routing and ADD these keys to the SAME JSON object:\n"
+    '  "route": "chat | start | continue | interrupt | give_up",\n'
+    '  "task_kind": "<one of: {kinds} — or null>",\n'
+    '  "task_slots": {{ "...": "..." }}\n'
+    "Available task kinds and their slots:\n"
+    "  - play_media — Ika wants to hear/watch something (play / find / put on / "
+    "look up a song, piece, video, 'X on YouTube'). slot: query (a concrete search "
+    "string). Resolve terse refs from history: after a Chopin concerto, 'No. 2' → "
+    'query "Chopin Piano Concerto No. 2".\n'
+    "Routing rules:\n"
+    "  - DEFAULT to route=chat. Only leave chat when the message clearly names a "
+    "doable task above. Banter, feelings, opinions, questions about you → chat.\n"
+    "  - route=start: a NEW task; set task_kind + task_slots (fill query concretely).\n"
+    "  - There is currently {active}. If a task is OPEN and this message ANSWERS it "
+    "(narrows/clarifies, e.g. 'No. 2', 'the live one') → route=continue + task_slots.\n"
+    "  - route=interrupt: a task is open but this is a DIFFERENT task → set task_kind.\n"
+    "  - route=give_up: a task is open and Ika abandoned it or clearly changed the "
+    "subject ('nvm', 'forget it', or an unrelated topic). Be conservative — only on "
+    "a CLEAR pivot; if unsure, prefer chat or continue.\n"
+)
+
+
+def _interpret_system(state: "TurnState") -> str:
+    """The interpret system prompt, plus the task-routing addendum when the runtime
+    is on. Listing the open task in-prompt is what lets the model resolve a
+    continuation ('No. 2') against the goal instead of cold-reading it."""
+    from bridge import server as S
+    if not getattr(S, "TASK_RUNTIME_ENABLED", False):
+        return _INTERPRET_SYS
+    active = task_store.get_active(state.get("user_id"))
+    active_desc = (f"an OPEN task: {active.kind} (state={active.state}, "
+                   f"slots={active.slots})") if active else "no open task"
+    kinds = ", ".join(task_templates.TASK_KINDS)
+    return _INTERPRET_SYS + _TASK_ROUTING_ADDENDUM.format(kinds=kinds, active=active_desc)
+
 
 def _needs_interpret(state: TurnState) -> bool:
     """Run the read-intent step only where it earns its keep: a reply to one of
-    Mocha's messages, or a terse/ambiguous line that leans on context."""
+    Mocha's messages, or a terse/ambiguous line that leans on context. With the
+    task runtime on, every turn is classified (to catch task starts/continuations),
+    paid for by a cheap fast-model call — see docs/task_runtime_design.md §10.2."""
+    from bridge import server as S
+    if getattr(S, "TASK_RUNTIME_ENABLED", False):
+        return True
     if state.get("reply_context"):
         return True
     t = (state.get("user_text") or "").strip()
@@ -795,7 +845,8 @@ def _parse_interpret(content: str) -> dict | None:
         obj_str = S._first_json_object(content)
         if obj_str:
             obj = json.loads(obj_str)
-            if isinstance(obj, dict) and (obj.get("asking") or obj.get("refers_to")):
+            if isinstance(obj, dict) and (obj.get("asking") or obj.get("refers_to")
+                                          or obj.get("route")):
                 return obj
     except Exception:
         pass
@@ -886,7 +937,7 @@ async def interpret_node(state: TurnState) -> dict:
     if not _needs_interpret(state):
         return state
     client = S.llm_client if state.get("realtime") else S.llm_deep
-    msgs = [{"role": "system", "content": _INTERPRET_SYS}]
+    msgs = [{"role": "system", "content": _interpret_system(state)}]
     rc = state.get("reply_context")
     if rc:
         msgs.append({"role": "system", "content": rc})
@@ -904,6 +955,8 @@ async def interpret_node(state: TurnState) -> dict:
         read = None
     if read:
         state["intent_read"] = read
+        if getattr(S, "TASK_RUNTIME_ENABLED", False):
+            _apply_task_routing(state, read)
         if read.get("needs_data"):
             state["route"] = "deep"   # ensure tools are available to actually fetch
         # Knowledge-graph consult: when the question is about how two entities
@@ -931,6 +984,159 @@ async def interpret_node(state: TurnState) -> dict:
     return state
 
 
+# ──────────────────────────────────────────────────────────────────────────
+#  Task runtime (flag-gated: server.TASK_RUNTIME_ENABLED)
+# ──────────────────────────────────────────────────────────────────────────
+
+def _apply_task_routing(state: TurnState, read: dict) -> None:
+    """Translate the classifier's route into task-store ops and set
+    ``state['task_route'] = 'task'`` when this turn should run through task_step.
+    v1 single suspend slot. Fail-safe: any inconsistency falls back to chat so a
+    misclassification can never wedge a turn — it just talks normally."""
+    uid = state.get("user_id")
+    route = (read.get("route") or "chat").strip().lower()
+    kind = read.get("task_kind")
+    slots = read.get("task_slots") if isinstance(read.get("task_slots"), dict) else {}
+    state["task_route"] = "chat"
+    try:
+        if route in ("start", "interrupt") and task_templates.is_task_kind(kind):
+            if task_store.has_active(uid):
+                task_store.suspend(uid)          # interrupt: don't lose the in-flight task
+            task_store.start(uid, task_templates.make_task(kind, slots))
+            state["task_route"] = "task"
+        elif route == "continue" and task_store.has_active(uid):
+            t = task_store.get_active(uid)
+            task_templates.apply_continuation(t, slots)
+            task_store.update_active(uid, state=t.state, slots=dict(t.slots))
+            state["task_route"] = "task"
+        elif route == "give_up" and task_store.has_active(uid):
+            if task_store.complete_active(uid) is not None:
+                state["task_route"] = "task"     # a suspended task got resumed
+    except Exception as e:  # noqa: BLE001 — routing must never break a turn
+        log.warning("[graph] job=%s task routing failed (→chat): %s",
+                    state.get("job_id"), e)
+        state["task_route"] = "chat"
+    if state.get("task_route") == "task":
+        state["route"] = "deep"   # tools live on deep; task_step + synthesis need them
+        act = task_store.get_active(uid)
+        log.info("[graph] job=%s task route=%s → active=%s state=%s slots=%s",
+                 state.get("job_id"), route, getattr(act, "kind", None),
+                 getattr(act, "state", None), getattr(act, "slots", None))
+
+
+async def _emit_reply_chunk(state: TurnState, text: str) -> None:
+    """Synthesize + emit one spoken chunk that IS part of the reply (recorded in
+    full_text_parts, unlike the transient stall filler)."""
+    from bridge import server as S
+    idx = state["chunk_idx"]
+    state["chunk_idx"] = idx + 1
+    state.setdefault("full_text_parts", []).append(text)
+    audio = await S._synthesize(text, user_id=state.get("user_id"))
+    viseme = (await S._generate_visemes(audio, text) if audio else None) or {}
+    await _emit(state, {
+        "type": "speech_chunk", "chunk_idx": idx, "text": text,
+        "audio_base64": base64.b64encode(audio).decode() if audio else None,
+        "viseme_b64": viseme.get("viseme_b64"),
+        "viseme_fps": viseme.get("viseme_fps", 30),
+        "viseme_frames": viseme.get("viseme_frames", 0),
+    })
+
+
+_TASK_ASK_SYSTEM = (
+    "You are Mocha — warm, direct, a little dry, never gushy. Ask ONE short "
+    "question (max ~12 words) to get the detail you need to do what Ika asked. "
+    "Just the question — no preamble, no quotes."
+)
+
+
+async def task_step_node(state: TurnState) -> dict:
+    """Run one step of the active task's template. Deterministic tool choice is the
+    whole point: ACT queues the primary tool and hands to run_tools (which executes
+    it and loops to llm_pass for her spoken reaction); ASK speaks one question and
+    parks the task for next turn. See docs/task_runtime_design.md §7."""
+    from bridge import server as S
+    uid = state.get("user_id")
+    task = task_store.get_active(uid)
+    state["task_acting"] = False
+    if task is None:
+        state["task_route"] = "chat"          # router shouldn't send us here empty
+        return state
+
+    decision = task_templates.decide_entry(task)
+    log.info("[graph] job=%s task_step %s/%s → %s (%s)", state.get("job_id"),
+             task.kind, task.state, decision.action, decision.reason)
+
+    if decision.action == "act":
+        tc_id = f"task-{state.get('job_id', 0)}-{int(state.get('tool_round', 0))}"
+        state["pending_tool_calls"] = [{
+            "id": tc_id, "name": decision.tool,
+            "arguments": json.dumps(decision.tool_args or {}),
+        }]
+        state["pass_content"] = ""            # run_tools appends this as the assistant turn
+        state["task_acting"] = True           # → run_tools (+ its completion hook)
+        return state
+
+    if decision.action == "ask":
+        try:
+            res = await S.llm_client.chat(
+                [{"role": "system", "content": _TASK_ASK_SYSTEM},
+                 {"role": "user", "content":
+                  f"Ika said: {(state.get('user_text') or '')[:240]}\n"
+                  f"You need: {decision.ask_for}. Ask your one short question."}],
+                temperature=0.7, max_tokens=30,
+            )
+            q = (res.get("content") or "").strip().strip('"').strip()
+        except Exception as e:  # noqa: BLE001
+            log.warning("[graph] task ask gen failed: %s", e)
+            q = ""
+        if q:
+            await _emit_reply_chunk(state, q)
+        task_store.update_active(uid, state="ask")   # park for the next turn
+        state["task_route"] = "done"          # → finalize
+        return state
+
+    # succeed / give_up at entry (not reachable for fulfill) → clear, converse.
+    task_store.complete_active(uid)
+    state["task_route"] = "chat"
+    return state
+
+
+def _complete_task_after_tools(state: TurnState) -> None:
+    """Advance the task FSM after its deterministic tool ran. Stage 1: success or
+    failure both complete the task (clearing it, resuming any suspended task) so a
+    turn never wedges. The pure retry/ask-on-failure path in
+    ``task_templates.decide_after_result`` is tested and lands in stage 1.1."""
+    uid = state.get("user_id")
+    task = task_store.get_active(uid)
+    if task is None:
+        return
+    last = ""
+    for m in reversed(state.get("messages") or []):
+        if m.get("role") == "tool":
+            last = (m.get("content") or "").lower()
+            break
+    ok = bool(last) and not last.startswith("tool error") and not any(
+        s in last for s in ("couldn't find", "no results", "not found", "no video"))
+    would = task_templates.decide_after_result(task, ok).action
+    task_store.complete_active(uid)
+    state["task_acting"] = False
+    log.info("[graph] job=%s task '%s' done (ok=%s, designed=%s)",
+             state.get("job_id"), task.kind, ok, would)
+
+
+def _after_build(state: TurnState) -> str:
+    """build_messages → task lane or the normal chat lane."""
+    return "task_step" if state.get("task_route") == "task" else "llm_pass"
+
+
+def _after_task_step(state: TurnState) -> str:
+    if state.get("task_acting"):
+        return "run_tools"          # ACT: execute the deterministic tool, then synthesize
+    if state.get("task_route") == "done":
+        return "finalize"           # ASK: question already spoken, end the turn
+    return "llm_pass"               # fallback: just converse
+
+
 def _build_graph():
     g = StateGraph(TurnState)
     g.add_node("router", route_node)
@@ -940,13 +1146,23 @@ def _build_graph():
     g.add_node("log_pass", log_pass_node)
     g.add_node("run_tools", run_tools_node)
     g.add_node("escalate", escalate_node)
+    g.add_node("task_step", task_step_node)
     g.add_node("verify", verify_node)
     g.add_node("finalize", finalize_node)
 
     g.add_edge(START, "router")
     g.add_edge("router", "interpret")
     g.add_edge("interpret", "build_messages")
-    g.add_edge("build_messages", "llm_pass")
+    # Task lane vs normal chat lane. With the runtime OFF, _after_build always
+    # returns "llm_pass" (task_route is never set), so the graph is unchanged.
+    g.add_conditional_edges(
+        "build_messages", _after_build,
+        {"llm_pass": "llm_pass", "task_step": "task_step"},
+    )
+    g.add_conditional_edges(
+        "task_step", _after_task_step,
+        {"run_tools": "run_tools", "llm_pass": "llm_pass", "finalize": "finalize"},
+    )
     g.add_edge("llm_pass", "log_pass")
     g.add_conditional_edges(
         "log_pass", should_continue,

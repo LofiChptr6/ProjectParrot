@@ -324,6 +324,17 @@ tools:
       - "chmod -R 777 /"
 
 # ---------------------------------------------------------------------------
+# Task runtime — cross-turn "what is she doing" state machine (Stage 1).
+# OFF by default: when disabled the conversational graph behaves exactly as
+# before. When on, task intents (currently: play_media) run through a persistent
+# fulfill loop so an intent carries across turns and the primary tool is called
+# deterministically. See docs/task_runtime_design.md. Requires tools.enabled.
+# ---------------------------------------------------------------------------
+task_runtime:
+  enabled: false
+  park_ttl_seconds: 600   # drop a parked task (awaiting an answer) after this idle
+
+# ---------------------------------------------------------------------------
 # Agent loop — proactive background scheduler that runs tasks on a cron and
 # broadcasts results through registered channels.
 # ---------------------------------------------------------------------------

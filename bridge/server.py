@@ -1169,6 +1169,14 @@ TOOLS_ENABLED: bool = bool(_tools_cfg.get("enabled", False))
 _TOOL_MAX_ROUNDS: int = int(_tools_cfg.get("max_rounds", 5))
 _TOOL_TIMEOUT: int = int(_tools_cfg.get("timeout", 30))
 
+# Task runtime (bridge/task_store.py + task_templates.py + graph task_step).
+# OFF by default: when disabled the conversational graph behaves exactly as before
+# (classify emits no task route, task_step is never entered). Flip on per
+# docs/task_runtime_design.md after live validation. Requires TOOLS_ENABLED.
+_task_runtime_cfg = full_config.get("task_runtime", {})
+TASK_RUNTIME_ENABLED: bool = bool(_task_runtime_cfg.get("enabled", False)) and TOOLS_ENABLED
+TASK_PARK_TTL_S: int = int(_task_runtime_cfg.get("park_ttl_seconds", 600))
+
 if TOOLS_ENABLED:
     from tools.registry import reload_custom_tools as _boot_reload
     _boot_reload()  # load custom tools on startup
