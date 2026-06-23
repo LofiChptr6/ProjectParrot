@@ -523,6 +523,33 @@ http = httpx.AsyncClient(timeout=120.0)
 _ws_clients: list[WebSocket] = []
 monitor_clients: list[WebSocket] = []
 
+# Video playback confirmation. The video_player tool opens a video on the web
+# client and then awaits the client's report of whether it ACTUALLY played (or
+# whether every fallback candidate was refused at play time — oEmbed 200 does not
+# guarantee the IFrame will play). Keyed by a short play_id the tool generates.
+# This is what lets "done" mean "played" instead of "sent". Fire-and-forget safe:
+# a missing/timed-out waiter just falls through to an optimistic result.
+_play_waiters: dict[str, "asyncio.Future"] = {}
+
+
+def register_play_waiter(play_id: str) -> "asyncio.Future":
+    """Create + register a Future the web client will resolve via a
+    ``video_play_result`` ws message. Caller awaits it (with a timeout)."""
+    fut = asyncio.get_running_loop().create_future()
+    _play_waiters[play_id] = fut
+    return fut
+
+
+def _resolve_play_waiter(play_id: str, result: dict) -> None:
+    fut = _play_waiters.pop(play_id, None)
+    if fut is not None and not fut.done():
+        fut.set_result(result)
+
+
+def discard_play_waiter(play_id: str) -> None:
+    """Drop a waiter the caller is done with (e.g. on timeout) so it can't leak."""
+    _play_waiters.pop(play_id, None)
+
 # Per-user conversation histories and chat logs keyed by user_id.
 # Legacy global lists retained for non-web channels (Telegram/Discord/CLI).
 _user_histories: dict[str, list[dict]] = defaultdict(list)
@@ -4344,6 +4371,19 @@ async def live_ws(ws: WebSocket):
                             segment=seg_idx, total=seg_total,
                         )
                     )
+
+                elif mtype == "video_play_result":
+                    # The web player reports whether a video actually played, or
+                    # whether every candidate was refused at play time. Resolves
+                    # the Future the video_player tool is awaiting (see
+                    # register_play_waiter) so "done" reflects real playback.
+                    pid = (msg.get("play_id") or "").strip()
+                    if pid:
+                        _resolve_play_waiter(pid, {
+                            "ok": bool(msg.get("ok")),
+                            "video_id": msg.get("video_id"),
+                            "title": msg.get("title"),
+                        })
 
                 elif mtype == "client_hello":
                     sid = (msg.get("session_id") or "").strip()

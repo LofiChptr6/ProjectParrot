@@ -76,3 +76,47 @@ def test_music_loop_intent_detection(vp):
     assert vp._MUSIC_LOOP_RE.search("ambient study beats")
     # A specific song/clip is not a continuous-music request → no query rewrite.
     assert not vp._MUSIC_LOOP_RE.search("Rick Astley Never Gonna Give You Up")
+
+
+# ── candidate ordering (drives the web player's fallback cycle) ───────────────
+
+def test_order_candidates_keeps_relevance_for_non_music(vp):
+    pairs = [("aaaaaaaaaaa", "Some Song"), ("bbbbbbbbbbb", "Another")]
+    assert vp._order_candidates(pairs, False) == pairs
+
+
+def test_order_candidates_music_vod_first_live_last(vp):
+    pairs = [
+        ("liveAAAAAAA", "lofi hip hop radio 📚 live"),
+        ("vodCCCCCCCC", "lofi 1 hour mix"),
+        ("plainBBBBBB", "lofi beats"),
+    ]
+    out = vp._order_candidates(pairs, True)
+    assert out[0][0] == "vodCCCCCCCC"     # VOD bucket first
+    assert out[-1][0] == "liveAAAAAAA"    # live bucket last
+    assert {i for i, _ in out} == {"vodCCCCCCCC", "plainBBBBBB", "liveAAAAAAA"}
+
+
+# ── playback-confirmation waiters (so "done" means "played") ──────────────────
+
+def test_play_waiter_register_resolve_and_discard():
+    from bridge import server as S
+
+    async def _run():
+        S._play_waiters.clear()
+        fut = S.register_play_waiter("pid1")
+        assert "pid1" in S._play_waiters
+        S._resolve_play_waiter("pid1", {"ok": True, "video_id": "v"})
+        res = await asyncio.wait_for(fut, timeout=1)
+        assert res["ok"] is True and res["video_id"] == "v"
+        assert "pid1" not in S._play_waiters          # popped on resolve
+
+        # A still-pending waiter (the timeout path) is dropped by discard.
+        S.register_play_waiter("pid2")
+        S.discard_play_waiter("pid2")
+        assert "pid2" not in S._play_waiters
+
+        # Resolving an unknown id is a harmless no-op.
+        S._resolve_play_waiter("nope", {"ok": False})
+
+    asyncio.run(_run())

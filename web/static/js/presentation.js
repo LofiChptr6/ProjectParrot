@@ -663,6 +663,8 @@
             if (next === 'hidden') {
                 el.classList.add('hidden');
                 el.removeAttribute('data-state');
+                clearTimeout(this._loadTimer);
+                clearTimeout(this._graceTimer);
                 try { if (this._yt && this._yt.destroy) this._yt.destroy(); } catch (_) {}
                 this._yt = null;
                 this._iframeWrap().innerHTML = '';  // stop audio/video
@@ -685,13 +687,24 @@
             el.setAttribute('data-state', next);
         },
 
-        open(videoId, title) {
-            if (!videoId) return;
-            this._videoId = videoId;
-            this._title = title || 'Now playing';
+        open(videoId, title, candidates, playId) {
+            // candidates: optional [{id,title}] fallback list the player cycles
+            // through if an embed is refused at play time (oEmbed can pass while
+            // the IFrame still throws 101/150). playId: correlation token used to
+            // report the REAL outcome (played / all-failed) back to the bridge.
+            this._candidates = (Array.isArray(candidates) && candidates.length)
+                ? candidates.slice()
+                : (videoId ? [{ id: videoId, title: title }] : []);
+            if (!this._candidates.length) return;
+            this._candIdx = 0;
+            this._playId = playId || '';
+            this._reported = false;
+            const first = this._candidates[0];
+            this._videoId = first.id;
+            this._title = first.title || title || 'Now playing';
             this._titleEl().textContent = this._title;
             this._thumbTitleEl().textContent = this._title;
-            this._mountPlayer(videoId);
+            this._mountPlayer(this._videoId);
             this._setState('full');
         },
 
@@ -725,25 +738,96 @@
             const self = this;
             try { if (this._yt && this._yt.destroy) this._yt.destroy(); } catch (_) {}
             this._yt = null;
+            clearTimeout(this._loadTimer);
+            clearTimeout(this._graceTimer);
             loadYT().then((YT) => {
                 // A newer open() may have superseded this one while the API loaded.
                 if (self._videoId !== videoId) return;
-                if (!YT || !YT.Player) { self._rawIframe(videoId); return; }
+                if (!YT || !YT.Player) {
+                    // No IFrame API → can't detect play/fail; show it, assume ok.
+                    self._rawIframe(videoId);
+                    self._reportOk(videoId);
+                    return;
+                }
                 self._iframeWrap().innerHTML = '<div id="ytPlayerHost"></div>';
                 self._yt = new YT.Player('ytPlayerHost', {
                     width: '100%', height: '100%', videoId: videoId,
                     playerVars: { autoplay: 1, rel: 0, playsinline: 1, origin: location.origin },
                     events: {
+                        onReady: () => {
+                            if (self._videoId !== videoId) return;
+                            // Loaded, no error. Autoplay may be blocked (stays CUED
+                            // not PLAYING) — give it a beat, then count "loaded with
+                            // no error" as success (the user can press play).
+                            clearTimeout(self._graceTimer);
+                            self._graceTimer = setTimeout(() => {
+                                if (self._videoId === videoId) self._reportOk(videoId);
+                            }, 2500);
+                        },
+                        onStateChange: (e) => {
+                            // 1 === YT.PlayerState.PLAYING → unambiguous success.
+                            if (self._videoId === videoId && e && e.data === 1) {
+                                self._reportOk(videoId);
+                            }
+                        },
                         onError: () => {
                             if (self._videoId !== videoId) return;
-                            self._showError(
-                                "Couldn't play that one — it may have ended, gone "
-                                + 'private, or blocked embedding. Ask me to find another.'
-                            );
+                            self._onPlayFailure();   // embed refused → next candidate
                         },
                     },
                 });
-            }).catch(() => self._rawIframe(videoId));
+                // Never loaded at all (no onReady, no onError) → treat as failure.
+                clearTimeout(self._loadTimer);
+                self._loadTimer = setTimeout(() => {
+                    if (self._videoId === videoId && !self._reported) self._onPlayFailure();
+                }, 9000);
+            }).catch(() => { self._rawIframe(videoId); self._reportOk(videoId); });
+        },
+
+        // An embed was refused (or never loaded): advance to the next fallback
+        // candidate; if they're exhausted, show the message and report failure so
+        // the bridge knows the video did NOT play.
+        _onPlayFailure() {
+            clearTimeout(this._loadTimer);
+            clearTimeout(this._graceTimer);
+            this._candIdx = (this._candIdx || 0) + 1;
+            if (this._candidates && this._candIdx < this._candidates.length) {
+                const next = this._candidates[this._candIdx];
+                this._videoId = next.id;
+                this._title = next.title || this._title;
+                this._titleEl().textContent = this._title;
+                this._thumbTitleEl().textContent = this._title;
+                this._mountPlayer(next.id);
+                return;
+            }
+            this._showError(
+                "Couldn't play that one — it may have ended, gone private, or "
+                + 'blocked embedding. Ask me to find another.'
+            );
+            this._reportFailed();
+        },
+
+        _reportOk(videoId) {
+            clearTimeout(this._loadTimer);
+            clearTimeout(this._graceTimer);
+            if (this._reported) return;
+            this._reported = true;
+            if (this._playId && window.wsSend) {
+                window.wsSend({
+                    type: 'video_play_result', play_id: this._playId,
+                    ok: true, video_id: videoId, title: this._title,
+                });
+            }
+        },
+
+        _reportFailed() {
+            clearTimeout(this._loadTimer);
+            clearTimeout(this._graceTimer);
+            if (this._reported) return;
+            this._reported = true;
+            if (this._playId && window.wsSend) {
+                window.wsSend({ type: 'video_play_result', play_id: this._playId, ok: false });
+            }
         },
 
         minimize() {
@@ -767,7 +851,7 @@
     function handleVideoPlayer(msg) {
         const op = String(msg.op || '').toLowerCase();
         switch (op) {
-            case 'open':     VideoPlayer.open(msg.video_id, msg.title); break;
+            case 'open':     VideoPlayer.open(msg.video_id, msg.title, msg.candidates, msg.play_id); break;
             case 'close':    VideoPlayer.close(); break;
             case 'set_title': VideoPlayer.setTitle(msg.title); break;
             // minimize/expand kept in case someone drives from JS directly,

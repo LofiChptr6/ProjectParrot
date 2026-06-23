@@ -17,9 +17,11 @@ locally by button clicks.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
+import uuid
 
 
 TOOL_DEF = {
@@ -189,6 +191,72 @@ async def _resolve_youtube_id(query: str) -> dict:
     return {"ok": False, "reason": f"found videos for '{query}' but none were embeddable"}
 
 
+def _order_candidates(found: list[tuple[str, str]], is_music: bool) -> list[tuple[str, str]]:
+    """Order (id, title) candidate pairs for play. Music loops get the VOD-first /
+    live-last ranking; everything else keeps Brave's relevance order. Pure."""
+    if not is_music:
+        return list(found)
+    order_ids = _rank_candidates_avoiding_live(found)
+    title_by = {vid: title for vid, title in found}
+    return [(vid, title_by.get(vid, "")) for vid in order_ids]
+
+
+async def _resolve_candidates(query: str) -> dict:
+    """Resolve an ORDERED candidate list for a plain-language query: a first
+    oEmbed-verified video as primary, plus the remaining search hits as fallbacks
+    the web player can cycle through.
+
+    Why a list and not one id: oEmbed 200 does NOT guarantee the IFrame will play
+    (classical/label uploads routinely pass oEmbed yet throw embed error 101/150 at
+    play time). The browser is the only authoritative judge, so we hand it several
+    real candidates and let it land on one that actually plays. Returns
+    ``{"ok": True, "candidates": [{"id","title"}, …]}`` or ``{"ok": False, "reason"}``.
+    """
+    key = os.environ.get("BRAVE_API_KEY", "")
+    if not key:
+        return {"ok": False, "reason": "BRAVE_API_KEY not set — can't search YouTube"}
+    is_music_loop = bool(_MUSIC_LOOP_RE.search(query))
+    search_q = f"{query} mix 1 hour site:youtube.com" if is_music_loop else f"{query} site:youtube.com"
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                "https://api.search.brave.com/res/v1/web/search",
+                params={"q": search_q, "count": 10},
+                headers={"X-Subscription-Token": key, "Accept": "application/json"},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as exc:
+        return {"ok": False, "reason": f"YouTube search failed: {exc}"}
+
+    found = _yt_candidates_from_brave(data)
+    if not found:
+        return {"ok": False, "reason": f"no YouTube videos found for '{query}'"}
+
+    ordered = _order_candidates(found, is_music_loop)
+    # Pick the first oEmbed-verified video as primary (a cheap pre-filter that
+    # drops removed/private picks), keep the rest as fallbacks for the player to
+    # cycle. oEmbed-failing ones still ride along as low-priority fallbacks — the
+    # IFrame is the real test, and a 401 here sometimes still plays there.
+    primary: dict | None = None
+    fallbacks: list[dict] = []
+    for vid, title in ordered[:8]:
+        if primary is None:
+            verdict = await _verify_embeddable(vid)
+            if verdict.get("ok"):
+                primary = {"id": vid, "title": verdict.get("title") or title}
+                continue
+        fallbacks.append({"id": vid, "title": title})
+
+    if primary is None:
+        if not fallbacks:
+            return {"ok": False, "reason": f"no candidates for '{query}'"}
+        return {"ok": True, "candidates": fallbacks[:6]}
+    rest = [f for f in fallbacks if f["id"] != primary["id"]]
+    return {"ok": True, "candidates": [primary] + rest[:5]}
+
+
 async def _verify_embeddable(video_id: str) -> dict:
     """Ask YouTube's oEmbed endpoint whether this video exists and is embeddable.
 
@@ -239,6 +307,7 @@ async def execute(arguments: dict) -> str:
     video_id = (arguments.get("video_id") or "").strip()
     title = (arguments.get("title") or "").strip()
 
+    candidates: list[dict] = []
     if action == "open":
         resolved_from_query = False
         if not _VIDEO_ID_RE.match(video_id):
@@ -254,17 +323,18 @@ async def execute(arguments: dict) -> str:
                     "query='X') — I'll find a playable video. A 'vid:XXXXXXXX' "
                     "handle from a recent search also works; never fabricate an ID."
                 )
-            found = await _resolve_youtube_id(query)
-            if not found.get("ok"):
+            res = await _resolve_candidates(query)
+            if not res.get("ok"):
                 return json.dumps({
                     "status": "error", "op": "open", "query": query,
-                    "reason": found.get("reason"),
+                    "reason": res.get("reason"),
                     "hint": "Try a more specific query (artist + track), or pass a vid: handle.",
                 }, ensure_ascii=False)
-            video_id = found["video_id"]
+            candidates = res["candidates"]
+            video_id = candidates[0]["id"]
             resolved_from_query = True
             if not title:
-                title = found.get("title") or "Now playing"
+                title = candidates[0].get("title") or "Now playing"
 
         if not resolved_from_query:
             # An id/handle was supplied directly — verify it embeds.
@@ -284,15 +354,20 @@ async def execute(arguments: dict) -> str:
                 }, ensure_ascii=False)
             if not title:
                 title = verdict.get("title") or "Now playing"
+            candidates = [{"id": video_id, "title": title}]
 
     if action == "set_title" and not title:
         return "set_title requires a title."
 
     try:
-        from bridge.server import _broadcast_clients, _ws_clients, _set_open_modal, _clear_open_modal
+        from bridge.server import (
+            _broadcast_clients, _ws_clients, _set_open_modal, _clear_open_modal,
+            register_play_waiter, discard_play_waiter,
+        )
     except Exception as exc:
         return f"bridge unavailable: {exc}"
 
+    play_id = uuid.uuid4().hex[:10] if action == "open" else ""
     payload = {
         "type": "ui_command",
         "action": "video_player",
@@ -301,6 +376,8 @@ async def execute(arguments: dict) -> str:
     if action == "open":
         payload["video_id"] = video_id
         payload["title"] = title
+        payload["candidates"] = candidates   # web player cycles these on embed failure
+        payload["play_id"] = play_id
         _set_open_modal("video_player", {"video_id": video_id, "title": title})
     elif action == "set_title":
         payload["title"] = title
@@ -308,7 +385,44 @@ async def execute(arguments: dict) -> str:
     elif action == "close":
         _clear_open_modal("video_player")
 
+    # Register the playback waiter BEFORE broadcasting so the client's report can't
+    # race ahead. Only wait when a web client is actually present to play it.
+    waiter = register_play_waiter(play_id) if (action == "open" and _ws_clients) else None
+
     await _broadcast_clients(payload)
+
+    if waiter is not None:
+        # Block until the web player confirms a candidate ACTUALLY played, or that
+        # every candidate was refused at play time. This is what makes the tool's
+        # "done" mean "played" rather than merely "sent".
+        try:
+            result = await asyncio.wait_for(waiter, timeout=12.0)
+        except asyncio.TimeoutError:
+            result = None
+        finally:
+            discard_play_waiter(play_id)
+        if result is not None:
+            if result.get("ok"):
+                played_id = result.get("video_id") or video_id
+                played_title = result.get("title") or title
+                _set_open_modal("video_player", {"video_id": played_id, "title": played_title})
+                return json.dumps({
+                    "status": "ok", "op": "open", "video_id": played_id,
+                    "title": played_title, "played": True,
+                    "candidates_tried": len(candidates),
+                }, ensure_ascii=False)
+            # Every candidate was refused — report a real failure so the caller
+            # (or the task runtime's ask path) can offer a different recording.
+            _clear_open_modal("video_player")
+            return json.dumps({
+                "status": "error", "op": "open", "video_id": video_id,
+                "reason": ("none of the candidates actually played in the browser — "
+                           "embedding is blocked or the videos are unavailable"),
+                "candidates_tried": len(candidates),
+                "hint": "Offer a different recording/version, or ask which one they want.",
+            }, ensure_ascii=False)
+        # Timeout (slow/no report) → don't hang or falsely fail; report optimistically.
+
     return json.dumps({
         "status": "ok",
         "op": action,
