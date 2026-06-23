@@ -117,14 +117,13 @@ def test_decide_after_result_succeeds_on_ok():
     assert tt.decide_after_result(t, ok=True).action == "succeed"
 
 
-def test_decide_after_result_retries_then_asks():
+def test_decide_after_result_play_media_budget_one():
+    # play_media sets retry_budget=1 (a same-query retry only covers a transient
+    # blip). 1st failure → one retry; once that's spent → ask, don't spin.
     t = tt.make_task("play_media", {"query": "x"})
-    # 1st failure → retry, 2nd → retry, 3rd (over budget=2) → ask
     t.retry_count = 0
     assert tt.decide_after_result(t, ok=False).action == "act"
     t.retry_count = 1
-    assert tt.decide_after_result(t, ok=False).action == "act"
-    t.retry_count = 2
     assert tt.decide_after_result(t, ok=False).action == "ask"
 
 
@@ -231,3 +230,53 @@ def test_task_step_act_queues_deterministic_video_player():
     tc = out["pending_tool_calls"][0]
     assert tc["name"] == "video_player"
     assert json.loads(tc["arguments"]) == {"action": "open", "query": "chopin concerto no 2"}
+
+
+# ── stage 1.1: after-tools advance (retry / ask / succeed) + routing ──────────
+
+def _state_with_tool_result(content):
+    return {"user_id": "u", "job_id": 1, "task_acting": True,
+            "messages": [{"role": "tool", "content": content}]}
+
+
+def test_advance_success_completes_task():
+    ts.start("u", tt.make_task("play_media", {"query": "x"}))
+    st = _state_with_tool_result('{"video_id":"abc123","title":"Chopin Concerto"}')
+    G._advance_task_after_tools(st)
+    assert st["task_outcome"] == "succeed"
+    assert st["task_acting"] is False
+    assert not ts.has_active("u")          # cleared
+
+
+def test_advance_failure_retries_once_then_asks_and_parks():
+    ts.start("u", tt.make_task("play_media", {"query": "x"}))
+    # 1st failure → retry (budget 1), task stays active back in "find".
+    st1 = _state_with_tool_result("Tool error: youtube lookup failed")
+    G._advance_task_after_tools(st1)
+    assert st1["task_outcome"] == "retry"
+    act = ts.get_active("u")
+    assert act.retry_count == 1 and act.state == "find"
+    # 2nd failure → budget spent → ask, task parked at "ask" for the next turn.
+    st2 = _state_with_tool_result("couldn't find that video")
+    G._advance_task_after_tools(st2)
+    assert st2["task_outcome"] == "ask"
+    assert st2.get("task_ask_for")
+    assert ts.get_active("u").state == "ask"   # parked, not cleared
+
+
+def test_after_run_tools_routing():
+    assert G._after_run_tools({"task_outcome": "retry"}) == "task_step"
+    assert G._after_run_tools({"task_outcome": "ask"}) == "task_ask"
+    assert G._after_run_tools({"task_outcome": "succeed"}) == "llm_pass"
+    # Non-task tool turns never set task_outcome → unchanged ReAct loop-back.
+    assert G._after_run_tools({}) == "llm_pass"
+
+
+def test_sweep_only_drops_idle_parked_tasks():
+    # The background sweep (wired into the idle heartbeat) drops a task parked at
+    # "ask" once it's idle past the TTL — but not a freshly-touched one.
+    t = ts.start("u", tt.make_task("play_media", {"query": "x"}))
+    t.state = "ask"
+    t.last_active_at = 1000.0
+    assert ts.sweep_timeouts(ttl_seconds=600, now=1601.0) == 1
+    assert not ts.has_active("u")

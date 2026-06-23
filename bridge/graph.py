@@ -564,9 +564,10 @@ async def run_tools_node(state: TurnState) -> dict:
     if any("num:" in (m.get("content") or "") for m in messages[-len(pending):]):
         messages.append({"role": "system", "content": _HANDLE_REMINDER})
 
-    # Task runtime: a deterministic task tool just ran — advance the task FSM.
+    # Task runtime: a deterministic task tool just ran — advance the task FSM
+    # (succeed / retry / ask). _after_run_tools routes on state['task_outcome'].
     if state.get("task_acting"):
-        _complete_task_after_tools(state)
+        _advance_task_after_tools(state)
 
     # A tool fired → synthesize the result on the deep model (Qwen-32B), which is
     # far more reliable at the inline-tag format + handle-quoting than the 3B.
@@ -1049,6 +1050,27 @@ _TASK_ASK_SYSTEM = (
 )
 
 
+async def _emit_task_ask(state: TurnState, ask_for: str | None) -> None:
+    """Generate + speak ONE short in-voice clarifying question. Used both when a
+    required slot is missing at entry and when the primary tool failed past its
+    retry budget. Fail-soft: emits nothing if generation fails (turn still ends)."""
+    from bridge import server as S
+    try:
+        res = await S.llm_client.chat(
+            [{"role": "system", "content": _TASK_ASK_SYSTEM},
+             {"role": "user", "content":
+              f"Ika said: {(state.get('user_text') or '')[:240]}\n"
+              f"You need: {ask_for or 'which one'}. Ask your one short question."}],
+            temperature=0.7, max_tokens=30,
+        )
+        q = (res.get("content") or "").strip().strip('"').strip()
+    except Exception as e:  # noqa: BLE001
+        log.warning("[graph] task ask gen failed: %s", e)
+        q = ""
+    if q:
+        await _emit_reply_chunk(state, q)
+
+
 async def task_step_node(state: TurnState) -> dict:
     """Run one step of the active task's template. Deterministic tool choice is the
     whole point: ACT queues the primary tool and hands to run_tools (which executes
@@ -1077,20 +1099,7 @@ async def task_step_node(state: TurnState) -> dict:
         return state
 
     if decision.action == "ask":
-        try:
-            res = await S.llm_client.chat(
-                [{"role": "system", "content": _TASK_ASK_SYSTEM},
-                 {"role": "user", "content":
-                  f"Ika said: {(state.get('user_text') or '')[:240]}\n"
-                  f"You need: {decision.ask_for}. Ask your one short question."}],
-                temperature=0.7, max_tokens=30,
-            )
-            q = (res.get("content") or "").strip().strip('"').strip()
-        except Exception as e:  # noqa: BLE001
-            log.warning("[graph] task ask gen failed: %s", e)
-            q = ""
-        if q:
-            await _emit_reply_chunk(state, q)
+        await _emit_task_ask(state, decision.ask_for)
         task_store.update_active(uid, state="ask")   # park for the next turn
         state["task_route"] = "done"          # → finalize
         return state
@@ -1101,14 +1110,18 @@ async def task_step_node(state: TurnState) -> dict:
     return state
 
 
-def _complete_task_after_tools(state: TurnState) -> None:
-    """Advance the task FSM after its deterministic tool ran. Stage 1: success or
-    failure both complete the task (clearing it, resuming any suspended task) so a
-    turn never wedges. The pure retry/ask-on-failure path in
-    ``task_templates.decide_after_result`` is tested and lands in stage 1.1."""
+def _advance_task_after_tools(state: TurnState) -> None:
+    """Advance the task FSM after its deterministic tool ran, setting
+    ``state['task_outcome']`` so _after_run_tools can route the rest of the turn:
+      succeed → llm_pass (she reacts to the result); task cleared (+ resume suspended)
+      retry   → task_step (re-act the primary tool, within budget)
+      ask     → task_ask  (degrade to one clarifying question; task parked)
+    Fail-safe: a missing task yields 'succeed' (fall through to normal synthesis)."""
     uid = state.get("user_id")
     task = task_store.get_active(uid)
+    state["task_acting"] = False
     if task is None:
+        state["task_outcome"] = "succeed"
         return
     last = ""
     for m in reversed(state.get("messages") or []):
@@ -1117,11 +1130,27 @@ def _complete_task_after_tools(state: TurnState) -> None:
             break
     ok = bool(last) and not last.startswith("tool error") and not any(
         s in last for s in ("couldn't find", "no results", "not found", "no video"))
-    would = task_templates.decide_after_result(task, ok).action
-    task_store.complete_active(uid)
-    state["task_acting"] = False
-    log.info("[graph] job=%s task '%s' done (ok=%s, designed=%s)",
-             state.get("job_id"), task.kind, ok, would)
+    decision = task_templates.decide_after_result(task, ok)
+    if decision.action == "act":            # retry the deterministic tool
+        task_store.update_active(uid, retry_count=task.retry_count + 1, state="find")
+        state["task_outcome"] = "retry"
+    elif decision.action == "ask":          # retries spent → park + ask one question
+        task_store.update_active(uid, state="ask")
+        state["task_ask_for"] = decision.ask_for
+        state["task_outcome"] = "ask"
+    else:                                    # succeed → clear (+ resume suspended)
+        task_store.complete_active(uid)
+        state["task_outcome"] = "succeed"
+    log.info("[graph] job=%s task '%s' after-tool ok=%s → %s (rc=%s)",
+             state.get("job_id"), task.kind, ok, state["task_outcome"], task.retry_count)
+
+
+async def task_ask_node(state: TurnState) -> dict:
+    """Terminal task step: the primary tool failed past its retry budget, so speak
+    one clarifying question and end the turn. The task is already parked at 'ask'
+    (by _advance_task_after_tools), so the user's next message resumes it."""
+    await _emit_task_ask(state, state.get("task_ask_for"))
+    return state
 
 
 def _after_build(state: TurnState) -> str:
@@ -1137,6 +1166,18 @@ def _after_task_step(state: TurnState) -> str:
     return "llm_pass"               # fallback: just converse
 
 
+def _after_run_tools(state: TurnState) -> str:
+    """After tools run: task retry → re-act; task ask → speak the question; else
+    (task success OR any normal non-task tool turn) → llm_pass synthesis. Non-task
+    turns never set task_outcome, so this is the unchanged ReAct loop-back for them."""
+    outcome = state.get("task_outcome")
+    if outcome == "retry":
+        return "task_step"
+    if outcome == "ask":
+        return "task_ask"
+    return "llm_pass"
+
+
 def _build_graph():
     g = StateGraph(TurnState)
     g.add_node("router", route_node)
@@ -1147,6 +1188,7 @@ def _build_graph():
     g.add_node("run_tools", run_tools_node)
     g.add_node("escalate", escalate_node)
     g.add_node("task_step", task_step_node)
+    g.add_node("task_ask", task_ask_node)
     g.add_node("verify", verify_node)
     g.add_node("finalize", finalize_node)
 
@@ -1168,7 +1210,14 @@ def _build_graph():
         "log_pass", should_continue,
         {"run_tools": "run_tools", "escalate": "escalate", "verify": "verify"},
     )
-    g.add_edge("run_tools", "llm_pass")  # ReAct loop-back
+    # ReAct loop-back, now task-aware: a task retry re-acts (task_step), a task
+    # ask speaks its question (task_ask); everything else (incl. all normal
+    # non-task tool turns) synthesizes (llm_pass) exactly as before.
+    g.add_conditional_edges(
+        "run_tools", _after_run_tools,
+        {"llm_pass": "llm_pass", "task_step": "task_step", "task_ask": "task_ask"},
+    )
+    g.add_edge("task_ask", "finalize")   # task ask spoken → end turn (task parked)
     g.add_edge("escalate", "llm_pass")   # fast→deep handoff, re-run on deep
     g.add_edge("verify", "finalize")     # non-realtime repair; pass-through on realtime
     g.add_edge("finalize", END)

@@ -952,6 +952,19 @@ async def _idle_heartbeat_loop():
         except Exception as exc:
             log.warning("autonomy tick failed: %s", exc)
 
+        # Task runtime: drop tasks left parked (awaiting an answer) past the TTL,
+        # so a stale goal can't resurface when Ika comes back much later. Runs
+        # off-turn (here, not in a turn) so it never drops a task he's resuming.
+        # Cheap (tiny in-RAM dict); fail-silent.
+        if TASK_RUNTIME_ENABLED:
+            try:
+                from bridge import task_store
+                swept = task_store.sweep_timeouts(TASK_PARK_TTL_S)
+                if swept:
+                    log.info("task runtime: swept %d stale parked task(s)", swept)
+            except Exception as exc:
+                log.warning("task sweep failed: %s", exc)
+
         # Diary heartbeat — writes today's draft page when the user has been
         # idle long enough. Also handles local-tz midnight rollover by
         # finalising yesterday's draft once per day. Fail-silent.

@@ -39,6 +39,9 @@ TASK_KINDS: dict[str, dict] = {
         "build_args": lambda slots: {"action": "open", "query": (slots.get("query") or "").strip()},
         # Spoken question when a required slot is missing and can't be guessed.
         "ask_hint": "what they want to hear",
+        # One retry only: the call is deterministic for a given query, so a re-try
+        # buys nothing but covering a transient blip. After that, ask (don't spin).
+        "retry_budget": 1,
     },
 }
 
@@ -104,10 +107,11 @@ def decide_after_result(task: ActiveTask, ok: bool) -> Decision:
     if task.template == "fulfill":
         if ok:
             return Decision("succeed", reason="tool ok")
-        if task.retry_count + 1 <= FULFILL_RETRY_BUDGET:
+        budget = int(spec.get("retry_budget", FULFILL_RETRY_BUDGET))
+        if task.retry_count + 1 <= budget:
             return Decision("act", tool=spec["primary_tool"],
                             tool_args=spec["build_args"](task.slots),
-                            reason=f"retry {task.retry_count + 1}/{FULFILL_RETRY_BUDGET}")
+                            reason=f"retry {task.retry_count + 1}/{budget}")
         return Decision("ask", ask_for=spec.get("ask_hint") or "which one",
                         reason="retries spent")
     return Decision("give_up", reason=f"no template logic for {task.template}")

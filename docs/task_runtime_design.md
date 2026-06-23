@@ -8,8 +8,8 @@
 
 Stage 1 landed, flag-gated (`config.yaml: task_runtime.enabled: false`). Flip on after live validation; OFF = the graph behaves exactly as before.
 
-- **Built + tested** (`bridge/test_task_runtime.py`, 23 tests; full suite 122 green): `bridge/task_store.py` (ActiveTask + 1-active/1-suspend store + timeout sweep), `bridge/task_templates.py` (registry + `fulfill` decision logic + `play_media`), the widened classifier (`interpret_node` → route/task_kind/task_slots), `task_step` node + the deterministic `video_player` ACT path, the `build_messages`/`task_step` topology, and the two independent fixes (§11) — both shipped, 31 parser tests green.
-- **Deferred to stage 1.1** (pure logic already tested, just not graph-wired): the `fulfill` retry-on-failure loop and ask-on-failure (today any tool outcome completes the task); the background timeout sweep (`sweep_timeouts` exists/tested — hook it into the autonomy loop on enablement).
+- **Built + tested** (`bridge/test_task_runtime.py`, 27 tests; full suite 127 green): `bridge/task_store.py` (ActiveTask + 1-active/1-suspend store + timeout sweep), `bridge/task_templates.py` (registry + `fulfill` decision logic + `play_media`), the widened classifier (`interpret_node` → route/task_kind/task_slots), `task_step` node + the deterministic `video_player` ACT path, the `build_messages`/`task_step` topology, and the two independent fixes (§11) — both shipped, 31 parser tests green.
+- **Stage 1.1 — built** (was deferred): the `fulfill` retry/ask-on-failure loop is graph-wired — `_advance_task_after_tools` reads the tool result and routes `run_tools → {llm_pass succeed | task_step retry | task_ask ask}`; `play_media` gets `retry_budget: 1` (one transient retry, then a parked clarifying question via `task_ask`). The background timeout sweep runs in the idle heartbeat (`_idle_heartbeat_loop`, off-turn so it never drops a task Ika is resuming), gated on the flag, TTL = `task_runtime.park_ttl_seconds`.
 - **Verify the live happy path** once enabled: "find chopin on youtube" → plays immediately (no `web_search`, no permission question); "No. 2" → classifier resolves from history → plays No. 2.
 
 ---
