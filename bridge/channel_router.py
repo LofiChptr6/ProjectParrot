@@ -210,6 +210,20 @@ def _web_attended() -> bool:
         return False
 
 
+def _web_clients_present() -> bool:
+    """Is at least one web tab connected right now, ignoring the attention window?
+
+    Used to deliver a *connect-triggered* greeting to the surface that just
+    connected — distinct from _web_attended(), which gates *ambient* delivery on
+    recent interaction. Returns False on any error (so the caller still has the
+    Telegram / queue fallbacks)."""
+    try:
+        from bridge import server as _srv
+        return bool(_srv._ws_clients)
+    except Exception:
+        return False
+
+
 # ---------------------------------------------------------------------------
 #  Public entry point
 # ---------------------------------------------------------------------------
@@ -287,6 +301,11 @@ async def route_autonomous(payload: dict[str, Any]) -> str:
     """
     # Pop cron_origin so it doesn't leak into the web delivery payload.
     cron_origin = bool(payload.pop("cron_origin", False))
+    # Connect-triggered greetings (reconnect / first_hello) are fired BY a fresh
+    # web connect — a tab is provably open and being looked at right now — so they
+    # bypass the _web_attended() idle window (which only exists to keep *ambient*
+    # news off an unwatched tab) and land on the surface that just connected.
+    connect_triggered = bool(payload.pop("connect_triggered", False))
 
     text = (payload.get("text") or "").strip()
     if not text:
@@ -297,8 +316,9 @@ async def route_autonomous(payload: dict[str, Any]) -> str:
     # --- 1. Web UI ---
     # Web only counts if a tab is actually being watched — an idle (>2h) open tab
     # is treated as asleep so the message falls through to Telegram (the phone).
+    # A connect-triggered greeting overrides that: deliver to the just-connected tab.
     try:
-        if _web_attended():
+        if _web_attended() or (connect_triggered and _web_clients_present()):
             try:
                 await _deliver_to_web(payload)
                 results.append("web")

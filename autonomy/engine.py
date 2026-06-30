@@ -644,7 +644,8 @@ def _post_filter(segments: list[dict],
 #  Delivery
 # ---------------------------------------------------------------------------
 
-async def _deliver(segments: list[dict], state: str) -> dict:
+async def _deliver(segments: list[dict], state: str, *,
+                   connect_triggered: bool = False) -> dict:
     """Route a composed utterance. Returns
     ``{"spoke": bool, "tg_msg_id": int|None, "route": str}`` — tg_msg_id is the
     Telegram message_id when the share landed on Telegram (so the caller can
@@ -677,6 +678,10 @@ async def _deliver(segments: list[dict], state: str) -> dict:
         "source": f"autonomy:{state}",
         "kind": f"autonomy_{state}",
     }
+    if connect_triggered:
+        # Fired by a fresh web connect → deliver to the just-connected tab even if
+        # the 2h "web attended" window has lapsed (the user is here, looking now).
+        payload["connect_triggered"] = True
     where = await route_autonomous(payload)
     result["route"] = where
     result["tg_msg_id"] = payload.get("telegram_message_id")
@@ -876,7 +881,7 @@ async def handle_client_hello(user_id: str | None = None,
         segments = await _compose_utterance("first_hello", "", elapsed_s=0.0)
         if not segments:
             return
-        res = await _deliver(segments, "first_hello")
+        res = await _deliver(segments, "first_hello", connect_triggered=True)
         if res["spoke"]:
             _mocha_state["last_hello_at"] = now
             _mark_spoke(_segments_text(segments), reconnect=True)
@@ -932,7 +937,7 @@ async def handle_client_hello(user_id: str | None = None,
     if not segments:
         return
 
-    res = await _deliver(segments, "reconnect")
+    res = await _deliver(segments, "reconnect", connect_triggered=True)
     if res["spoke"]:
         _mocha_state["last_hello_at"] = now
         _mark_spoke(_segments_text(segments), reconnect=True)
