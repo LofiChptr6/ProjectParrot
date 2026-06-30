@@ -59,12 +59,12 @@ _DEFAULTS = {
     # Default OFF: she only speaks unprompted when she has a genuinely fresh item,
     # never ambient filler.
     "allow_empty_checkins": False,
-    # Reconnect "welcome back" greetings are a SEPARATE budget from news/check-ins
-    # so a flurry of web reconnects (tab focus, network blips, deploys) can't spam
-    # greetings AND can't starve the news budget. Debounce raised 300→1800 (≤ one
-    # greeting per 30 min) and capped per day.
+    # Reconnect "welcome back" greetings are gated by ONE thing: a 30-min debounce,
+    # persisted as wall-clock so it survives bridge restarts (a flurry of reconnects
+    # — tab focus, network blips, deploys — can't spam greetings). No daily cap, so
+    # an active day of real returns always gets greeted. They draw on a counter
+    # separate from news/check-ins so a greeting never starves the news budget.
     "reconnect_debounce_s": 1800,
-    "reconnect_max_per_day": 4,
     "modes": {
         "drift": True,
         "bored": True,
@@ -157,6 +157,25 @@ def _maybe_reset_daily_counter() -> None:
     # Restart-proofing: seed the in-memory mirror from the persisted truth.
     _mocha_state["autonomous_turns_today"] = int(p.get("turns", 0))
     _mocha_state["reconnect_turns_today"] = int(p.get("reconnect_turns", 0))
+
+
+def _greeting_debounced(cfg: dict) -> bool:
+    """Has a welcome-back greeting fired within reconnect_debounce_s?
+
+    The timestamp is persisted as wall-clock so the debounce survives bridge
+    restarts — a deploy storm can't re-greet on every reconnect. This is the
+    SOLE rate limit on greetings (no daily cap), so an active day of logins
+    always gets a hello while rapid refreshes inside the window stay quiet."""
+    last = float(_get_persist().get("last_hello_epoch", 0.0))
+    return (time.time() - last) < float(cfg["reconnect_debounce_s"])
+
+
+def _stamp_greeting() -> None:
+    """Persist 'a greeting just fired' (wall-clock). Call BEFORE the
+    compose/deliver await so two near-simultaneous hellos can't both pass."""
+    p = _get_persist()
+    p["last_hello_epoch"] = time.time()
+    _save_persist()
 
 
 # ---------------------------------------------------------------------------
@@ -866,12 +885,10 @@ async def handle_client_hello(user_id: str | None = None,
     if now < _mocha_state.get("muted_until_monotonic", 0.0):
         return
 
-    # Greetings have their OWN small daily budget (separate from news), so a
-    # storm of web reconnects/deploys can't spam them or eat the news budget.
+    # Greetings draw on a counter separate from the news budget (so a hello never
+    # eats it) and are rate-limited solely by the restart-proof debounce below —
+    # no daily cap, so every genuine return (>30 min away) gets greeted.
     _maybe_reset_daily_counter()
-    if int(_get_persist().get("reconnect_turns", 0)) >= int(cfg.get("reconnect_max_per_day", 4)):
-        log.info("autonomy: reconnect greeting daily cap reached — skipping hello")
-        return
 
     # Brand-new user (anon, never named) → fire a warm first-meeting greeting
     # immediately, bypassing the reconnect debounce. Otherwise the standard
@@ -883,7 +900,7 @@ async def handle_client_hello(user_id: str | None = None,
             return
         res = await _deliver(segments, "first_hello", connect_triggered=True)
         if res["spoke"]:
-            _mocha_state["last_hello_at"] = now
+            _stamp_greeting()
             _mark_spoke(_segments_text(segments), reconnect=True)
             _mocha_state["mood"] = "curious"
         return
@@ -891,10 +908,10 @@ async def handle_client_hello(user_id: str | None = None,
     # Returning-user reconnect path — debounce rage-refreshes. Claim the slot
     # BEFORE the compose/deliver await, so two near-simultaneous client_hello
     # events (reconnects, two tabs) can't both pass the check and double-greet.
-    if (now - _mocha_state.get("last_hello_at", 0.0)) < cfg["reconnect_debounce_s"]:
+    if _greeting_debounced(cfg):
         log.info("autonomy: hello debounced")
         return
-    _mocha_state["last_hello_at"] = now
+    _stamp_greeting()
 
     # Ground the greeting in REAL, cited items she actually has — never invent.
     # Priority: news she SHARED (ledger, newest first) → fresh news she FOUND
@@ -939,7 +956,7 @@ async def handle_client_hello(user_id: str | None = None,
 
     res = await _deliver(segments, "reconnect", connect_triggered=True)
     if res["spoke"]:
-        _mocha_state["last_hello_at"] = now
+        _stamp_greeting()
         _mark_spoke(_segments_text(segments), reconnect=True)
         _mocha_state["mood"] = "happy"
         if preview_items:
