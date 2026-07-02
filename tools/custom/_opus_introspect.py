@@ -46,15 +46,14 @@ EXPOSED_TOOLS: set[str] = {
     # served by a hand-written wrapper instead: tools/custom/get_ticker_valuation.py
     # (raw-text subprocess + TL;DR/Verdict extraction), allowlisted in config.yaml
     # tools.allowed and wired into the desk_block in context.py.
-    "get_agent_overview",
     "get_pnl_attribution",
-    "get_trade_activity",
-    "get_risk_overview",
-    "get_agent_disagreement",
-    "get_position_history",
-    "get_changes_since",
     "get_upcoming_catalysts",
-    "get_manual_overrides",
+    # 2026-07-01 trim: get_agent_overview / get_trade_activity / get_risk_overview /
+    # get_agent_disagreement / get_position_history / get_changes_since /
+    # get_manual_overrides were REMOVED from the desk MCP (near-zero usage; two
+    # narrated the vestigial always-empty agent_allocations table). Every menu
+    # entry costs prompt tokens on the 3B every turn — keep this list to tools
+    # that exist and get used.
     # Desk-state read-outs (added 2026-06-14 — current opus exposes these and
     # they let Mocha speak to "what's interesting right now"). All read-only.
     "get_pnl_summary",        # desk-wide combined P&L by agent

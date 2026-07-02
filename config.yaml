@@ -282,15 +282,10 @@ tools:
     - get_position_dossier
     - get_ticker_valuation   # desk's Damodaran/Sonnet intrinsic-value verdict, distilled (hand-written wrapper)
     - get_position_brief     # one call = position dossier + valuation, for strategy questions (hand-written wrapper)
-    - get_agent_overview
     - get_pnl_attribution
-    - get_trade_activity
-    - get_risk_overview
-    - get_agent_disagreement
-    - get_position_history
-    - get_changes_since
     - get_upcoming_catalysts
-    - get_manual_overrides
+    # (2026-07-01: agent_overview / trade_activity / risk_overview / agent_disagreement /
+    # position_history / changes_since / manual_overrides removed — cut from the desk MCP)
     # Desk-state read-outs (read-only) — keep in sync with _opus_introspect.py.
     - get_pnl_summary
     - get_positions
