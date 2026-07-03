@@ -69,7 +69,7 @@ from .call_log import CallContext
 from . import call_log
 from .inline_route import drive_inline_stream
 from .inline_tag_parser import InlineTagParser
-from character.context import build_system_prompt
+from character.context import build_chat_prompt, build_system_prompt
 from tools.handle_registry import substitute_handles_in_text
 
 logging.basicConfig(level=logging.INFO)
@@ -135,6 +135,18 @@ _DEFAULT_TOOL_KEYWORDS = [
     "search", "google", "schedule", "remind", "reminder", "calendar", "diary",
     "show me", "pull up", "what's the", "whats the", "how much", "how many",
     "price of", "latest", "who won", "score", "stock", "chart", "play ",
+    # Company names + market slang — "is nvidia still ripping?" has no cashtag
+    # and no formal keyword; the name/slang IS the market signal. Substring
+    # match, so short/common fragments (intel, ath) are deliberately absent.
+    "nvidia", "tesla", "apple", "amazon", "alphabet", "microsoft", "meta",
+    "facebook", "netflix", "broadcom", "qualcomm", "micron", "tsmc", "amd",
+    "palantir", "boeing", "berkshire", "jpmorgan", "goldman", "blackrock",
+    "nasdaq", "s&p", "dow ", "russell", "spy", "qqq", "soxl", "bitcoin",
+    "btc", "ethereum", "crypto",
+    "ripping", "ripped", "tanking", "tanked", "mooning", "dumping", "pumping",
+    "rallying", "rally", "sell-off", "selling off", "sold off",
+    "all time high", "all-time high", "new high", "new low",
+    "crash", "crashing", "cool off", "cooled off", "earnings",
 ]
 _TOOL_INTENT_KEYWORDS = [k.lower() for k in
                          _routing_cfg.get("tool_keywords", _DEFAULT_TOOL_KEYWORDS)]
@@ -196,6 +208,40 @@ def held_tickers() -> list[str]:
 def _mentions_held_ticker(text: str) -> bool:
     held_tickers()  # opportunistic refresh
     return bool(_held_ticker_re and text and _held_ticker_re.search(text))
+
+
+# ── Ungrounded live-claim detector (deterministic backstop) ─────────────────
+# The fast model has NO tools; any live-data value it states is fabricated by
+# definition. The LLM verifier proved too forgiving here (a hedge like "around
+# $640" reads as "softened" and passes), so this is a hard regex check: a
+# number-ish claim in a live-data context, from a fast pass that ran no tools,
+# forces an escalate-with-tools rerun instead of reaching the user.
+_LIVE_NUMBER_RE = re.compile(
+    r"\$\s?\d"                                  # dollar amounts
+    r"|\d+(?:\.\d+)?\s?%"                       # percentages
+    r"|\b(?:up|down|gained|lost|dropped|rose|fell)\s+\d"   # "down 3", "up 40 points"
+    r"|\b(?:trading|closed|closing|opened|sitting|hovering)\s+at\s+\d"  # "trading at 42.10"
+    r"|\bat\s+\d+\.\d+\b"                       # "is at 42.10" (decimal after 'at')
+    r"|\bscored?\s+\d"                          # "scored 3"
+    r"|\b\d+(?:\.\d+)?\s?(?:degrees|°[CF]?)\b",  # weather temps
+    re.IGNORECASE,
+)
+_LIVE_CONTEXT_RE = re.compile(
+    r"\b(?:price|prices|stock|shares?|ticker|trading|traded|market|markets|"
+    r"close|closed|premarket|after[- ]hours|session|desk|portfolio|position|"
+    r"pnl|p&l|nav|index|futures|weather|forecast|temperature|score|scored)\b"
+    r"|\$[A-Z]{1,5}\b",
+    re.IGNORECASE,
+)
+
+
+def _ungrounded_live_claim(text: str) -> bool:
+    """True when ``text`` asserts a number in a live-data context (price, move,
+    temperature, score). Two-factor (number AND context) so pure-chat numbers
+    ("I'm 100% sure", "give me 5 minutes") don't trip it."""
+    if not text:
+        return False
+    return bool(_LIVE_NUMBER_RE.search(text) and _LIVE_CONTEXT_RE.search(text))
 
 
 def _route_model(user_text: str) -> str:
@@ -1397,7 +1443,8 @@ def _build_inline_messages(user_text: str, memories: list[dict],
                            user_id: str | None = None,
                            tools_available: bool | None = None,
                            reply_context: str | None = None,
-                           intent_read: dict | None = None) -> list[dict]:
+                           intent_read: dict | None = None,
+                           source: str | None = None) -> list[dict]:
     """Build the messages list for an inline-tag LLM call.
 
     Numeric literals in conversation history and memory fragments are redacted
@@ -1411,11 +1458,19 @@ def _build_inline_messages(user_text: str, memories: list[dict],
     """
     if tools_available is None:
         tools_available = TOOLS_ENABLED
-    system_prompt = build_system_prompt(
-        animation_mode=ANIMATION_MODE,
-        tools_available=tools_available,
-        user_id=user_id,
-    )
+    if tools_available:
+        system_prompt = build_system_prompt(
+            animation_mode=ANIMATION_MODE,
+            tools_available=True,
+            user_id=user_id,
+        )
+    else:
+        # Fast chat path: lean persona-first prompt (~4x smaller). Avatar
+        # surfaces get the minimal tag block; text channels get plain text.
+        system_prompt = build_chat_prompt(
+            tagged=_is_realtime_source(source or ""),
+            user_id=user_id,
+        )
     messages: list[dict] = [{"role": "system", "content": system_prompt}]
     for entry in _get_user_history(user_id)[-MAX_HISTORY:]:
         messages.append({

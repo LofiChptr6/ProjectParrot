@@ -55,6 +55,17 @@ _last_write_monotonic: float = 0.0
 _interaction_count_today: int = 0
 _interaction_day_key: str = ""
 
+# Serialize writes: page_hidden fires once PER CONNECTED TAB, so three open
+# tabs used to produce three concurrent LLM writes of the same page (each
+# confabulating a different day). One writer at a time, and a min-interval
+# re-check inside the lock covers every trigger path.
+_write_lock = asyncio.Lock()
+
+# Tools that fire autonomously in the background (cache refreshes, polling) —
+# they're not "things Mocha and Ika did" and don't justify an LLM diary pass
+# on their own. A day of only these gets a truthful template page instead.
+_ROUTINE_TOOLS = {"get_positions", "polygon_market_status"}
+
 
 def note_interaction(tz_name: Optional[str]) -> None:
     """Called from the bridge on every user turn (end-of-turn). Just bumps a
@@ -145,6 +156,12 @@ Your voice:
 - No markdown headers, no lists — just one plain paragraph of prose.
 - Keep it true. If the day had only one small thing, write one small thing.
   Never invent activities that aren't in the tool log.
+- You live on a screen on Ika's trading dashboard. You have NO body and NO
+  apartment: never write physical scenes — no rooftops, sunsets, couches,
+  cookies, guitars, visits, phone calls. If the log is just routine desk
+  checks, say exactly that in one dry sentence ("quiet one — I mostly watched
+  the desk breathe") rather than romanticizing. A boring true page beats a
+  lovely invented one, every time.
 
 Output format (strict JSON, nothing outside):
 {
@@ -270,7 +287,18 @@ async def write_draft(reason: str = "manual") -> Optional[str]:
     Returns the date that was written, or ``None`` if skipped (empty scratchpad
     *and* no existing page to refresh).
     """
+    async with _write_lock:
+        return await _write_draft_locked(reason)
+
+
+async def _write_draft_locked(reason: str) -> Optional[str]:
     global _last_write_monotonic
+    # Re-check the min interval INSIDE the lock: concurrent triggers (one
+    # page_hidden per open tab) queue on the lock, and all but the first
+    # become no-ops here instead of duplicate LLM writes.
+    min_interval_s = float(_cfg().get("min_interval_minutes", 10)) * 60
+    if reason != "manual" and (time.monotonic() - _last_write_monotonic) < min_interval_s:
+        return None
     entries = session_scratchpad.all_entries()
     if not entries:
         # Even if the scratchpad is empty, we still want to update the
@@ -303,7 +331,22 @@ async def write_draft(reason: str = "manual") -> Optional[str]:
     activities_block = _format_activities_for_prompt(entries, tz_name)
     structured = _build_structured_activities(entries, tz_name)
 
-    composed = await _compose_diary_via_llm(activities_block, previous, local_now)
+    # Grounding gate: background polling (held-tickers refresh etc.) is not a
+    # day worth narrating. With nothing meaningful to write about, the LLM used
+    # to fill the vacuum with fiction (rooftop sunsets, baked cookies) — which
+    # then fed back into her context as false shared memories. Write a plain,
+    # truthful template page instead and skip the LLM entirely.
+    meaningful = [e for e in entries if (e.get("tool_name") or "") not in _ROUTINE_TOOLS]
+    if not meaningful:
+        if _interaction_count_today > 0:
+            summary = ("Quiet one. Ika and I traded a few words, nothing that "
+                       "needed writing down; the desk mostly just breathed.")
+        else:
+            summary = ("Nothing to report — I watched the desk tick over and "
+                       "kept my own company. Some days are just that.")
+        composed = {"summary": summary, "highlights": [], "themes": ["quiet"]}
+    else:
+        composed = await _compose_diary_via_llm(activities_block, previous, local_now)
     if not composed:
         # Fallback — a minimal page that at least captures the activities.
         # Prevents empty pages when the LLM hiccups.

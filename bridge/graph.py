@@ -187,7 +187,7 @@ async def _rephrase_stall(S, seed: str, hint: str, user_text: str | None) -> str
         res = await S.llm_client.chat(
             [{"role": "system", "content": _STALL_REPHRASE_SYSTEM},
              {"role": "user", "content": ctx}],
-            temperature=0.7, max_tokens=20,
+            temperature=0.7, max_tokens=20, enable_thinking=False,
         )
         line = (res.get("content") or "").strip().strip('"').strip()
         return line or seed
@@ -272,7 +272,7 @@ async def build_messages_node(state: TurnState) -> dict:
     state["messages"] = S._build_inline_messages(
         state["user_text"], state["memories"], user_id=state.get("user_id"),
         tools_available=tools_available, reply_context=state.get("reply_context"),
-        intent_read=state.get("intent_read"),
+        intent_read=state.get("intent_read"), source=state.get("source"),
     )
     state["tool_round"] = 0
     state["chunk_idx"] = 0
@@ -522,6 +522,19 @@ def should_continue(state: TurnState) -> str:
             and S.TOOLS_ENABLED
             and state["tool_round"] < S._TOOL_MAX_ROUNDS):
         return "run_tools"
+    # Deterministic backstop: a FAST pass (no tools by construction) that stated
+    # a live-data number fabricated it — the escalate rule was missed. On
+    # buffered surfaces (telegram/discord/cli) nothing has been sent yet, so
+    # discard the draft and rerun on deep WITH tools. Realtime surfaces already
+    # streamed the text; nothing can be unsaid there, so they skip this.
+    if (state.get("route") != "deep"
+            and not state.get("escalated")
+            and not state.get("realtime")
+            and S.TOOLS_ENABLED
+            and S._ungrounded_live_claim("".join(state.get("full_text_parts") or []))):
+        log.info("[graph] job=%s fast draft asserts ungrounded live data — "
+                 "forcing escalate", state.get("job_id"))
+        return "escalate"
     return "verify"
 
 
@@ -723,10 +736,13 @@ _VERIFY_SYSTEM = (
     "stray <tool_call>/<emotion>/<gesture> tags, code fences, or an unfinished "
     "trailing sentence.\n"
     "2. Grounds its claims. Any number/name/ticker/date/event backed by the SOURCE "
-    "DATA must match it exactly. Any SPECIFIC factual claim NOT backed by the source "
-    "(and not obvious general knowledge) must be softened to acknowledge uncertainty "
-    "(\"I think…\", \"if I recall\") or dropped — never let her assert an unverified "
-    "specific with false confidence. Never invent or guess a value.\n"
+    "DATA must match it exactly. LIVE-DATA values — prices, % moves, market levels, "
+    "temperatures, scores, anything true-as-of-today — that are NOT in the SOURCE "
+    "DATA must be REMOVED entirely, replaced by her honestly offering to check "
+    "(e.g. \"want me to pull the actual number?\"). Hedging does NOT legitimize "
+    "them: \"around $640\" or \"roughly 3%\" with no source is still a fabricated "
+    "number — remove it, never soften it. Only timeless general knowledge may be "
+    "softened with \"I think…\" instead of dropped. Never invent or guess a value.\n"
     "3. Preserves her voice, tone, and wording wherever it's already correct. You "
     "are fixing errors, NOT rewriting her style or padding it out.\n"
     "Output ONLY the corrected reply text — no preamble, no tags, no quotes. If the "
@@ -1145,7 +1161,7 @@ async def _emit_task_ask(state: TurnState, ask_for: str | None) -> None:
              {"role": "user", "content":
               f"Ika said: {(state.get('user_text') or '')[:240]}\n"
               f"You need: {ask_for or 'which one'}. Ask your one short question."}],
-            temperature=0.7, max_tokens=30,
+            temperature=0.7, max_tokens=30, enable_thinking=False,
         )
         q = (res.get("content") or "").strip().strip('"').strip()
     except Exception as e:  # noqa: BLE001

@@ -88,6 +88,14 @@ ROUTE_CASES = [
     # — documented heuristic breadth (broad keywords pull these to deep) —
     ("what's the meaning of life", "deep", "doc: any \"what's the\" → deep"),
     ("i scored a goal yesterday", "deep", "doc: 'score' substring → deep"),
+    # — company names + market slang (2026-07-02: the "nvidia still ripping?"
+    #   fabrication fell through because none of these were keywords) —
+    ("btw is nvidia still ripping today or did it cool off? just curious",
+     "deep", "company name: nvidia + slang"),
+    ("did tesla tank today", "deep", "company name: tesla + tanked"),
+    ("is the nasdaq at an all time high", "deep", "index: nasdaq/all time high"),
+    ("everything is crashing isn't it", "deep", "slang: crashing"),
+    ("apple earnings tonight right", "deep", "company: apple + earnings"),
 ]
 
 
@@ -229,12 +237,39 @@ def _check(fn, table, transform=None):
     return fails
 
 
+# ════════════════════════════════════════════════════════════════════════════
+#  _ungrounded_live_claim — deterministic backstop for fast-pass fabrications
+#  (number-ish claim AND live-data context word; either alone must NOT trip)
+# ════════════════════════════════════════════════════════════════════════════
+LIVE_CLAIM_CASES = [
+    # the actual 2026-07-02 fabrication that sailed past the LLM verifier:
+    ("NVDA's current price is around $640, which is down about 3% from yesterday's close.",
+     True, "fabricated price + %"),
+    ("SOXL is trading at 42.10 right now.", True, "'trading at' + number"),
+    ("The desk is up 2% today.", True, "desk P&L claim"),
+    ("It's 95 degrees in Phoenix and the forecast says worse.", True, "weather temp"),
+    ("They won and scored 3 in the final quarter.", True, "sports score"),
+    # numbers with NO live-data context — normal chat, must pass through:
+    ("I'm 100% sure you'd have teased me anyway.", False, "chat %: no context"),
+    ("Give me 5 minutes and I'll have a comeback.", False, "bare number"),
+    ("You said that 3 times already.", False, "bare count"),
+    # context with NO number — opinions about markets are allowed:
+    ("Markets felt heavy today, no wonder you're drained.", False, "market talk, no number"),
+    ("Your portfolio isn't going anywhere overnight.", False, "portfolio talk, no number"),
+    ("", False, "edge: empty"),
+]
+
+
 # ── pytest entry points (one assert per table) ──────────────────────────────
 def test_route_model():
     assert not _check(S._route_model, ROUTE_CASES), "\n" + "\n".join(_check(S._route_model, ROUTE_CASES))
 
 def test_is_realtime_source():
     assert not _check(S._is_realtime_source, REALTIME_CASES)
+
+def test_ungrounded_live_claim():
+    assert not _check(S._ungrounded_live_claim, LIVE_CLAIM_CASES), \
+        "\n" + "\n".join(_check(S._ungrounded_live_claim, LIVE_CLAIM_CASES))
 
 def test_parse_tool_args_str():
     assert not _check(S._parse_tool_args_str, PARSE_ARGS_CASES)
@@ -278,6 +313,59 @@ def test_should_continue():
             fails.append(f"  TOOLS_ENABLED=False: -> {got!r} (expected 'verify')")
     finally:
         S.TOOLS_ENABLED = _saved
+    assert not fails, "\n" + "\n".join(fails)
+
+
+def test_should_continue_backstop():
+    """A FAST pass that asserted an ungrounded live-data number escalates to
+    deep-with-tools on buffered surfaces; realtime/deep/escalated turns don't."""
+    claim = ["NVDA is trading at $640, down 3% today."]
+    base = {"pending_tool_calls": [], "tool_round": 0, "full_text_parts": claim}
+    cases = [
+        ({**base, "route": "fast", "realtime": False}, "escalate",
+         "fast+buffered+claim → escalate"),
+        ({**base, "route": "fast", "realtime": True}, "verify",
+         "realtime already streamed → verify"),
+        ({**base, "route": "deep", "realtime": False}, "verify",
+         "deep turn → verifier owns grounding"),
+        ({**base, "route": "fast", "realtime": False, "escalated": True}, "verify",
+         "already escalated once → no loop"),
+        ({"pending_tool_calls": [], "tool_round": 0, "route": "fast",
+          "realtime": False, "full_text_parts": ["mm. rough day, huh."]}, "verify",
+         "clean chat draft → verify"),
+    ]
+    fails = []
+    for state, expected, label in cases:
+        got = G.should_continue(state)
+        if got != expected:
+            fails.append(f"  {label}: -> {got!r} (expected {expected!r})")
+    assert not fails, "\n" + "\n".join(fails)
+
+
+def test_build_chat_prompt():
+    """The lean fast-path prompt: soul + escalate protocol + style present;
+    tag grammar only on avatar surfaces; and it stays a fraction of the full
+    prompt (the whole point of the diet)."""
+    from character.context import build_chat_prompt, build_system_prompt
+    fails = []
+    plain = build_chat_prompt(tagged=False)
+    tagged = build_chat_prompt(tagged=True)
+    full = build_system_prompt(animation_mode="fbx_functions", tools_available=True)
+    for name, p in (("plain", plain), ("tagged", tagged)):
+        if "<escalate/>" not in p:
+            fails.append(f"  {name}: missing <escalate/> protocol")
+        if "How you reply" not in p:
+            fails.append(f"  {name}: missing style contract (chat_style.md)")
+        if "Character Soul" not in p:
+            fails.append(f"  {name}: missing soul")
+    if "<reads>" in plain:
+        fails.append("  plain: tag grammar leaked into text-channel prompt")
+    if "<reads>" not in tagged:
+        fails.append("  tagged: avatar surface must document <reads>")
+    if "<tool_call" in plain.replace("<tool_call name=\"ask_nori\">", ""):
+        pass  # tool_call may appear in soul examples; size check below is the guard
+    if len(plain) > len(full) / 2.5:
+        fails.append(f"  plain prompt too big: {len(plain)} vs full {len(full)}")
     assert not fails, "\n" + "\n".join(fails)
 
 
@@ -337,6 +425,7 @@ def _run_standalone():
         ("unwrap_segments_json", S._unwrap_segments_json, UNWRAP_CASES, None),
         ("first_json_object", S._first_json_object, FIRSTJSON_CASES, None),
         ("try_parse_segments_json", E._try_parse_segments_json, SEGMENTS_JSON_CASES, _seg_texts),
+        ("ungrounded_live_claim", S._ungrounded_live_claim, LIVE_CLAIM_CASES, None),
     ]
     for name, fn, table, transform in tables:
         for inp, expected, label in table:
@@ -351,7 +440,8 @@ def _run_standalone():
                 print(f"         input={inp!r} got={got!r} expected={expected!r}")
 
     # state-construction tests (re-run the asserting tests, count as cases)
-    for fn in (test_should_continue, test_verify_node_gating, test_graph_topology):
+    for fn in (test_should_continue, test_should_continue_backstop,
+               test_build_chat_prompt, test_verify_node_gating, test_graph_topology):
         total += 1
         try:
             fn()

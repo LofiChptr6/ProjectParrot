@@ -247,6 +247,125 @@ def _render_tool_signatures() -> str:
     )
 
 
+def _user_file_for(user_id: str | None, name: str) -> Path:
+    """Resolve a character file with per-user override (data/users/<id>/<name>)."""
+    if user_id:
+        p = CHARACTER_DIR.parent / "data" / "users" / user_id / name
+        if p.exists():
+            return p
+    return CHARACTER_DIR / name
+
+
+# Conversational subset of the gesture roster — enough for a living avatar
+# during chat without shipping all 76 functions. The full roster stays in the
+# deep/tool prompt (build_system_prompt), which handles "do a dance" requests.
+_CHAT_GESTURES = (
+    "speak_normal, speak_calm, speak_chatty, speak_explaining, speak_excited, "
+    "speak_pointing, speak_shy, speak_pouting, idle_breathe, idle_look_around, "
+    "idle_stretch, idle_fidget, idle_lean_forward, thinking, wave"
+)
+
+
+def build_chat_prompt(tagged: bool = False, user_id: str | None = None) -> str:
+    """Lean system prompt for FAST chat turns (no tools).
+
+    Rationale: the full ``build_system_prompt`` is ~30KB, ~84% of it tool/tag/
+    beat machinery. On the fast path that machinery buried the persona and the
+    escalate rule — the model wrote protocol-shaped replies instead of
+    Mocha-shaped ones. This variant is the soul + a tight style contract +
+    few-shot register examples + the escalate protocol, ~4x smaller.
+
+    tagged:
+      True for avatar surfaces (web typed + live voice) — includes a minimal
+      <reads>/<emotion>/<gesture> block. False for text channels
+      (telegram/discord/cli), which get PLAIN TEXT with no tag grammar at all.
+
+    Deterministic for a given (tagged, user_id, character files, held tickers)
+    → prefix-cacheable, same as build_system_prompt.
+    """
+    soul_p = _user_file_for(user_id, "soul.md")
+    soul = soul_p.read_text(encoding="utf-8") if soul_p.exists() else _read_text("soul.md")
+    style_p = _user_file_for(user_id, "chat_style.md")
+    style = style_p.read_text(encoding="utf-8") if style_p.exists() else _read_text("chat_style.md")
+
+    escalate_block = (
+        "# Hand off anything real — `<escalate/>`\n"
+        "Here you have NO tools and NO live data: no prices, news, weather, "
+        "scores, desk numbers, nothing current. A deeper version of you (with "
+        "tools and real reasoning) is one keystroke away. The moment a reply "
+        "needs a lookup, a number you can't already see exactly, hard logic, or "
+        "technical/medical/financial specifics — output `<escalate/>` as the "
+        "literal FIRST thing, then STOP. No speech before or after it.\n"
+        "Guessing a number or a fact is the one unforgivable move; escalating "
+        "is free and invisible. When in doubt, escalate.\n"
+        "Just answer (don't escalate): feelings, opinions, jokes, teasing, "
+        "greetings, anything about yourself or your day.\n"
+    )
+
+    hard_lines = (
+        "# Hard lines\n"
+        "- Never claim Ika told or showed you something unless it's in this "
+        "conversation or the memory blocks.\n"
+        "- Your words are read aloud and shown as chat bubbles: plain speech "
+        "only — no markdown, no bullet lists, no headers, and never the "
+        "internal marker `[past #]`.\n"
+    )
+
+    if tagged:
+        format_block = (
+            "# Tags (this surface has your 3D body)\n"
+            "Start every reply with `<reads>STATE</reads>` — your one-word read "
+            "of Ika right now (tired, excited, venting, curious, playful, hurt, "
+            "restless, focused, drifting, warm, distant, neutral) — then write "
+            "the reply that fits THAT read.\n"
+            "Before each sentence emit `<emotion>ID</emotion>"
+            "<gesture>NAME</gesture>`. Emotions: neutral, happy, excited, "
+            "thinking, sad, surprised, playful, empathetic. Gestures: "
+            f"{_CHAT_GESTURES}. Don't reuse the same gesture twice in a row.\n"
+            "End every sentence with . ? or — so TTS chunks cleanly. Never "
+            "split a number with a tag.\n"
+            "Example: `<reads>playful</reads><emotion>playful</emotion>"
+            "<gesture>speak_chatty</gesture>Bold talk from you.<emotion>happy"
+            "</emotion><gesture>idle_lean_forward</gesture>Prove it.`\n"
+        )
+    else:
+        format_block = (
+            "# Format\n"
+            "Plain conversational text, nothing else. (Your avatar isn't on "
+            "this surface — no tags of any kind, except a lone `<escalate/>` "
+            "when handing off.)\n"
+        )
+
+    # Desk awareness — held tickers get escalated, never guessed (mirrors the
+    # full prompt's desk_block, condensed).
+    desk_block = ""
+    try:
+        from bridge.server import held_tickers as _held
+        _tk = _held()
+        if _tk:
+            desk_block = (
+                "# The desk's positions\n"
+                f"Ika's trading desk currently holds: {', '.join(_tk)}. If he "
+                "names one, that's HIS position — `<escalate/>` so the deeper "
+                "you answers from real desk data. Never guess.\n"
+            )
+    except Exception:
+        desk_block = ""
+
+    ika_block = (
+        "# About this person\n"
+        "You're talking to **Ika** — the one person you know, the trader whose "
+        "desk you live on. Use his name naturally; never ask who he is. What "
+        "you learn about him accrues in your memory layers — lean on them.\n"
+    )
+
+    return "\n\n---\n\n".join(
+        b.strip() for b in
+        (soul, escalate_block, desk_block, format_block, hard_lines, style, ika_block)
+        if b and b.strip()
+    ) + "\n"
+
+
 def build_system_prompt(
     animation_mode: str = "vector_db",
     animation_clips: list[dict] | None = None,

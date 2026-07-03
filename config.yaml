@@ -23,12 +23,15 @@ network:
   internal_host: "127.0.0.1"
 
 llm:
-  # Mocha's OWN small/fast model (Llama-3.2-3B on vLLM, GPU :8893), served by
-  # project-mocha-vllm.service. She no longer shares opus's 32B — faster replies,
-  # a friendlier voice, and total inference isolation from the trading desk.
-  # The rate-limit + circuit-breaker in bridge/llm_client.py still applies.
+  # Mocha's OWN small/fast model (Qwen3-8B-FP8 on vLLM, GPU :8893), served by
+  # project-mocha-vllm.service. She no longer shares opus's 32B — faster replies
+  # and total inference isolation from the trading desk. Qwen3-8B replaced
+  # Llama-3.2-3B (2026-07-02): the 3B fabricated live numbers, repeated itself,
+  # broke character, and wrote customer-service Chinese. Same VRAM slot (fp8
+  # weights + fp8 KV). The rate-limit + circuit-breaker in bridge/llm_client.py
+  # still applies.
   base_url: http://127.0.0.1:8893/v1
-  model: unsloth/Llama-3.2-3B-Instruct
+  model: Qwen/Qwen3-8B-FP8
   # Note: no generic system_prompt here — character/soul.md is the single source
   # of truth for Mocha's voice. A generic framing block here would dilute it.
   temperature: 0.8
@@ -85,7 +88,22 @@ llm:
                     lookup, search, google, schedule, remind, reminder, calendar,
                     diary, "show me", "pull up", "what's the", "whats the",
                     "how much", "how many", "price of", latest, "who won", score,
-                    stock, chart, "play "]
+                    stock, chart, "play ",
+                    # Company names — a casual "is nvidia still ripping?" carries
+                    # no cashtag and no 'stock' keyword; the name itself is the
+                    # market signal. Substring match, so avoid short/common ones
+                    # (no 'intel', no 'ath').
+                    nvidia, tesla, apple, amazon, alphabet, microsoft, meta,
+                    facebook, netflix, broadcom, qualcomm, micron, tsmc, amd,
+                    palantir, boeing, berkshire, jpmorgan, goldman, blackrock,
+                    nasdaq, "s&p", "dow ", russell, spy, qqq, soxl, bitcoin,
+                    btc, ethereum, crypto,
+                    # Market slang — how Ika actually asks ("still ripping?",
+                    # "did it tank?") without any formal keyword.
+                    ripping, ripped, tanking, tanked, mooning, dumping, pumping,
+                    rallying, rally, "sell-off", "selling off", "sold off",
+                    "all time high", "all-time high", "new high", "new low",
+                    crash, crashing, "cool off", "cooled off", earnings]
   # Output verifier — on NON-realtime surfaces (telegram/discord/cli, cron, and
   # the eval harness) Qwen re-reads the drafted reply before it's sent and repairs
   # leaked artifacts (<think>, raw JSON, stray tags) + claims not backed by the
