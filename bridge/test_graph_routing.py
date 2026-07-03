@@ -337,6 +337,23 @@ def test_should_continue_backstop():
         ({"pending_tool_calls": [], "tool_round": 0, "route": "fast",
           "realtime": False, "full_text_parts": ["mm. rough day, huh."]}, "verify",
          "clean chat draft → verify"),
+        # Recall is not fabrication: the number appears in the conversation
+        # context, so repeating it must NOT escalate (2026-07-02 live repro:
+        # "that drop you just mentioned, say it again?").
+        ({"pending_tool_calls": [], "tool_round": 0, "route": "fast",
+          "realtime": False,
+          "messages": [{"role": "system", "content": "soul"},
+                       {"role": "assistant",
+                        "content": "AMD's at $517.82. Down -26.28 from yesterday's close of $544.10."},
+                       {"role": "user", "content": "that drop, say it again?"}],
+          "full_text_parts": ["the drop was 26.28 — AMD closed the day at $517.82."]},
+         "verify", "recall of in-context numbers → verify"),
+        ({"pending_tool_calls": [], "tool_round": 0, "route": "fast",
+          "realtime": False,
+          "messages": [{"role": "system", "content": "soul"},
+                       {"role": "assistant", "content": "AMD's at $517.82."}],
+          "full_text_parts": ["AMD is trading at $555.55 right now."]},
+         "escalate", "novel number despite context → escalate"),
     ]
     fails = []
     for state, expected, label in cases:

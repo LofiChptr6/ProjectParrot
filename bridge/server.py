@@ -245,16 +245,36 @@ _SELF_EVIDENT_LIVE_RE = re.compile(
 )
 
 
-def _ungrounded_live_claim(text: str) -> bool:
-    """True when ``text`` asserts a number in a live-data context (price, move,
-    temperature, score). Two-factor (number AND context) so pure-chat numbers
-    ("I'm 100% sure", "give me 5 minutes") don't trip it; unit-marked values
-    (temperatures, precise dollar amounts) count on their own."""
+_BARE_NUMBER_RE = re.compile(r"\d+(?:[.,]\d+)*")
+
+
+def _numbers_in(text: str) -> set[str]:
+    """Normalized numeric literals in ``text`` (commas stripped) for
+    grounded-vs-novel comparison."""
+    return {m.group(0).replace(",", "") for m in _BARE_NUMBER_RE.finditer(text or "")}
+
+
+def _ungrounded_live_claim(text: str, known_numbers: set[str] | None = None) -> bool:
+    """True when ``text`` asserts a NOVEL number in a live-data context (price,
+    move, temperature, score). Two-factor (number AND context) so pure-chat
+    numbers ("I'm 100% sure", "give me 5 minutes") don't trip it; unit-marked
+    values (temperatures, precise dollar amounts) count on their own.
+
+    ``known_numbers``: numeric literals already present in the conversation
+    context (history, memories, today-block). A claim whose numbers ALL appear
+    there is a quote of something already said — repeating it ("that drop
+    again? −2.21") is legitimate recall, not fabrication, so it passes."""
     if not text:
         return False
-    if _SELF_EVIDENT_LIVE_RE.search(text):
-        return True
-    return bool(_LIVE_NUMBER_RE.search(text) and _LIVE_CONTEXT_RE.search(text))
+    suspicious = bool(_SELF_EVIDENT_LIVE_RE.search(text)
+                      or (_LIVE_NUMBER_RE.search(text) and _LIVE_CONTEXT_RE.search(text)))
+    if not suspicious:
+        return False
+    if known_numbers:
+        novel = _numbers_in(text) - known_numbers
+        if not novel:
+            return False
+    return True
 
 
 def _route_model(user_text: str) -> str:
@@ -1460,14 +1480,15 @@ def _build_inline_messages(user_text: str, memories: list[dict],
                            source: str | None = None) -> list[dict]:
     """Build the messages list for an inline-tag LLM call.
 
-    Numeric literals in conversation history and memory fragments are redacted
-    to ``[past #]`` so the model cannot pattern-match on stale numbers (e.g.
-    yesterday's stock price) when replying to a fresh data query. Today's
-    handles arrive via the tool-result message during the tool loop; those
-    are untouched.
+    History and memory-fragment numbers are passed through INTACT so
+    cross-turn deduction works ("say that drop again", "which of the two?").
+    Stale-as-current is prevented downstream instead: prompt staleness rules,
+    the escalate protocol on the tool-less fast path, and the
+    ``_ungrounded_live_claim`` backstop (novel numbers only).
 
-    ``tools_available`` lets the caller build a CHAT-ONLY prompt (the fast 3B,
-    which has no tools and escalates instead). Defaults to ``TOOLS_ENABLED``.
+    ``tools_available`` lets the caller build a CHAT-ONLY prompt (the fast
+    model, which has no tools and escalates instead). Defaults to
+    ``TOOLS_ENABLED``.
     """
     if tools_available is None:
         tools_available = TOOLS_ENABLED
@@ -1485,14 +1506,22 @@ def _build_inline_messages(user_text: str, memories: list[dict],
             user_id=user_id,
         )
     messages: list[dict] = [{"role": "system", "content": system_prompt}]
+    # History numbers are passed through INTACT (2026-07-02; they used to be
+    # redacted to `[past #]`). The redaction protected against quoting stale
+    # prices as current, but it destroyed cross-turn deduction: "say that drop
+    # again" produced sentences with holes, and "which of the two?" got a
+    # vibes-only answer because the comparison numbers were gone. The staleness
+    # hazard is now covered downstream: the tool-less fast path escalates live
+    # questions, `_ungrounded_live_claim` blocks NOVEL numbers (history numbers
+    # are in its known-set), and the verifier grounds deep drafts.
     for entry in _get_user_history(user_id)[-MAX_HISTORY:]:
         messages.append({
             "role": entry["role"],
-            "content": _redact_stale_numbers(entry["content"]),
+            "content": entry["content"],
         })
     if memories:
         mem_lines = [
-            f"- ({m['role']}): {_redact_stale_numbers(m['text'])}"
+            f"- ({m['role']}): {m['text']}"
             for m in memories
         ]
         messages.append({
@@ -1502,8 +1531,8 @@ def _build_inline_messages(user_text: str, memories: list[dict],
                 "current message. These are NOT the current topic. Use them only for "
                 "continuity (knowing Ika's preferences, history, running jokes). Do "
                 "NOT bring up subjects from these fragments unless Ika references them "
-                "first. Numbers in these fragments have been redacted to `[past #]` "
-                "because they are from earlier turns and are likely stale.]:\n"
+                "first. Numbers in these fragments are as-of when they were said — "
+                "likely stale; never present one as current.]:\n"
             ) + "\n".join(mem_lines),
         })
     # Today so far — diary draft + fresh tool-call scratchpad. Gives Mocha

@@ -306,9 +306,12 @@ def build_chat_prompt(tagged: bool = False, user_id: str | None = None) -> str:
         "# Hard lines\n"
         "- Never claim Ika told or showed you something unless it's in this "
         "conversation or the memory blocks.\n"
+        "- Numbers in earlier turns are what they were THEN. When he asks what "
+        "was SAID (\"say that again\", \"what was that drop\"), quote them "
+        "freely. When he asks what's true NOW, they may be stale — "
+        "`<escalate/>` instead of presenting an old number as current.\n"
         "- Your words are read aloud and shown as chat bubbles: plain speech "
-        "only — no markdown, no bullet lists, no headers, and never the "
-        "internal marker `[past #]`.\n"
+        "only — no markdown, no bullet lists, no headers.\n"
     )
 
     if tagged:
@@ -636,8 +639,9 @@ def build_system_prompt(
 You have four memory layers that surface in your context, each for a different job:
 
 1. **Short-term (last ~22 turns)** — raw user + your own replies, appearing at
-   the top of the conversation. Numbers from past turns are redacted to
-   `[past #]` because they're likely stale.
+   the top of the conversation. Numbers in past turns are what they were THEN:
+   quote them when asked what was said; call a tool when asked what's true NOW
+   — never present an old number as current.
 2. **Memory fragments (mem0 facts)** — `[Memory fragments …]` block. Semantic
    facts about Ika extracted over time (favourite colour, preferences, running
    jokes). These are TRUE but not CURRENT.
@@ -715,7 +719,7 @@ Once you start writing a number (a digit, `$`, a decimal, a percentage, a
 date fragment), or a `num:<id>` handle, finish it COMPLETELY before
 emitting any tag. Decimals, percentages, currency, dates, and handles must
 never be split by an `<emotion>` or `<gesture>` tag.
-- OK: `<gesture>speak_normal</gesture>The price is num:<id> today.<gesture>speak_chatty</gesture>Pretty volatile.`
+- OK (id copied from THIS turn's tool result): `<gesture>speak_normal</gesture>The price is num:k3x9p2qa today.<gesture>speak_chatty</gesture>Pretty volatile.`
 - NO: `<gesture>speak_normal</gesture>The price is num:<i<gesture>speak_excited</gesture>d> today.` ← split inside a handle.
 
 **Rule 3 — Copy handles you SEE; write every other number as plain digits; never invent a handle.**
@@ -734,7 +738,12 @@ placeholder like `num: [recent price]`, `num:<id>`, or `num:` + anything that
 isn't an exact 8-char id from THIS turn's tool result — if you don't have the
 number, leave it out or call a tool; do not template a fake one. Also never quote a number
 you only "remember" from earlier — use this turn's tool result.
-- OK (handle in the result): `SOXL is trading at num:<id>, down num:<id> from yesterday.`
+- OK (handles copied from the result): `SOXL is trading at num:f7c2m4dw, down num:b9t5r1kz from yesterday.`
+- If the tool result gives NO number and no handle for something (e.g. a
+  narration script with no price in it), speak WITHOUT the value — "we're
+  long and underwater" — never bolt on a number or a handle the result
+  didn't give you. A sentence that needs a value you don't have is a
+  sentence to drop.
 - OK (plain number in the result): `BIRK's conviction is 1.14, expecting a 3.2% return in 2 days.`
 - NO: `BIRK is at num:8f3a2b1c.` ← that handle was NOT in the tool result; you invented it → the user hears nothing.
 
@@ -757,9 +766,7 @@ is a hallucination by definition — you don't have the data yet.
 **Rule 4b — Speak it PLAIN; your words are read aloud.**
 Everything you say is spoken by TTS and shown in a chat bubble, so write like you
 talk: NO markdown (`**bold**`, `#` headers, `-` bullet lists), NO HTML
-(`<strong>`, `<em>`), no code fences. And NEVER write `[past #]` — that is an
-internal marker for a redacted old number, not a word. If you find yourself about
-to write it, you don't actually have that value: get it from a tool or leave it out.
+(`<strong>`, `<em>`), no code fences.
 
 **Rule 5 — Show/open/display requests ALWAYS fire the UI tool.**
 When Ika asks to *open, show, display, pull up, bring up, flip through, read,

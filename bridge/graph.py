@@ -523,18 +523,24 @@ def should_continue(state: TurnState) -> str:
             and state["tool_round"] < S._TOOL_MAX_ROUNDS):
         return "run_tools"
     # Deterministic backstop: a FAST pass (no tools by construction) that stated
-    # a live-data number fabricated it — the escalate rule was missed. On
+    # a NOVEL live-data number fabricated it — the escalate rule was missed. On
     # buffered surfaces (telegram/discord/cli) nothing has been sent yet, so
     # discard the draft and rerun on deep WITH tools. Realtime surfaces already
     # streamed the text; nothing can be unsaid there, so they skip this.
+    # Numbers already present in the context (history/memories/today-block) are
+    # legitimate recall — "say that drop again? −2.21" must NOT trip this.
     if (state.get("route") != "deep"
             and not state.get("escalated")
             and not state.get("realtime")
-            and S.TOOLS_ENABLED
-            and S._ungrounded_live_claim("".join(state.get("full_text_parts") or []))):
-        log.info("[graph] job=%s fast draft asserts ungrounded live data — "
-                 "forcing escalate", state.get("job_id"))
-        return "escalate"
+            and S.TOOLS_ENABLED):
+        draft = "".join(state.get("full_text_parts") or [])
+        known: set[str] = set()
+        for m in (state.get("messages") or []):
+            known |= S._numbers_in(str(m.get("content") or ""))
+        if S._ungrounded_live_claim(draft, known_numbers=known):
+            log.info("[graph] job=%s fast draft asserts ungrounded live data — "
+                     "forcing escalate", state.get("job_id"))
+            return "escalate"
     return "verify"
 
 
@@ -735,6 +741,12 @@ _VERIFY_SYSTEM = (
     "1. Removes leaked artifacts: <think>…</think>, raw JSON like {\"segments\":…}, "
     "stray <tool_call>/<emotion>/<gesture> tags, code fences, or an unfinished "
     "trailing sentence.\n"
+    "1b. Repairs holes. A sentence missing its value — \"the price is .\", "
+    "\"down from yesterday's close of.\", a dangling `num:` fragment or "
+    "`num:<id>` placeholder — means a number failed to resolve. Do NOT send it "
+    "as-is and do NOT invent the value: rephrase the sentence without the "
+    "value (\"we're long and underwater\") or drop that clause entirely, "
+    "keeping the rest.\n"
     "2. Grounds its claims. Any number/name/ticker/date/event backed by the SOURCE "
     "DATA must match it exactly. LIVE-DATA values — prices, % moves, market levels, "
     "temperatures, scores, anything true-as-of-today — that are NOT in the SOURCE "
