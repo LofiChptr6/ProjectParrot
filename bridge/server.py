@@ -235,12 +235,25 @@ _LIVE_CONTEXT_RE = re.compile(
 )
 
 
+# Self-contextual live values — the unit alone marks them as a live-data claim
+# ("it's 107°F out" carries no market/weather keyword but can only be a
+# fabricated reading on a tool-less pass).
+_SELF_EVIDENT_LIVE_RE = re.compile(
+    r"\b\d+(?:\.\d+)?\s?(?:degrees|°[CF]?)\b"    # temperatures
+    r"|\$\s?\d+(?:[,.]\d+)+\b",                   # precise dollar values ($194.83)
+    re.IGNORECASE,
+)
+
+
 def _ungrounded_live_claim(text: str) -> bool:
     """True when ``text`` asserts a number in a live-data context (price, move,
     temperature, score). Two-factor (number AND context) so pure-chat numbers
-    ("I'm 100% sure", "give me 5 minutes") don't trip it."""
+    ("I'm 100% sure", "give me 5 minutes") don't trip it; unit-marked values
+    (temperatures, precise dollar amounts) count on their own."""
     if not text:
         return False
+    if _SELF_EVIDENT_LIVE_RE.search(text):
+        return True
     return bool(_LIVE_NUMBER_RE.search(text) and _LIVE_CONTEXT_RE.search(text))
 
 
@@ -2037,10 +2050,19 @@ async def _warm_prefix_cache(reason: str = "startup"):
     _timeline_init(jid)
     await _broadcast_timeline_event(jid, "cache_warm", "start")
 
-    system_prompt = build_system_prompt(
-        animation_mode=ANIMATION_MODE,
-    )
+    # Warm what the FAST path actually sends: the lean chat prompt (per
+    # surface). The full tool prompt lives on the deep client (:8000), which
+    # has its own traffic — warming it here on the fast model wastes the warm.
+    system_prompt = build_chat_prompt(tagged=False, user_id=IKA_USER_ID)
     messages: list[dict] = [{"role": "system", "content": system_prompt}]
+    try:
+        # Also prefill the tagged (avatar-surface) variant's prefix.
+        await llm_client.chat(
+            [{"role": "system", "content": build_chat_prompt(tagged=True, user_id=IKA_USER_ID)},
+             {"role": "user", "content": "hi"}],
+            temperature=0, max_tokens=1)
+    except Exception:
+        pass
 
     # Fetch recent memories so the memory prefix is also cached.
     try:

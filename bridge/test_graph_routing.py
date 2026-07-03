@@ -248,6 +248,10 @@ LIVE_CLAIM_CASES = [
     ("SOXL is trading at 42.10 right now.", True, "'trading at' + number"),
     ("The desk is up 2% today.", True, "desk P&L claim"),
     ("It's 95 degrees in Phoenix and the forecast says worse.", True, "weather temp"),
+    # self-evident live values — unit alone suffices, no context word needed
+    ("it's 107°F out, you should be out there with a hat.", True, "bare °F (live probe miss 2026-07-02)"),
+    ("NVDA closed at $194.83.", True, "precise dollar value"),
+    ("I bet you $5 you can't stay off the charts.", False, "round wager $ — not a reading"),
     ("They won and scored 3 in the final quarter.", True, "sports score"),
     # numbers with NO live-data context — normal chat, must pass through:
     ("I'm 100% sure you'd have teased me anyway.", False, "chat %: no context"),
