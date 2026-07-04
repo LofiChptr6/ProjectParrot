@@ -32,6 +32,12 @@ llm:
   # still applies.
   base_url: http://127.0.0.1:8893/v1
   model: Qwen/Qwen3-8B-FP8
+  # Prompt-inclusive repetition penalty (vLLM). Discourages the fast model from
+  # recycling its own recent replies out of the (now unredacted) history —
+  # observed: the same "brain on autopilot" riff three turns straight.
+  # 1.05-1.10 safe; higher degrades punctuation/Chinese. Deep overrides to 0
+  # (synthesis precision over style; its repeats are handled by style rules).
+  repetition_penalty: 1.08
   # Note: no generic system_prompt here — character/soul.md is the single source
   # of truth for Mocha's voice. A generic framing block here would dilute it.
   temperature: 0.8
@@ -60,6 +66,9 @@ llm:
   deep:
     base_url: http://127.0.0.1:8000/v1
     model: Qwen/Qwen3-32B-FP8
+    # Disable the fast client's repetition penalty here — tool synthesis must
+    # be free to restate exact numbers from results (0/absent → omitted).
+    repetition_penalty: 0
     # Bigger budget than the 3B's 2048: Qwen *thinks* (a <think> block) before
     # answering, and on a hard/escalated reasoning turn 2048 truncates mid-thought
     # → no answer reaches TTS (the empty-fallback fires). 4096 lets think+answer fit.

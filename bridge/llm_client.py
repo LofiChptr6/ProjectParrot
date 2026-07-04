@@ -127,6 +127,13 @@ class LLMClient:
         self.model: str = config.get("model", "meta-llama/Llama-3.3-70B-Instruct")
         self.default_temperature: float = float(config.get("temperature", 0.8))
         self.default_max_tokens: int = int(config.get("max_tokens", 4096))
+        # vLLM repetition_penalty (HF-style, prompt-inclusive). >1.0 discourages
+        # reusing token sequences ALREADY IN CONTEXT — i.e. recycling her own
+        # recent replies, which the fast model does under salience pull now that
+        # history numbers/phrases pass through unredacted. ~1.05-1.10 is safe;
+        # higher starts to degrade punctuation and Chinese. None → omit.
+        _rp = config.get("repetition_penalty")
+        self.repetition_penalty: float | None = float(_rp) if _rp else None
 
         timeout = float(config.get("request_timeout_s", 360))
         api_key = config.get("api_key", "")
@@ -180,6 +187,8 @@ class LLMClient:
             "temperature": temperature if temperature is not None else self.default_temperature,
             "max_tokens": max_tokens or self.default_max_tokens,
         }
+        if self.repetition_penalty:
+            body["repetition_penalty"] = self.repetition_penalty
         if tools:
             body["tools"] = tools
             body["tool_choice"] = "auto"
@@ -291,6 +300,8 @@ class LLMClient:
             "temperature": temperature if temperature is not None else self.default_temperature,
             "max_tokens": max_tokens or self.default_max_tokens,
         }
+        if self.repetition_penalty:
+            body["repetition_penalty"] = self.repetition_penalty
         if tools:
             body["tools"] = tools
             body["tool_choice"] = "auto"

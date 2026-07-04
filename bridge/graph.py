@@ -305,15 +305,15 @@ async def llm_pass_node(state: TurnState) -> dict:
     # Route: deep model (Qwen-32B) for reasoning/tool turns, else the fast 3B.
     client = S.llm_deep if state.get("route") == "deep" else S.llm_client
     state["pass_model"] = client.model
-    # Disable Qwen's <think> on the FIRST pass (and on escalated reasoning turns).
-    # Why: the first pass only decides whether to call a tool and speaks a lead-in,
-    # but a <think> block (1–3k chars ≈ 8–20s, all silent) lands BEFORE that first
-    # spoken word — so her stall arrives very late, and on a tool turn the entire
-    # think block is then thrown away when she calls the tool. Answering/deciding
-    # directly makes the lead-in land at TTFT (~0.3s). The SYNTHESIS pass (after a
-    # tool, tool_round>0) keeps thinking — it reasons over the data, and its think
-    # gap is already covered by the run_tools stall.
-    _think = False if (state.get("escalated") or int(state.get("tool_round", 0)) == 0) else None
+    # Disable Qwen's <think> on the FIRST pass: it only decides whether to call
+    # a tool and speaks a lead-in, and a silent think block lands BEFORE the
+    # first spoken word. On SYNTHESIS passes (tool_round>0), think ONLY when the
+    # turn arrived via <escalate/> — the fast model judged it genuinely hard
+    # (logic, analysis). Keyword-routed data pulls ("how did each close") got a
+    # measured 86s think block on the shared desk GPU for a two-number answer;
+    # non-thinking synthesis reports data fine and keeps the desk vLLM free.
+    _tool_round = int(state.get("tool_round", 0))
+    _think = None if (_tool_round > 0 and state.get("escalated")) else False
     llm_stream = client.chat_stream(messages, tools=None, enable_thinking=_think)
 
     # Parallel stall: on a DEEP turn's FIRST pass, fire an instant filler on the
@@ -748,7 +748,11 @@ _VERIFY_SYSTEM = (
     "value (\"we're long and underwater\") or drop that clause entirely, "
     "keeping the rest.\n"
     "2. Grounds its claims. Any number/name/ticker/date/event backed by the SOURCE "
-    "DATA must match it exactly. LIVE-DATA values — prices, % moves, market levels, "
+    "DATA must match it exactly — INCLUDING its owner: a number must stay attached "
+    "to the same ticker/entity/timeframe it belongs to in the source. If the draft "
+    "pins ticker A's move on ticker B, mislabels a day, or blends two names' "
+    "figures into one sentence, reassign or remove — a real number on the wrong "
+    "entity is still a fabrication. LIVE-DATA values — prices, % moves, market levels, "
     "temperatures, scores, anything true-as-of-today — that are NOT in the SOURCE "
     "DATA must be REMOVED entirely, replaced by her honestly offering to check "
     "(e.g. \"want me to pull the actual number?\"). Hedging does NOT legitimize "
