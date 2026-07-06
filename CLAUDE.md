@@ -12,14 +12,19 @@ removed; Mocha now calls data/UI tools directly.)
   ignored by Corvus's `.gitignore` (never embedded as a submodule).
 - **Services** (own processes via `./start.sh all`): bridge `:8090`, STT `:8091`,
   TTS `:8092`, web `:8080`. (Remapped off 8000–8002, which opus trading owns.)
-- **LLM**: Mocha does **not** run her own vLLM — she SHARES opus trading's vLLM
-  (`Qwen/Qwen3-32B-FP8` at `:8000/v1`). A rate-limit + circuit-breaker in
-  `bridge/llm_client.py` bounds her load so a Mocha bug can never starve
-  Corvus's trading inference (the prime directive: **Mocha must never impact
-  Corvus**).
-- **Front door**: the opus dashboard (`obs/dashboard.py`) opens on a public
-  Mocha landing (embeds `:8080/gadget`); an "Enter trading desk" button leads
-  to the password-gated desk. The dashboard never imports Mocha code.
+- **LLM** (dual-model): Mocha runs her **own** dedicated fast vLLM
+  (`Qwen/Qwen3-8B-FP8` at `:8893/v1`, `project-mocha-vllm.service`) as the
+  fast/primary model, and routes only deep/tool-heavy turns to opus trading's
+  SHARED `Qwen/Qwen3-32B-FP8` at `:8000/v1`. Her own `:8893` gives her total
+  inference isolation from the desk on the common path; a rate-limit +
+  circuit-breaker in `bridge/llm_client.py` still bounds the shared `:8000`
+  deep path so a Mocha bug can never starve Corvus's trading inference (the
+  prime directive: **Mocha must never impact Corvus**).
+- **Front door**: Mocha's own web app (`:8080`) is her front door. The desk
+  dashboard no longer embeds her landing/gadget (`render_mocha_landing` /
+  `_mocha_alive` were removed 2026-07-01); her `:8080/gadget` route still
+  exists as a stable embed URL but is no longer pulled in by the desk. The
+  dashboard never imports Mocha code.
 
 ## Orchestration — LangGraph (bridge/graph.py)
 
@@ -57,7 +62,7 @@ Every LLM call is logged to PostgreSQL for offline analysis.
 | `id` | BIGSERIAL | Auto-increment PK |
 | `call_id` | UUID | Unique call identifier |
 | `created_at` | TIMESTAMPTZ | When the call was made |
-| `triggered_by` | TEXT | Who triggered: `channel`, `chat_stream`, `voice`, `ws_unity`, `tool_loop`, `tool_round`, `repair`, `cache_warm`, `shiro` |
+| `triggered_by` | TEXT | Who triggered: `channel`, `chat_stream`, `voice`, `ws_unity`, `tool_loop`, `tool_round`, `repair`, `cache_warm` |
 | `source` | TEXT | Channel source: `telegram`, `discord`, `cli`, `web`, `agent_loop` |
 | `user_id` | TEXT | User identifier |
 | `conversation_id` | TEXT | Groups all LLM calls in one user turn |
@@ -90,7 +95,7 @@ SELECT created_at, triggered_by, source,
        LEFT(response_content, 300) AS response_preview,
        latency_ms, prompt_tokens, completion_tokens
 FROM llm_call_log
-WHERE triggered_by NOT IN ('shiro', 'cache_warm', 'warmup', 'repair')
+WHERE triggered_by NOT IN ('cache_warm', 'warmup', 'repair')
   AND created_at > now() - interval '2 hours'
 ORDER BY created_at DESC;
 ```
@@ -124,23 +129,14 @@ SELECT a.conversation_id, a.response_content AS mocha_said,
 FROM llm_call_log a
 JOIN llm_call_log b ON b.created_at > a.created_at
   AND b.created_at < a.created_at + interval '5 minutes'
-  AND b.triggered_by NOT IN ('shiro', 'cache_warm', 'repair')
-WHERE a.triggered_by NOT IN ('shiro', 'cache_warm', 'repair')
+  AND b.triggered_by NOT IN ('cache_warm', 'repair')
+WHERE a.triggered_by NOT IN ('cache_warm', 'repair')
   AND (b.messages->-1->>'content' ILIKE '%no,%'
     OR b.messages->-1->>'content' ILIKE '%wrong%'
     OR b.messages->-1->>'content' ILIKE '%not what%'
     OR b.messages->-1->>'content' ILIKE '%I meant%')
 ORDER BY a.created_at DESC
 LIMIT 20;
-```
-
-### Shiro's past analyses
-```sql
-SELECT created_at, LEFT(response_content, 500) AS analysis_preview
-FROM llm_call_log
-WHERE triggered_by = 'shiro'
-ORDER BY created_at DESC
-LIMIT 5;
 ```
 
 ## Key Files

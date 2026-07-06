@@ -1,5 +1,7 @@
 # project mocha — System Architecture
 
+> **PARTIALLY SUPERSEDED (pre-2026-07).** Predates the LangGraph single-agent consolidation (Nori/Shiro/Hana removed), the dual-model routing, and the port remap. Verify against README.md / CLAUDE.md before trusting service/port/agent details below.
+
 ## 1. High-Level Overview
 
 ```
@@ -20,25 +22,27 @@
               +---------v----------+
               |                    |
               |   BRIDGE SERVER    |    Central orchestrator
-              |   :8000 (FastAPI)  |    HTTP + WebSocket + SSE
-              |                    |
-              +-+--+--+--+--+--+--+
-                |  |  |  |  |  |
-    +-----------+  |  |  |  |  +------------------+
-    |              |  |  |  |                     |
-    v              v  |  v  v                     v
-+-------+  +-------+ | +-------+ +--------+ +----------+
-|  STT  |  |  TTS  | | |Memory | |Animate | |PostgreSQL|
-|:8001  |  |:8002  | | |:8003  | |:8004   | |:5432     |
-|Whisper|  |F5-TTS | | |Chroma | |VecDB   | |Call Log  |
-+-------+  +-------+ | +-------+ +--------+ +----------+
-                      |
-                      v
-                 +--------+
-                 |  vLLM  |
-                 | :8800  |
-                 | Qwen3  |
-                 +--------+
+              |   :8090 (FastAPI)  |    HTTP + WebSocket + SSE
+              |                    |    (Memory + Animation are IN-PROCESS
+              +-+--+--+--+--+--+--+     inside the bridge, not services)
+                |  |        |
+    +-----------+  |        +------------------+
+    |              |                           |
+    v              v                           v
++-------+  +-------+                     +----------+
+|  STT  |  |  TTS  |                     |PostgreSQL|
+|:8091  |  |:8092  |                     |:5432     |
+|Whisper|  |F5-TTS |                     |Call Log  |
++-------+  +-------+                     +----------+
+     (bridge → LLM, dual-model)
+                 |
+        +--------+---------+
+        v                  v
+  +-----------+     +--------------+
+  | vLLM :8893|     | vLLM :8000   |   deep/tool routing →
+  | Qwen3-8B  |     | Qwen3-32B    |   opus trading's SHARED vLLM
+  | (own,fast)|     | (shared)     |
+  +-----------+     +--------------+
 ```
 
 ---
@@ -48,14 +52,19 @@
 ```
  Port   Service            Protocol   Role
  ----   -------            --------   ----
- 8000   Bridge             HTTP/WS    Central hub — routes everything
- 8001   STT (Whisper)      HTTP/WS    Speech-to-text + forced alignment
- 8002   TTS (F5-TTS)       HTTP       Text-to-speech (zero-shot clone)
- 8800   vLLM               HTTP       LLM inference (OpenAI-compatible)
+ 8090   Bridge             HTTP/WS    Central hub — routes everything
+ 8091   STT (Whisper)      HTTP/WS    Speech-to-text + forced alignment (disabled by default)
+ 8092   TTS (F5-TTS)       HTTP       Text-to-speech (zero-shot clone)
+ 8080   Web app            HTTP       Browser VRM frontend (own front door)
+ 8893   vLLM (own)         HTTP       Qwen3-8B-FP8 — fast/primary (project-mocha-vllm.service)
+ 8000   vLLM (shared)      HTTP       opus trading's Qwen3-32B-FP8 — deep/tool routing only
  5432   PostgreSQL         TCP        Write-only call log analytics
 
+ Ports remapped off 8000–8002 (opus trading owns those).
  Memory:    in-process (mem0 + local Chroma) inside bridge
  Animation: in-process (fbx_functions CSV) inside bridge
+ LLM routing: heuristic (config.yaml:llm.routing) — default fast :8893,
+              escalate to shared :8000 for reasoning/tool-heavy turns.
 ```
 
 ---
@@ -77,7 +86,6 @@
  | POST      | /api/tts                  | Synthesize speech from text             |
  | POST      | /admin/reload-tools       | Hot-reload custom tools                |
  | POST      | /admin/clear-memory       | Wipe ChromaDB memories                 |
- | POST      | /admin/shiro/toggle       | Enable/disable Shiro agent             |
  | POST      | /admin/tts/restart        | Restart TTS service                    |
  | POST      | /admin/tts/upload-voice   | Upload new voice reference WAV         |
  +-----------+---------------------------+----------------------------------------+
@@ -96,6 +104,8 @@
 ---
 
 ## 4. Mocha's Execution Flow (Web Frontend)
+
+> Port labels in the flow diagrams below are pre-remap (STT :8001→**:8091**, TTS :8002→**:8092**, bridge :8000→**:8090**; Memory/Animation are in-process, not :8003/:8004). See the corrected §2 Service Map. The shape of the flow is still accurate.
 
 ```
   User types or speaks
@@ -137,13 +147,14 @@
             |
             v
     +-------+--------+
-    | vLLM :8800     |  POST /v1/chat/completions (streaming)
-    | Qwen3-32B      |
+    | vLLM (dual)    |  POST /v1/chat/completions (streaming)
+    | :8893 8B fast  |  routed per config.yaml:llm.routing;
+    | :8000 32B deep |  tool/reasoning turns escalate to :8000
     +--+--------+----+
        |        |
    ----+----  --+--------+
-   |SEGMENTS|  |TOOL CALLS|   (ReAct loop, max 5 rounds)
-   +---+----+  +--+-------+
+   |SEGMENTS|  |TOOL CALLS|   (LangGraph StateGraph; ReAct survives
+   +---+----+  +--+-------+    only as an internal max_rounds bound, ≤5)
        |          |
        |    +-----v------+
        |    | Tool Loop  |  tools/executor.py
@@ -249,6 +260,8 @@
 ---
 
 ## 6. Tool Call Flow (ReAct Loop)
+
+> Orchestration is now a **LangGraph `StateGraph`** (`bridge/graph.py`), not a hand-rolled ReAct `while` loop. The ReAct pattern survives only as the internal per-turn round cap (`tools.max_rounds`, ≤5) — the loop/tool-edge/finalize wiring is LangGraph's. The round-by-round shape below is still representative.
 
 ```
   LLM Response
@@ -458,9 +471,6 @@
   | {"type":"config_state",       |   full config snapshot
   |  "llm_temperature":0.8,...}  |
   +-------------------------------+
-  | {"type":"shiro_state",        |   Shiro agent status
-  |  "running":true}             |
-  +-------------------------------+
 ```
 
 ---
@@ -589,125 +599,19 @@
 
 ---
 
-## 11. Agent Architecture (Mocha, Shiro, Nori)
+## 11. Agent Architecture
 
-```
-  +=====================================================================+
-  |                         MOCHA (Main Agent)                          |
-  |                                                                     |
-  |  Role: Front-end conversational character                           |
-  |  Model: Qwen3-32B via vLLM                                         |
-  |  Personality: character/soul.md + character/behaviors.yaml          |
-  |  Emotions: character/emotions.yaml (8 emotions)                     |
-  |                                                                     |
-  |  Capabilities:                                                      |
-  |  - Natural conversation with voice + face + body                    |
-  |  - Tool calling (ReAct loop, max 5 rounds)                         |
-  |  - Data fetching (stocks, news, weather, calculator)                |
-  |  - HTML UI control (presentations, cards, notifications)            |
-  |  - Memory-aware (ChromaDB semantic recall)                          |
-  |                                                                     |
-  |  Input channels:                                                    |
-  |  - Web (/ws/live, /chat/stream)                                     |
-  |  - Telegram, Discord (/channel)                                     |
-  |  - Voice (/voice, /ws/unity)                                        |
-  |  - CLI (/channel)                                                   |
-  +=====================================================================+
-         |                              |
-         | Tool calls via               | Conversations logged
-         | tools/custom/*               | to PostgreSQL
-         |                              |
-  +======+=====+              +=========+=========+
-  |    NORI    |              |                   |
-  | (Assistant)|              |    PostgreSQL     |
-  |            |              |    :5432          |
-  | Role:      |              |    llm_call_log   |
-  | Backend    |              |                   |
-  | data       |              +=========+=========+
-  | service    |                        |
-  |            |                        | reads logs
-  | Lives as   |                        |
-  | custom     |              +=========+=========+
-  | tools in   |              |     SHIRO         |
-  | tools/     |              |  (Meta-Agent)     |
-  | custom/    |              |                   |
-  |            |              |  Role:            |
-  | Tools:     |              |  Coaching agent   |
-  | - stocks   |              |  that analyzes    |
-  | - news     |              |  Mocha's convos   |
-  | - weather  |              |  and proposes     |
-  | - calc     |              |  improvements     |
-  | - present  |              |                   |
-  | - cards    |              |  Can modify:      |
-  | - notify   |              |  - soul.md        |
-  | - clear    |              |  - behaviors.yaml |
-  |            |              |  - tools/custom/* |
-  +============+              |                   |
-                              |  Reads:           |
-                              |  - llm_call_log   |
-                              |  - soul.md        |
-                              |  - behaviors.yaml |
-                              |                   |
-                              |  shiro/agent.py   |
-                              |  shiro/analyzer.py|
-                              |  shiro/pg_reader  |
-                              +===================+
-```
+[Nori, Shiro, and Hana sub-agents were retired in the single-agent LangGraph consolidation; Mocha is now a single agent — section removed.]
+
+Mocha calls the data/UI/desk tools directly (no delegation layer). She runs on the dual-model LLM (fast Qwen3-8B-FP8 @ :8893, deep Qwen3-32B-FP8 @ :8000); tool orchestration is the LangGraph `StateGraph` in `bridge/graph.py`. For the current tool list see `config.yaml:tools.allowed`; for the desk read-only allowlist see `tools/custom/_opus_introspect.py`.
 
 ---
 
-## 12. Nori (Assistant Agent) — Tool Call Detail
+## 12. Tool Call Detail
 
-```
-  Mocha LLM decides to use a tool
-           |
-           v
-  +--------+----------+
-  | DATA TOOLS (Nori) |    Fetch real-world data
-  +--------+----------+
-           |
-     +-----+------+------+------+
-     |     |      |      |      |
-     v     v      v      v      v
-  +-----+ +----+ +----+ +----+ +-------+
-  |stock| |news| |wthr| |calc| |web_   |
-  |data | |    | |    | |    | |search |
-  +--+--+ +--+-+ +--+-+ +--+-+ +---+---+
-     |       |       |      |       |
-     v       v       v      v       v
-  yfinance  DDGS   Open-  ast    DDGS
-  API       .news  Meteo  safe   .text
-                   API    eval
+[The former "Nori (Assistant Agent)" detail described a removed sub-agent — section removed.]
 
-  Results (max 4000 bytes) returned to LLM
-           |
-           v
-  +--------+----------+
-  | UI TOOLS (Nori)   |    Manipulate web frontend
-  +--------+----------+
-           |
-     +-----+------+------+------+
-     |     |      |      |      |
-     v     v      v      v      v
-  +-----+ +----+ +----+ +----+ +-----+
-  |pres | |ctrl| |card| |ntfy| |clear|
-  |ent  | |pres| |    | |    | |ui   |
-  +--+--+ +--+-+ +--+-+ +--+-+ +--+--+
-     |       |       |      |      |
-     +-------+-------+------+------+
-                     |
-                     v
-         _broadcast_to_unity()
-                     |
-                     v
-          {"type":"ui_command",...}
-                     |
-                     v
-         /ws/live -> all connected browsers
-                     |
-                     v
-          presentation.js handles rendering
-```
+Tool execution is unchanged in shape: Mocha emits an inline `<tool_call>` tag, `tools/executor.py` dispatches it (data tools like `get_stock_data`/`get_news`/`get_weather`/`calculate`/`web_search`; UI tools like `show_slides`/`show_card`/`show_notification`), UI tools additionally `_broadcast_to_clients()` a `{"type":"ui_command",...}` envelope over `/ws/live` to all connected browsers, and results (capped) are fed back into the graph for Mocha's spoken reaction.
 
 ---
 
@@ -826,7 +730,8 @@
   +--------------------+--------------------------------------------+
   | call_id            | UUID                                       |
   | created_at         | timestamp                                  |
-  | triggered_by       | chat_stream / channel / voice / shiro / ...|
+  | triggered_by       | chat_stream / channel / voice / tool_round /|
+  |                    |   repair / cache_warm / ...                 |
   | source             | telegram / discord / cli / web              |
   | user_id            | who triggered                              |
   | conversation_id    | groups all calls in one user turn           |
@@ -843,10 +748,10 @@
   | completion_tokens  | output count                               |
   +--------------------+--------------------------------------------+
 
-  Consumers:
-  - Shiro (reads via shiro/pg_reader.py for conversation analysis)
+  Consumers (write-only table; the agent never reads it):
   - Claude Code (manual SQL queries for debugging)
-  - Future dashboards / analytics
+  - Offline evaluation / analytics
+  (The former Shiro meta-agent, which read this table, was removed.)
 ```
 
 ---
@@ -884,51 +789,53 @@
 
 ## 17. Config Reference
 
+> This block is illustrative and pre-remap in the original; **`config.yaml` is the source of truth**. Current shape (ports + dual-model LLM + in-process memory/animation):
+
 ```yaml
-# config.yaml — key sections
+# config.yaml — key sections (see the live file for the full, authoritative set)
 
 bridge:
-  host: 0.0.0.0
-  port: 8000
+  port: 8090                     # remapped off 8000 (opus trading owns 8000)
 
 llm:
-  vllm_base: "http://127.0.0.1:8800/v1"
-  model: "Qwen/Qwen3-32B"
+  # Mocha's OWN fast/primary model
+  base_url: http://127.0.0.1:8893/v1
+  model: Qwen/Qwen3-8B-FP8
   temperature: 0.8
-  max_tokens: 1024
-  complexity_routing:
-    enabled: true
-    short_history: 8
-    pass1_tools: true          # <-- NEW: tools in Pass 1
+  max_tokens: 2048
+  deep:                          # deep-routing → opus trading's SHARED vLLM
+    base_url: http://127.0.0.1:8000/v1
+    model: Qwen/Qwen3-32B-FP8
+  routing:
+    enabled: true                # heuristic router: fast by default,
+    min_words: 40                # escalate to deep on keywords / length /
+    # keywords / tool_keywords ...  tool intent (no extra LLM call)
 
 stt:
-  host: 0.0.0.0
-  port: 8001
+  enabled: false                 # voice input off by default (frees VRAM)
+  port: 8091                     # remapped off 8001
   model: large-v3
 
 tts:
-  host: 0.0.0.0
-  port: 8002
+  port: 8092                     # remapped off 8002
+
+web:
+  port: 8080
 
 memory:
-  host: 0.0.0.0
-  port: 8003
-  short_term_limit: 20
+  # in-process (mem0 + local Chroma) inside the bridge — NOT a service/port
+  backend: mem0
+  short_term_limit: 22
 
 animation:
-  host: 0.0.0.0
-  port: 8004
-  mode: llm_select             # or fbx_functions
+  # in-process (CSV-driven) inside the bridge — NOT a service/port
+  mode: fbx_functions
 
 tools:
   enabled: true
-  allowed: [bash_exec, read_file, write_file, git_status,
-            list_dir, web_search,
-            get_stock_data, get_news, get_weather, calculate,
-            create_presentation, control_presentation,
-            show_card, show_notification, clear_ui]
-  max_rounds: 5
-  timeout: 30
+  # allowed: [...]               # see config.yaml — Mocha calls these directly
+  max_rounds: 5                  # internal ReAct round cap inside the graph
+  timeout: 120
 
 idle:
   enabled: true

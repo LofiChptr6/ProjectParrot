@@ -12,11 +12,13 @@ Mocha currently has no tool that answers these, so she promises a lookup and sil
 
 This document enumerates the questions a user will *actually ask* about their strategies, groups them by intent, and proposes tools the opus_trading team should expose. Each tool follows the `__panel__` envelope from `docs/tool-protocol.md`.
 
+> **NOTE (2026-07-05):** the following were shipped then cut from the desk MCP 2026-07-01 — treat as **removed, not roadmap**: `get_agent_overview`, `get_trade_activity`, `get_risk_overview`, `get_agent_disagreement`, `get_position_history`, `get_changes_since`, `get_manual_overrides` (near-zero usage; two narrated a vestigial always-empty table). The sections proposing them below are kept for historical context but should not be built. **Survived / current:** `get_position_dossier` (plus the also-shipped `get_pnl_attribution`, `get_upcoming_catalysts`, and the desk-state read-outs). Mocha calls these directly — there is no Nori sub-agent anymore.
+
 ## Design principles
 
 1. **One tool per question class, not one tool per question.** A user asking "why did agent X buy LMT?" and "why did the conviction change on LMT?" both want a position dossier — same tool, different focus.
 2. **Each tool returns a panel-ready envelope.** No string blobs that Mocha has to parse. The opus team owns the analysis; project mocha owns the rendering.
-3. **Panels carry insight, not raw fields.** Every tool should include a 1–3 sentence `analyst_note` field that Nori can use as the basis of her narration. This way the opus team — who knows the strategy best — gets to influence the framing, not just hand over rows.
+3. **Panels carry insight, not raw fields.** Every tool should include a 1–3 sentence `analyst_note` field that Mocha can use as the basis of her narration. This way the opus team — who knows the strategy best — gets to influence the framing, not just hand over rows.
 4. **Be okay returning "no data."** A graceful `markdown` slide that says "this position has no recorded thesis — likely a manual override on Mar 12" is far better than fabricating one.
 
 ## Question categories
@@ -226,15 +228,13 @@ Important for any system where the user can override agents.
 
 ## Suggested build order
 
-If the opus team can only ship a few of these soon, I'd prioritize as:
+Priority among the tools that are actually live (the 7 struck through in the note above were shipped then cut 2026-07-01 — do not rank or build them):
 
-1. **`get_position_dossier`** — answers the most-asked deep question. Without this, every "why are we long X?" is a dead end.
-2. **`get_pnl_attribution`** — natural follow-up to the daily briefing. "Why did I make money?" is asked daily.
-3. **`get_trade_activity`** — cheap, useful, often asked.
-4. **`get_agent_overview`** — once users start trusting the agents they want to know each one.
-5. **`get_changes_since`** — closes the "what did I miss" loop.
-6. **`get_risk_overview`** — for power users.
-7. **Everything else** — as time permits.
+1. **`get_position_dossier`** *(shipped, current)* — answers the most-asked deep question. Without this, every "why are we long X?" is a dead end.
+2. **`get_pnl_attribution`** *(shipped, current)* — natural follow-up to the daily briefing. "Why did I make money?" is asked daily.
+3. **`get_upcoming_catalysts`** *(shipped, current)* — "what's on the docket / next catalyst" — cheap and frequently asked.
+
+Everything else in the categories above (`get_trade_activity`, `get_agent_overview`, `get_changes_since`, `get_risk_overview`, `get_agent_disagreement`, `get_position_history`, `get_manual_overrides`) was tried and removed for near-zero usage — leave retired unless a concrete need re-emerges.
 
 ---
 
@@ -242,7 +242,7 @@ If the opus team can only ship a few of these soon, I'd prioritize as:
 
 Each new tool above will Just Work via the existing `__panel__` envelope detection in `tools/executor.py`. Two small things to add on this side, both already trivial:
 
-1. **Teach Nori about each new tool.** One line in `_NORI_TOOL_NAMES` (`nori/agent.py`) and one paragraph in the Data Tools section of `nori/soul.md` — same pattern as `get_trading_briefing`.
+1. **Expose each new tool to Mocha.** Add its name to `tools.allowed` in `config.yaml` and to the read-only allowlist in `tools/custom/_opus_introspect.py` (`EXPOSED_TOOLS`) — same pattern as `get_position_dossier`. (Mocha calls desk tools directly now; the former Nori sub-agent was removed.)
 
 2. **Maybe** introduce a new slide type for richly-structured position dossiers if the existing `stat_row` + `bullets` + `markdown` combination feels too plain. Let's ship a few real envelopes first and decide.
 
