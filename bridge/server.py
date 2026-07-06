@@ -164,12 +164,35 @@ _held_ticker_re: "re.Pattern | None" = None
 _HELD_TTL_S = 300.0
 
 
+# Held tickers that collide with everyday English words — these stay
+# UPPERCASE-only in the route match; everything else matches case-insensitively
+# (Ika types "soxl"/"nvda" in chat, and a missed held-name route is how the
+# fast lane fabricated a SOXL price history on 07-04 — see
+# docs/audits/2026-07-05-llm-reasoning-audit.md).
+_AMBIGUOUS_TICKER_WORDS = frozenset({
+    "ALL", "ANY", "ARE", "BE", "BY", "CAN", "CAT", "COST", "DAY", "EAT", "FAST",
+    "FOR", "GO", "GOOD", "HAS", "HE", "IT", "KEY", "LOVE", "LOW", "MAIN", "MAN",
+    "NEW", "NICE", "NOW", "ON", "ONE", "OPEN", "OR", "OUT", "PLAY", "REAL",
+    "RUN", "SEE", "SO", "STAY", "TALK", "TELL", "TRIP", "TRUE", "TWO", "UP",
+    "WELL", "WORK", "YOU",
+})
+
+
 def _rebuild_held_ticker_re() -> None:
     global _held_ticker_re
-    toks = [re.escape(t) for t in _held_tickers if len(t) >= 2]
-    # Case-SENSITIVE uppercase whole-word match — tickers are written upper, so
-    # this avoids colliding with common words (ticker "ALL" won't match "all").
-    _held_ticker_re = re.compile(r"\b(" + "|".join(toks) + r")\b") if toks else None
+    safe = [re.escape(t) for t in _held_tickers
+            if len(t) >= 2 and t not in _AMBIGUOUS_TICKER_WORDS]
+    # Word-colliding tickers keep the case-SENSITIVE uppercase whole-word match
+    # (ticker "ALL" must not match "all"); unambiguous ones match any case.
+    risky = [re.escape(t) for t in _held_tickers
+             if len(t) >= 2 and t in _AMBIGUOUS_TICKER_WORDS]
+    parts = []
+    if safe:
+        parts.append(r"(?i:" + "|".join(safe) + r")")
+    if risky:
+        parts.append("|".join(risky))
+    _held_ticker_re = (re.compile(r"\b(?:" + "|".join(parts) + r")\b")
+                       if parts else None)
 
 
 async def _refresh_held_tickers() -> None:
@@ -1230,8 +1253,16 @@ def _current_time_message() -> dict:
     except Exception:
         now = datetime.now().astimezone()
 
-    # Example: "2026-04-18 23:05 Saturday (PDT)"
-    stamp = now.strftime("%Y-%m-%d %H:%M %A (%Z)")
+    # Example: "2026-04-18 23:05 (11:05 PM, night) Saturday (PDT)"
+    # The 12-hour + day-part reading is load-bearing for the FAST model: given
+    # bare 24h "11:21" the 8B claimed "nearly midnight" at 11:21 AM — twice,
+    # shipped (07-04; docs/audits/2026-07-05-llm-reasoning-audit.md). It was
+    # parroting the prompt's own scripted example line, so the rules below must
+    # stay descriptive — no quotable reply text.
+    day_part = ("morning" if 5 <= now.hour < 12 else
+                "afternoon" if 12 <= now.hour < 17 else
+                "evening" if 17 <= now.hour < 21 else "night")
+    stamp = now.strftime(f"%Y-%m-%d %H:%M (%-I:%M %p, {day_part}) %A (%Z)")
     return {
         "role": "system",
         "content": (
@@ -1239,16 +1270,19 @@ def _current_time_message() -> dict:
             + (f" Locale: {locale}." if locale else "")
             + (loc_line)
             + "\nAlways read time-of-day, day-of-week, "
-            f"and recency from this line — never guess.\n\n"
+            f"and recency from this line — never guess. It is {day_part} right "
+            f"now; any statement you make about the time of day must agree with "
+            f"the parenthesized 12-hour reading above.\n\n"
             f"You MAY greet back in kind to a phatic greeting (\"hi\", \"hihi\"). "
             f"But you MUST NOT make any TIME-OF-DAY claim that contradicts the "
             f"actual time above. Specifically:\n"
-            f"- Do NOT say \"you're up early\" / \"up late\" / \"early bird\" / "
-            f"\"night owl\" unless the actual time supports it.\n"
-            f"- If Ika says \"good morning\" but it's evening/night, you may "
-            f"reciprocate the spirit but flag the time gently — e.g. \"morning? "
-            f"it's nearly midnight, you good?\".\n"
-            f"- If Ika says \"good night\" but it's morning, similar."
+            f"- Do NOT say Ika is up early or up late, or call him an early bird "
+            f"or night owl, unless the actual time supports it.\n"
+            f"- If his greeting names a different time of day than the actual "
+            f"one (a \"good morning\" at night, a \"good night\" in the "
+            f"morning), reciprocate the spirit and gently note the actual "
+            f"time-of-day in your own words — never assert a time of day other "
+            f"than the one above."
         ),
     }
 

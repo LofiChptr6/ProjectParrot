@@ -499,7 +499,11 @@ async def log_pass_node(state: TurnState) -> dict:
         temperature=_logc.default_temperature,
         max_tokens=_logc.default_max_tokens,
         stream=True, enable_thinking=False,
-        tools_provided=False, messages=state["messages"],
+        # Deep turns carry the tool block in-prompt (inline <tool_call> tags,
+        # not the API tools param) — log that truthfully so offline analysis
+        # can tell tool-capable passes from chat-only ones.
+        tools_provided=bool(S.TOOLS_ENABLED and state.get("route") == "deep"),
+        messages=state["messages"],
         response_content=state["pass_content"] or None,
         finish_reason=state["pass_finish"], error=state["pass_error"],
         latency_ms=latency_ms, ttft_ms=state["pass_ttft"],
@@ -759,6 +763,10 @@ _VERIFY_SYSTEM = (
     "them: \"around $640\" or \"roughly 3%\" with no source is still a fabricated "
     "number — remove it, never soften it. Only timeless general knowledge may be "
     "softened with \"I think…\" instead of dropped. Never invent or guess a value.\n"
+    "2b. Time claims. The CURRENT TIME line is authoritative. If the draft asserts "
+    "a time of day, part of day, or day of week that contradicts it (calling a "
+    "morning \"nearly midnight\", a Thursday \"Monday\"), correct the claim to the "
+    "actual time or drop it.\n"
     "3. Preserves her voice, tone, and wording wherever it's already correct. You "
     "are fixing errors, NOT rewriting her style or padding it out.\n"
     "Output ONLY the corrected reply text — no preamble, no tags, no quotes. If the "
@@ -833,7 +841,14 @@ async def verify_node(state: TurnState) -> dict:
             max_tok = 500
         else:
             sys_prompt = _VERIFY_SYSTEM
+            # The verifier can only enforce rule 2b (time claims) if it can see
+            # the clock — it does NOT get the main system prompt.
+            try:
+                time_line = S._current_time_message()["content"].split("\n")[0]
+            except Exception:  # noqa: BLE001
+                time_line = "(unavailable)"
             user_block = (
+                f"CURRENT TIME:\n{time_line}\n\n"
                 f"USER MESSAGE:\n{(state.get('user_text') or '')[:600]}\n\n"
                 f"SOURCE DATA (tool results this turn):\n{source_block[:2400]}\n\n"
                 f"DRAFT REPLY:\n{draft}"
