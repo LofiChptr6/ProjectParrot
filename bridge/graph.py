@@ -740,8 +740,9 @@ async def finalize_node(state: TurnState) -> dict:
 _VERIFY_SYSTEM = (
     "You are the final editor for Mocha's outgoing message on a TEXT channel "
     "(not live voice), so correctness matters more than speed. You get the user's "
-    "message, the SOURCE DATA from any tools she used this turn, and her DRAFT "
-    "reply. Return a corrected reply that:\n"
+    "message, the SOURCE DATA from any tools she used this turn, MOCHA'S RECENT "
+    "REPLIES (her last few messages), and her DRAFT reply. Return a corrected "
+    "reply that:\n"
     "1. Removes leaked artifacts: <think>…</think>, raw JSON like {\"segments\":…}, "
     "stray <tool_call>/<emotion>/<gesture> tags, code fences, or an unfinished "
     "trailing sentence.\n"
@@ -767,6 +768,15 @@ _VERIFY_SYSTEM = (
     "a time of day, part of day, or day of week that contradicts it (calling a "
     "morning \"nearly midnight\", a Thursday \"Monday\"), correct the claim to the "
     "actual time or drop it.\n"
+    "2c. User-history claims. If the draft asserts Ika's personal habits, patterns, "
+    "schedule, or records as fact (\"past your usual bedtime\", \"that's a record\", "
+    "\"you've been out later than this\") and those claims are NOT supported by the "
+    "SOURCE DATA or conversation history, soften them to questions (\"is this late "
+    "for you?\") or remove them. Unsupported biographical assertions about the user "
+    "are fabrications.\n"
+    "2d. Self-contradiction. If the draft contradicts something Mocha said earlier "
+    "in the conversation (e.g. \"you've been out later\" followed by \"that's a "
+    "record\"), remove the contradicting claim.\n"
     "3. Preserves her voice, tone, and wording wherever it's already correct. You "
     "are fixing errors, NOT rewriting her style or padding it out.\n"
     "Output ONLY the corrected reply text — no preamble, no tags, no quotes. If the "
@@ -847,8 +857,19 @@ async def verify_node(state: TurnState) -> dict:
                 time_line = S._current_time_message()["content"].split("\n")[0]
             except Exception:  # noqa: BLE001
                 time_line = "(unavailable)"
+            # Recent Mocha replies for self-contradiction detection (rule 2d).
+            recent_mocha: list[str] = []
+            for m in reversed(state.get("messages") or []):
+                if m.get("role") == "assistant":
+                    c = (m.get("content") or "").strip()
+                    if c:
+                        recent_mocha.append(c[:300])
+                    if len(recent_mocha) >= 4:
+                        break
+            recent_block = "\n---\n".join(reversed(recent_mocha)) if recent_mocha else "(first reply)"
             user_block = (
                 f"CURRENT TIME:\n{time_line}\n\n"
+                f"MOCHA'S RECENT REPLIES:\n{recent_block}\n\n"
                 f"USER MESSAGE:\n{(state.get('user_text') or '')[:600]}\n\n"
                 f"SOURCE DATA (tool results this turn):\n{source_block[:2400]}\n\n"
                 f"DRAFT REPLY:\n{draft}"

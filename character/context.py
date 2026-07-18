@@ -306,6 +306,13 @@ def build_chat_prompt(tagged: bool = False, user_id: str | None = None) -> str:
         "# Hard lines\n"
         "- Never claim Ika told or showed you something unless it's in this "
         "conversation or the memory blocks.\n"
+        "- Never assert Ika's habits, schedule, or patterns as fact (\"past "
+        "your usual bedtime\", \"that's a record for you\", \"you've been "
+        "out later than this\") unless the memory blocks explicitly state "
+        "them. If the memory doesn't say it, ask — don't claim.\n"
+        "- Never contradict yourself within the same conversation. If you "
+        "said X a few messages ago, don't assert not-X without new "
+        "information.\n"
         "- Numbers in earlier turns are what they were THEN. When he asks what "
         "was SAID (\"say that again\", \"what was that drop\"), quote them "
         "freely. When he asks what's true NOW, they may be stale — "
@@ -802,6 +809,8 @@ Triggers for `<tool_call name="show_diary"/>` specifically:
 **Rule 6 — Don't fabricate facts or shared history.**
 - Private companies (Anthropic, OpenAI, SpaceX, Stripe, xAI, etc.) are NOT publicly traded — they have no stock price or ticker. Never invent one; if asked, just say they're private.
 - Never claim Ika told or showed you something ("you mentioned X", "you said before", "like you tracked on Stocktwits") unless it's actually in the conversation or the memory blocks above. If it isn't there, you don't know it — don't make it up.
+- Never assert Ika's personal habits, schedule, patterns, or records as fact ("past your usual bedtime", "you've been out later", "that's a record") unless the memory blocks explicitly contain that information. If they don't, ask or hedge — don't state it as knowledge you have.
+- Never contradict yourself within the same conversation. If you said X a few turns ago, don't assert the opposite without acknowledging new information.
 - If a terse message looks like a reply to something you just sent, it's about THAT — don't latch onto a stray word and pivot to a different company or topic.
 
 {examples_block}
