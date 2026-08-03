@@ -1,0 +1,16 @@
+ProjectMocha GPU hold — created 2026-08-02 with the standalone split.
+
+This box (HomePCBlackwell) is running a training workload, so Mocha's GPU
+lanes stay down: project-mocha-vllm (fast local LLM :8893) is blocked by a
+systemd ConditionPathExists drop-in, and start.sh skips TTS (:8092).
+
+Mocha still RUNS while this flag exists: bridge + web + channels come up in
+text-only mode and every LLM turn rides the remote deep lane
+(https://llm.project-hello-mocha.com/v1, deepseek-v3) via llm.fallback_to_deep.
+
+Delete THIS file, then:
+  systemctl --user start project-mocha-vllm && systemctl --user restart project-mocha
+to restore the local fast lane + voice.
+
+(This replaces the old gate on the desk's "opus trading/var/DESK_GPU_RETIRED" —
+Mocha no longer reads desk flags. The desk manages its own GPU duty separately.)

@@ -1,27 +1,38 @@
 [Unit]
-Description=project mocha — dedicated LLM (Llama-3.2-3B-Instruct on vLLM, GPU)
+Description=ProjectMocha — dedicated fast LLM (Qwen3-8B-FP8 on vLLM, GPU)
 Documentation=https://github.com/LofiChptr6/ProjectParrot
-# Mocha's own small/fast model so she stops sharing opus's 32B (latency + a
-# friendlier voice + total inference isolation from the desk). Co-managed with
-# the desk; reuses opus's proven .venv-vllm (works on this Blackwell GPU).
+# Mocha's own fast model on this box (HomePCBlackwell) — total inference
+# isolation from everything else on the common path. Qwen3-8B-FP8 replaced
+# Llama-3.2-3B 2026-07-02 (the 3B was below the floor for persona-holding).
+# The vllm BINARY comes from the opus trading venv — shared box tooling (like
+# CUDA), not a project coupling; ProjectMocha's own venv doesn't carry the
+# multi-GB vllm stack. If that venv moves, update the two paths below.
+#
+# GPU hold: gated by the drop-in 99-gpu-hold.conf on
+# ConditionPathExists=!/home/tianyizhang/ProjectMocha/var/GPU_HOLD.
+# While held, the bridge serves all turns via the remote deep lane
+# (llm.fallback_to_deep) — delete the flag and start this unit for local fast.
 After=network-online.target
-PartOf=trading-desk.target
 
 [Service]
 Type=exec
-WorkingDirectory=/home/tianyizhang/opus trading
+WorkingDirectory=/home/tianyizhang/ProjectMocha
 # HF_TOKEN comes from Mocha's (gitignored) .env — keeps the token out of this unit.
-EnvironmentFile=/home/tianyizhang/opus trading/project_mocha/.env
-ExecStart=/bin/bash -c 'cd "/home/tianyizhang/opus trading" && exec .venv-vllm/bin/vllm serve unsloth/Llama-3.2-3B-Instruct \
+EnvironmentFile=/home/tianyizhang/ProjectMocha/.env
+Environment="PATH=/home/tianyizhang/opus trading/.venv/bin:/usr/local/bin:/usr/bin:/bin"
+ExecStart=/bin/bash -c 'exec "/home/tianyizhang/opus trading/.venv/bin/vllm" serve Qwen/Qwen3-8B-FP8 \
+    --quantization fp8 \
     --gpu-memory-utilization 0.13 \
-    --max-model-len 16384 \
+    --max-model-len 12288 \
+    --max-num-seqs 4 \
+    --enable-prefix-caching \
     --host 127.0.0.1 \
     --port 8893'
 Restart=on-failure
 RestartSec=15
 TimeoutStartSec=900
-StandardOutput=append:/home/tianyizhang/opus trading/project_mocha/logs/vllm-mocha.log
-StandardError=append:/home/tianyizhang/opus trading/project_mocha/logs/vllm-mocha.log
+StandardOutput=append:/home/tianyizhang/ProjectMocha/logs/vllm-mocha.log
+StandardError=append:/home/tianyizhang/ProjectMocha/logs/vllm-mocha.log
 
 [Install]
-WantedBy=trading-desk.target
+WantedBy=default.target

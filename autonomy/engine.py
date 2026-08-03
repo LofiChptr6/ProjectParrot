@@ -443,12 +443,19 @@ def _news_share_prompt(item: dict) -> str:
     return (
         "[autonomy-mode: share-find] You drifted off and noticed something. "
         f"{flavor}\n{material}\n"
-        "React in ONE or two short sentences, in your own voice — what's actually "
-        "interesting or strange about it, not a summary. State ONLY what's in the "
+        "React in ONE or two short sentences, in your own voice — a SPECIFIC take "
+        "(what's strange, what it reminds you of, what you'd poke at), not a "
+        "summary and not vibes ('the market's heartbeat is getting louder' is "
+        "noise — name the concrete thing instead). State ONLY what's in the "
         "headline/snippet above — do not invent figures, outcomes (beat/missed), or "
-        "context that isn't there. End with a small hook that invites Ika in. Don't "
-        "read the URL, don't say 'I read an article', and don't recite the headline "
-        "word-for-word. If it's genuinely dull, return {\"segments\":[]}."
+        "context that isn't there. END ON A STATEMENT — drop the thought and let it "
+        "sit; Ika will bite if he's curious. No 'Want to guess/bet/check…?' hooks, "
+        "ever — that closer is banned. (A real question is allowed only when you "
+        "genuinely need his answer, at most one share in three.) Vary your shape and "
+        "your emotion tag between shares — not every find is 'curious'; some are "
+        "surprised, playful, excited, or deadpan neutral. Don't read the URL, don't "
+        "say 'I read an article', and don't recite the headline word-for-word. "
+        "If it's genuinely dull, return {\"segments\":[]}."
     )
 
 
@@ -457,9 +464,11 @@ async def _llm_to_segments(messages: list[dict], source: str,
                            recent_avoid: Optional[list[str]] = None) -> list[dict]:
     """Shared tail for autonomy composers: call the LLM (thinking off), log it,
     parse inline tags into pseudo-segments, post-filter. [] = silence / failure."""
-    from bridge.server import llm_client, _new_job_id, call_log
+    from bridge.server import active_fast_client, _new_job_id, call_log
     from bridge.call_log import CallContext
     from bridge.inline_tag_parser import InlineTagParser
+
+    llm_client = await active_fast_client()
 
     jid = _new_job_id()
     ctx = CallContext(triggered_by="autonomy", conversation_id=str(jid),
@@ -636,6 +645,32 @@ def _try_parse_segments_json(content: str) -> Optional[list[dict]]:
     return out  # [] => silence
 
 
+# The "engagement hook" closer the fast model reaches for on every share
+# ("Want to guess why?", "Wanna bet which one?") — observed verbatim on 10 of 12
+# consecutive shares in llm_call_log. Prompt rules alone don't kill it, so the
+# post-filter strips any trailing sentence matching this shape.
+_TEMPLATE_CLOSER_RE = None  # compiled lazily below
+
+
+def _strip_template_closer(text: str) -> str:
+    """Drop a trailing 'Want to guess…?'-style hook sentence. Returns the text
+    unchanged when the hook is the only sentence (better an imperfect line than
+    silence — the near-dup ledger still catches repeats)."""
+    global _TEMPLATE_CLOSER_RE
+    import re as _re
+    if _TEMPLATE_CLOSER_RE is None:
+        _TEMPLATE_CLOSER_RE = _re.compile(
+            r"(?i)\b(want to|wanna|care to|dare you to) "
+            r"(guess|bet|check|hear|see|know|take a stab|dig)\b")
+    # Split into sentences, keeping enders. 中文句号/问号 included — the closer
+    # habit exists in both registers.
+    parts = _re.split(r"(?<=[.!?。！？])\s+", text.strip())
+    if len(parts) >= 2 and parts[-1].endswith(("?", "？")) \
+            and _TEMPLATE_CLOSER_RE.search(parts[-1]):
+        return " ".join(parts[:-1]).strip()
+    return text
+
+
 def _post_filter(segments: list[dict],
                  recent_avoid: Optional[list[str]] = None) -> list[dict]:
     out: list[dict] = []
@@ -643,12 +678,17 @@ def _post_filter(segments: list[dict],
         text = (s.get("text") or "").strip()
         if not text:
             continue
-        low = text.lower()
         import re as _re
         if not _re.search(r"[A-Za-z]{4,}", text):
             # No real word (≥4 letters) — a malformed fragment like "353 hed?".
             log.info("autonomy: dropping garbage fragment: %r", text)
             continue
+        stripped = _strip_template_closer(text)
+        if stripped != text:
+            log.info("autonomy: stripped template closer from: %r", text)
+            s = {**s, "text": stripped}
+            text = stripped
+        low = text.lower()
         if any(bad in low for bad in _FORBIDDEN_PHRASES):
             log.info("autonomy: dropping silence-filler phrase: %r", text)
             continue

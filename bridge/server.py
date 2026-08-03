@@ -122,6 +122,27 @@ config["llm_url"] = llm_client._base_url.rsplit("/v1", 1)[0]
 _deep_cfg = {**llm_config, **(llm_config.get("deep") or {})}
 llm_deep = (LLMClient(_deep_cfg)
             if (llm_config.get("deep") or {}).get("base_url") else llm_client)
+
+# Fast→deep fallback (config llm.fallback_to_deep): when the local fast lane is
+# down — e.g. the box's GPU is held by a training run and :8893 never came up —
+# serve fast/background passes on the deep remote endpoint instead of failing.
+LLM_FALLBACK_TO_DEEP = (bool(llm_config.get("fallback_to_deep"))
+                        and llm_deep is not llm_client)
+
+
+async def active_fast_client() -> LLMClient:
+    """The client for fast/cheap passes (chat first pass, interpret, stall
+    rephrase, diary, autonomy composer): the local fast lane when healthy,
+    else the deep remote when fallback is enabled. TTL-cached health probe —
+    effectively free when the local vLLM is up."""
+    if LLM_FALLBACK_TO_DEEP:
+        try:
+            down = llm_client.circuit_open or not await llm_client.healthy_cached()
+        except AttributeError:
+            down = False  # test doubles / partial clients: treat as healthy
+        if down:
+            return llm_deep
+    return llm_client
 _routing_cfg = llm_config.get("routing", {}) or {}
 _ROUTE_KEYWORDS = [k.lower() for k in _routing_cfg.get("keywords", [])]
 _TICKER_RE = re.compile(r"\$[A-Za-z]{1,5}\b")  # $NVDA-style cashtags only
@@ -1817,17 +1838,52 @@ async def _broadcast_debug_state(phase: str, **extra):
 #  Service calls
 # ---------------------------------------------------------------------------
 
+# Novelty gate for retrieved memories (2026-08-02): a fact Mocha just leaned on
+# is "spent" for a while — surfacing the same fragment turn after turn is what
+# made her recite his own history back at him. Keyed per user, TTL-purged,
+# reset on restart (fine: the annoyance is within-session repetition).
+_SURFACED_MEM: dict[str, dict[str, float]] = defaultdict(dict)
+_MEM_SURFACE_TTL_S = 6 * 3600.0
+_MEM_SURFACE_MAX = 200
+
+
+def _mem_novelty_key(m: dict) -> str:
+    import hashlib
+    return hashlib.sha1((m.get("text") or "").strip().lower().encode("utf-8")).hexdigest()[:16]
+
+
 async def _query_memories(text: str, user_id: str | None = None) -> list[dict]:
     """Semantic memory search via in-process mem0 store. Real turns all read from
-    the single Ika namespace; eval/test turns keep their own isolated partition."""
+    the single Ika namespace; eval/test turns keep their own isolated partition.
+
+    Applies the novelty gate: fragments surfaced within the TTL are dropped
+    (back-filled only if that leaves fewer than 2), and whatever is returned is
+    recorded as surfaced. Fetches extra headroom so filtering rarely starves."""
     if not EVAL_ISOLATION.get():
         user_id = IKA_USER_ID
     try:
         from memory import mem0_store
-        return await mem0_store.search(text, user_id=user_id, k=5)
+        hits = await mem0_store.search(text, user_id=user_id, k=10)
     except Exception as e:
         log.warning(f"Memory query failed: {e}")
-    return []
+        return []
+    if not hits:
+        return []
+    seen = _SURFACED_MEM[user_id or IKA_USER_ID]
+    now = time.monotonic()
+    for k_, ts_ in list(seen.items()):
+        if now - ts_ > _MEM_SURFACE_TTL_S:
+            del seen[k_]
+    fresh = [m for m in hits if _mem_novelty_key(m) not in seen]
+    out = fresh[:5]
+    if len(out) < 2:   # everything relevant was recently used — allow the best back in
+        spent = [m for m in hits if m not in fresh]
+        out = (out + spent)[:2]
+    while len(seen) > _MEM_SURFACE_MAX:
+        seen.pop(next(iter(seen)))
+    for m in out:
+        seen[_mem_novelty_key(m)] = now
+    return out
 
 
 async def _store_memory(text: str, role: str, source: str | None = None,

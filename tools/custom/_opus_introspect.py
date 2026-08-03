@@ -17,9 +17,7 @@ from pathlib import Path
 
 log = logging.getLogger("tools.custom._opus_introspect")
 
-OPUS_DIR = Path(__file__).resolve().parents[3]  # project_mocha/tools/custom -> opus trading root
-assert (OPUS_DIR / "mcp_server.py").exists(), f"opus root not found at {OPUS_DIR}"
-OPUS_PY = OPUS_DIR / ".venv" / "bin" / "python"
+from tools.custom._opus_proxy import OPUS_DIR, OPUS_PY  # single source of desk-root truth
 DISCOVER_TIMEOUT_SEC = 15.0
 
 # Read-only personal-trading tools we expose to Mocha. Opus has 60+ tools
@@ -64,12 +62,19 @@ EXPOSED_TOOLS: set[str] = {
     "get_agent_list",         # configured agents + allocation + enabled status
     "get_market_status",      # NYSE hours: is_open, session bounds, next_open
     "get_kill_switch_status", # is the desk trading or halted (status only)
-    # Shared knowledge graph (read-only, 2026-06-16) — cited entity
-    # relationships. interpret_node consults kg_query to ground "is AMZN up
-    # because of Anthropic?"-style questions instead of confabulating. Both
-    # return plain JSON, so the generic _opus_proxy path serves them.
-    "kg_query",               # relationships of an entity / between two entities
+    # Shared knowledge graph (read-only) — cited entity relationships.
+    # interpret_node consults kg_neighbors to ground "is AMZN up because of
+    # Anthropic?"-style questions instead of confabulating. (kg_query and
+    # kg_raise_gap were deleted desk-side 2026-07-20; kg_neighbors is the
+    # surviving read surface.)
     "kg_neighbors",           # 1-hop neighborhood of an entity
+    # Market + news read-outs (added 2026-08-02 with the standalone split —
+    # assistant-role awareness; all read-only, all plain JSON).
+    "get_quote",              # live quote for a symbol
+    "get_bars",               # OHLCV bars for a symbol
+    "get_recent_news",        # latest ingested market news
+    "semantic_news_recall",   # semantic search over the news store
+    "get_ticker_dossier",     # one-stop dossier for any ticker (not just held)
 }
 
 # ── Runtime proxy allowlist (PRIME DIRECTIVE enforcement) ────────────────────
@@ -86,13 +91,10 @@ _RAW_READ_EXTRA: frozenset[str] = frozenset({
     "get_ticker_valuation",   # Damodaran/Sonnet report → summarize_valuation()
 })
 
-# The ONE sanctioned Mocha→desk WRITE: an append-only research-backlog row in
-# kg_gap (never an edge/entity/order/accounting row). It is deliberately NOT in
-# EXPOSED_TOOLS — the LLM cannot *choose* to call it; only interpret_node's
-# deterministic gap detection invokes it via call_opus(). See mcp_tools/knowledge.py.
-WRITE_ALLOWLIST: frozenset[str] = frozenset({
-    "kg_raise_gap",
-})
+# Mocha→desk writes: NONE. The historical exception (kg_raise_gap, an
+# append-only research-backlog row) was deleted desk-side 2026-07-20, so since
+# the 2026-08-02 standalone split the proxy boundary is fully read-only.
+WRITE_ALLOWLIST: frozenset[str] = frozenset()
 
 # The complete set of opus tools either proxy may dispatch. Default-deny:
 # anything not here (place_order, set_kill_switch, …) is refused at the proxy.
@@ -101,7 +103,7 @@ ALLOWED_PROXY_TOOLS: frozenset[str] = EXPOSED_TOOLS | _RAW_READ_EXTRA | WRITE_AL
 
 def is_tool_allowed(tool: str) -> bool:
     """Runtime gate for the subprocess proxies. True iff `tool` is an
-    explicitly-allowlisted read tool or the one sanctioned append-only write."""
+    explicitly-allowlisted read-only tool."""
     return tool in ALLOWED_PROXY_TOOLS
 
 

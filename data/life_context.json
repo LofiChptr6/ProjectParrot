@@ -1,0 +1,19 @@
+{
+  "updated": "2026-08-02T20:00:00+00:00",
+  "threads": [
+    {
+      "id": "gpu-training",
+      "title": "training run on the home box",
+      "status": "active",
+      "note": "GPU held since 07-30; Mocha voice + local fast LLM paused, running text-only via the sparks gateway",
+      "updated": "2026-08-02T20:00:00+00:00"
+    },
+    {
+      "id": "desk-scorer-data",
+      "title": "desk valuation scorer data",
+      "status": "waiting",
+      "note": "first scorer data expected ~08-21",
+      "updated": "2026-08-02T20:00:00+00:00"
+    }
+  ]
+}

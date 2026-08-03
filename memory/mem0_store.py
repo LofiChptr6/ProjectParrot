@@ -44,6 +44,16 @@ def _load_config() -> dict:
         return yaml.safe_load(f) or {}
 
 
+def _lane_reachable(base_url: str, timeout_s: float = 2.0) -> bool:
+    """Sync one-shot reachability probe (singleton build happens off-loop)."""
+    try:
+        import httpx
+        root = base_url.rstrip("/").rsplit("/v1", 1)[0]
+        return httpx.get(f"{root}/health", timeout=timeout_s).status_code == 200
+    except Exception:
+        return False
+
+
 def _build_mem0_config() -> dict:
     cfg_all = _load_config()
     mem_cfg = cfg_all.get("memory", {}) or {}
@@ -56,13 +66,31 @@ def _build_mem0_config() -> dict:
 
     # vLLM is OpenAI-API-compatible; mem0 uses the openai provider against any
     # base_url. Low temp/ceiling so fact-extraction is deterministic + cheap.
+    #
+    # Lane resolution (2026-08-02): prefer the local fast lane; when it's down
+    # (GPU held by a training run) and llm.fallback_to_deep is on, extract via
+    # the deep remote endpoint instead — otherwise every memory add would fail
+    # silently until restart. Resolved ONCE at singleton build; a lane change
+    # needs a bridge restart, which matches how the GPU flag is operated.
+    model = llm_cfg.get("model", "Qwen/Qwen3-32B")
+    base_url = llm_cfg.get("base_url", "http://127.0.0.1:8800/v1")
+    api_key = os.environ.get("VLLM_API_KEY", "EMPTY")
+    deep_cfg = llm_cfg.get("deep") or {}
+    if llm_cfg.get("fallback_to_deep") and deep_cfg.get("base_url"):
+        if not _lane_reachable(base_url):
+            model = deep_cfg.get("model", model)
+            base_url = deep_cfg["base_url"]
+            if deep_cfg.get("api_key_env"):
+                api_key = os.environ.get(str(deep_cfg["api_key_env"]), api_key)
+            log.warning("mem0: fast lane unreachable — fact extraction via %s (%s)",
+                        base_url, model)
     return {
         "llm": {
             "provider": "openai",
             "config": {
-                "model": llm_cfg.get("model", "Qwen/Qwen3-32B"),
-                "openai_base_url": llm_cfg.get("base_url", "http://127.0.0.1:8800/v1"),
-                "api_key": os.environ.get("VLLM_API_KEY", "EMPTY"),
+                "model": model,
+                "openai_base_url": base_url,
+                "api_key": api_key,
                 "temperature": 0.2,
                 "max_tokens": 1024,
             },

@@ -60,27 +60,41 @@ llm:
     breaker_fail_threshold: 4 # still fail fast if the 3B hangs
     breaker_cooldown_s: 15
   # ── Model routing ──────────────────────────────────────────────────────────
-  # Deep model for reasoning/tool-heavy turns — opus's SHARED Qwen-32B (:8000).
-  # The isolation guard above protects this shared path too. Remove this block
-  # to disable routing (everything stays on the fast 3B).
+  # Deep/THINKING model for reasoning/tool-heavy turns — deepseek-v3 on the
+  # sparks-cluster gateway (Cloudflare tunnel spark-llm), 2026-08-02. This
+  # replaced opus trading's shared local Qwen-32B (:8000, retired with the desk
+  # GPU 2026-07-30) and fully decouples Mocha's inference from the desk box.
+  # Remove this block to disable routing (everything stays on the fast 8B).
   deep:
-    base_url: http://127.0.0.1:8000/v1
-    model: Qwen/Qwen3-32B-FP8
+    base_url: https://llm.project-hello-mocha.com/v1
+    model: deepseek-v3
+    # Secret stays in .env — llm_client resolves this env var into the
+    # Authorization: Bearer header (never put the key in this tracked file).
+    api_key_env: SPARK_LLM_API_KEY
     # Disable the fast client's repetition penalty here — tool synthesis must
     # be free to restate exact numbers from results (0/absent → omitted).
     repetition_penalty: 0
-    # Bigger budget than the 3B's 2048: Qwen *thinks* (a <think> block) before
-    # answering, and on a hard/escalated reasoning turn 2048 truncates mid-thought
-    # → no answer reaches TTS (the empty-fallback fires). 4096 lets think+answer fit.
-    max_tokens: 4096
-    # STRICT guard — this path hits the SHARED trading vLLM, so bound Mocha's
-    # load so a Mocha bug can never starve the desk (the prime directive).
+    # The gateway serves DeepSeek-V3-AWQ with a 16384-token context window and
+    # no <think> block (non-reasoning chat model) — 3072 output is ample and
+    # leaves ~13k for prompt (system + memories + 22-turn history).
+    max_tokens: 3072
+    # Remote gateway: cold starts and busy generation slots are real (observed
+    # Cloudflare 524 at ~100s when the cluster is saturated). Fail fast enough
+    # that a turn degrades to the fast lane instead of hanging the bridge.
+    request_timeout_s: 180
+    # Bound Mocha's load on the SHARED sparks gateway (the trading desk's LLM
+    # lanes route there too since 2026-07-30) — a Mocha bug must never starve
+    # desk inference. Same prime directive, new choke point.
     isolation:
-      max_concurrency: 1
+      max_concurrency: 2
       rate_limit_per_min: 30
       burst: 8
-      breaker_fail_threshold: 4
-      breaker_cooldown_s: 20
+      breaker_fail_threshold: 3
+      breaker_cooldown_s: 30
+  # When the fast lane's circuit breaker is open (e.g. the local GPU is held by
+  # a training run and :8893 is down), route fast turns through the deep remote
+  # endpoint instead of failing the turn. Latency degrades; Mocha stays alive.
+  fallback_to_deep: true
   # Heuristic router (no extra LLM call → no TTFT cost): default to the fast 3B;
   # escalate to deep on these signals. Tool turns also auto-escalate (synthesis).
   routing:
@@ -324,10 +338,17 @@ tools:
     - get_kill_switch_status
     # Shared knowledge graph (read-only) — cited entity relationships
     # (e.g. AMZN —invested_in→ Anthropic). interpret_node also consults
-    # kg_query directly; exposing them lets the LLM query relationships too.
-    - kg_query
+    # kg_neighbors directly; exposing it lets the LLM query relationships too.
+    # (kg_query was deleted desk-side 2026-07-20.)
     - kg_neighbors
-  working_dir: /home/tianyizhang/opus trading/project_mocha
+    # Market + news read-outs (added 2026-08-02 with the standalone split).
+    - get_quote
+    - get_bars
+    - get_recent_news
+    - semantic_news_recall
+    - get_ticker_dossier
+  # working_dir intentionally unset — defaults to this repo's root (tools/
+  # registry.py falls back to ROOT), so the project can move without edits.
   max_rounds: 5
   timeout: 120  # generous: a tool round may need time for multi-step data fetches
 

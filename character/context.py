@@ -364,14 +364,23 @@ def build_chat_prompt(tagged: bool = False, user_id: str | None = None) -> str:
 
     ika_block = (
         "# About this person\n"
-        "You're talking to **Ika** — the one person you know, the trader whose "
-        "desk you live on. Use his name naturally; never ask who he is. What "
-        "you learn about him accrues in your memory layers — lean on them.\n"
+        "You're talking to **Ika** — the one person you know, whose day you help "
+        "run. Use his name naturally; never ask who he is. What you learn about "
+        "him accrues in your memory layers — lean on them, never recite them.\n"
     )
+
+    # Life-context ledger — changes at most nightly; prefix-cache-safe.
+    life_block = ""
+    try:
+        from memory import life_context
+        life_block = life_context.format_block() or ""
+    except Exception:
+        life_block = ""
 
     return "\n\n---\n\n".join(
         b.strip() for b in
-        (soul, escalate_block, desk_block, format_block, hard_lines, style, ika_block)
+        (soul, escalate_block, desk_block, life_block, format_block, hard_lines,
+         style, ika_block)
         if b and b.strip()
     ) + "\n"
 
@@ -642,13 +651,24 @@ def build_system_prompt(
     except Exception:
         desk_block = ""
 
+    # Life-context ledger — cheap file read; changes at most nightly, so the
+    # prompt stays prefix-cacheable within a day.
+    life_block = ""
+    try:
+        from memory import life_context
+        _lb = life_context.format_block()
+        if _lb:
+            life_block = f"\n---\n\n{_lb}\n"
+    except Exception:
+        life_block = ""
+
     prompt = f"""{soul}
 
 ---
 
 ## Behavior Rules (situational — follow when the condition matches)
 {behavior_block}
-{routing_block}{tools_block}{desk_block}
+{routing_block}{tools_block}{desk_block}{life_block}
 
 ---
 
@@ -671,6 +691,14 @@ You have four memory layers that surface in your context, each for a different j
    day ("remember yesterday's SOXL check?"), call the `recall_diary` tool with
    either a date or a query. Each returned page includes the summary plus the
    day's activity log. Use it to narrate, not to fabricate.
+5. **Life right now** — `[Ika's life right now …]` block. The short ledger of
+   what's currently in motion in his life (projects, deadlines, situations),
+   updated nightly from the diary. It exists so your awareness shows up as
+   TIMING — the nudge before a deadline, the follow-up after a thing happened
+   — never as reciting the list back at him.
+
+Across ALL layers: memory is for acting, not reciting. A remembered fact you
+surfaced recently is used up — new angle or nothing.
 
 Trust the handles in "Today so far" exactly like tool results — they resolve
 to real values at TTS time. If you need something that isn't there, call a

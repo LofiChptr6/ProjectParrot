@@ -1,216 +1,123 @@
-# project mocha — Claude Code Instructions
+# ProjectMocha — Claude Code Instructions
 
-project mocha is a real-time conversational AI character (3D VRM + voice +
-emotions + gestures), co-located inside the **opus trading** desk (ProjectCorvus)
-as a morale companion. It is a single agent — **Mocha**. (The former Nori
-research sub-agent, Shiro coaching meta-agent, and Hana design critic were
-removed; Mocha now calls data/UI tools directly.)
+Mocha is a real-time personal AI companion (3D VRM + voice + emotions +
+gestures) whose job is running Ika's day: reminders, lookups, briefings, desk
+read-outs, and knowing what's currently in motion in his life. Single agent —
+**Mocha**. Warm, playful, direct; no affection scores, no relationship meters.
+
+**STANDALONE since 2026-08-02** — split out of the opus trading tree. This repo
+lives at `~/ProjectMocha` (own git repo, remote `LofiChptr6/ProjectParrot`).
+The trading desk stays at `~/opus trading` and is reached read-only over MCP.
 
 ## Where it lives & how it runs
 
-- **Location**: `opus trading/project_mocha/` — its own subtree + git repo,
-  ignored by Corvus's `.gitignore` (never embedded as a submodule).
-- **Services** (own processes via `./start.sh all`): bridge `:8090`, STT `:8091`,
-  TTS `:8092`, web `:8080`. (Remapped off 8000–8002, which opus trading owns.)
-- **LLM** (dual-model): Mocha runs her **own** dedicated fast vLLM
-  (`Qwen/Qwen3-8B-FP8` at `:8893/v1`, `project-mocha-vllm.service`) as the
-  fast/primary model, and routes only deep/tool-heavy turns to opus trading's
-  SHARED `Qwen/Qwen3-32B-FP8` at `:8000/v1`. Her own `:8893` gives her total
-  inference isolation from the desk on the common path; a rate-limit +
-  circuit-breaker in `bridge/llm_client.py` still bounds the shared `:8000`
-  deep path so a Mocha bug can never starve Corvus's trading inference (the
-  prime directive: **Mocha must never impact Corvus**).
-- **Front door**: Mocha's own web app (`:8080`) is her front door. The desk
-  dashboard no longer embeds her landing/gadget (`render_mocha_landing` /
-  `_mocha_alive` were removed 2026-07-01); her `:8080/gadget` route still
-  exists as a stable embed URL but is no longer pulled in by the desk. The
-  dashboard never imports Mocha code.
+- **Services** (`./start.sh all`, or `systemctl --user start project-mocha`):
+  bridge `:8090`, TTS `:8092`, web `:8080` (STT `:8091` disabled — text input).
+- **GPU hold**: when `var/GPU_HOLD` exists (box GPU reserved, e.g. a training
+  run), `start.sh` skips TTS and `project-mocha-vllm` is condition-blocked —
+  Mocha runs **text-only** with all LLM turns on the remote deep lane. Delete
+  the flag + restart to restore voice + local fast lane.
+- **LLM lanes** (config.yaml `llm:`):
+  - **Fast**: her own vLLM `Qwen/Qwen3-8B-FP8` at `127.0.0.1:8893/v1`
+    (`project-mocha-vllm.service`, user unit, this box = HomePCBlackwell).
+  - **Deep/thinking**: `deepseek-v3` at `https://llm.project-hello-mocha.com/v1`
+    (sparks-cluster gateway behind Cloudflare tunnel `spark-llm`; bearer key
+    from `.env` `SPARK_LLM_API_KEY` via `api_key_env`). 16k context — mind
+    prompt budget on deep turns.
+  - **Fallback**: `llm.fallback_to_deep: true` — when the fast lane is down
+    (breaker open / health probe fails), fast turns, interpret, stall-rephrase,
+    diary, autonomy, and mem0 extraction all ride the deep remote instead.
+- **Desk access**: `tools/custom/_opus_proxy.py` spawns one-shot subprocesses
+  in the desk's venv (`DESK_ROOT` env override; default
+  `/home/tianyizhang/opus trading`). **Fully read-only** — allowlist gate
+  `is_tool_allowed()` in `_opus_introspect.py`; `WRITE_ALLOWLIST` is empty
+  (kg_raise_gap was deleted desk-side 2026-07-20). Mocha degrades gracefully
+  if the desk is missing.
+- **Front door**: web app `:8080`; public via cloudflared at
+  `project-hello-mocha.com` / `mocha.project-hello-mocha.com`.
+- **.env**: real file (no longer a symlink to `~/envs/.env`) — Mocha's own
+  secrets + the spark gateway key. Never commit it.
 
 ## Orchestration — LangGraph (bridge/graph.py)
 
-Mocha's conversational loop is a LangGraph `StateGraph` (replaced the old
-hand-rolled ReAct loop):
-
-    build_messages → llm_pass → log_pass → {run_tools ⇄ llm_pass | finalize} → END
+    router → interpret → build_messages → llm_pass → log_pass
+        → {run_tools ⇄ llm_pass | escalate → llm_pass | verify} → finalize → END
 
 - State: `bridge/graph_state.py` (`TurnState`).
-- The streaming LLM call + inline-tag parser stay inside `llm_pass`; per-turn UI
-  events are pushed to an `asyncio.Queue` and relayed by the thin wrapper
-  `bridge/server.py:_run_inline_turn` (its event contract is unchanged, so all
-  callers — `/chat/stream`, `/admin/eval`, `/channel`, `/voice`, `/ws` live —
-  are untouched). Tools are still inline `<tool_call>` tags, not function-calling.
+- Routing: heuristic `_route_model` (keywords/cashtags/held tickers/length) →
+  fast or deep; fast model can emit `<escalate/>`; any tool run forces deep
+  synthesis. `llm_pass_node` also falls back fast→deep when the local lane is
+  down (`state["fast_fell_back"]`).
+- Tools are inline `<tool_call>` tags (not function-calling), executed in
+  `run_tools_node`; `interpret_node` grounds two-entity questions via
+  `kg_neighbors` (`_kg_consult` scans the 1-hop edges for the counterpart).
+- Per-turn UI events flow through an `asyncio.Queue` relayed by
+  `bridge/server.py:_run_inline_turn` — its event contract must not change.
 
-## Tool & Panel Protocol
+## Memory layers (5)
 
-When building a tool that surfaces data through Mocha's UI, follow **`docs/tool-protocol.md`**. It defines:
-- The `ui_command` message envelope and all supported panel types (`create_presentation`, `show_card`, `show_weather`, `show_notification`, `show_diary`)
-- Internal tool pattern (direct `_broadcast_clients` call)
-- External / MCP tool pattern (`__panel__` JSON envelope — for tools outside this repo, e.g. opus trading)
-- Step-by-step guide for adding a new panel type
+1. **Short-term** — last 22 turns in RAM (`memory.short_term_limit`).
+2. **mem0 facts** — Chroma + SQLite under `memory/`; retrieval via
+   `server._query_memories`, which applies the **novelty gate**: a fragment
+   surfaced in the last ~6h is spent (dropped unless results starve). This is
+   the structural fix for "she recites my own history back at me".
+3. **Diary** — `data/diary/YYYY-MM-DD.json` + Chroma index; drafted through
+   the day, finalized at local midnight.
+4. **Session scratchpad** — RAM deque of tool calls (handles stay live).
+5. **Life context** — `memory/life_context.py` + `data/life_context.json`:
+   ledger of ongoing THREADS in Ika's life (projects, deadlines, situations),
+   merged nightly from the finalized diary page (deep lane), injected into
+   both prompts as `[Ika's life right now …]`. Awareness = timing + follow-ups,
+   never recitation.
 
-## PostgreSQL Connection
+## Anti-repetition (multi-layer, load-bearing)
 
-Every LLM call is logged to PostgreSQL for offline analysis.
+- `character/soul.md` + `chat_style.md`: memory is for acting, not reciting;
+  no reused phrasings; unprompted shares END ON A STATEMENT; "Want to
+  guess…?"-style hooks are banned.
+- `autonomy/engine.py`: 12-utterance ledger + `_is_near_dup` Jaccard filter +
+  `_strip_template_closer` (deterministically removes trailing
+  want-to-guess/bet/check hook sentences — see tests/test_autonomy_closers.py).
+- vLLM `repetition_penalty: 1.08` on the fast lane only (deep must restate
+  exact numbers).
+- mem0 novelty gate (above).
 
-- **DSN**: `postgresql://mocha:5369@127.0.0.1:5432/mocha`
-- **Table**: `llm_call_log`
+## PostgreSQL
 
-### Table Schema
+Every LLM call logs to `postgresql://mocha:5369@127.0.0.1:5432/mocha`, table
+`llm_call_log` (same schema as before the split — `triggered_by`, `messages`
+JSONB, `response_content`, latency/ttft/token columns). Useful queries live in
+git history and reporting docs; the quick one:
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | BIGSERIAL | Auto-increment PK |
-| `call_id` | UUID | Unique call identifier |
-| `created_at` | TIMESTAMPTZ | When the call was made |
-| `triggered_by` | TEXT | Who triggered: `channel`, `chat_stream`, `voice`, `ws_unity`, `tool_loop`, `tool_round`, `repair`, `cache_warm` |
-| `source` | TEXT | Channel source: `telegram`, `discord`, `cli`, `web`, `agent_loop` |
-| `user_id` | TEXT | User identifier |
-| `conversation_id` | TEXT | Groups all LLM calls in one user turn |
-| `pass_number` | SMALLINT | 1=routing pass, 2=full-context pass (complexity routing) |
-| `tool_round` | SMALLINT | Tool loop iteration (1-based) |
-| `model` | TEXT | Model name (e.g., `Qwen/Qwen3-32B`) |
-| `temperature` | REAL | Sampling temperature |
-| `max_tokens` | INTEGER | Max output tokens |
-| `stream` | BOOLEAN | Whether streaming was used |
-| `enable_thinking` | BOOLEAN | Qwen3 thinking mode |
-| `tools_provided` | BOOLEAN | Whether tool schemas were sent |
-| `messages` | JSONB | **Full message array sent to LLM** (system prompt + memories + history + user message) |
-| `message_count` | INTEGER | Number of messages in array |
-| `response_content` | TEXT | **Full raw LLM response** |
-| `response_tool_calls` | JSONB | Tool calls requested by LLM |
-| `finish_reason` | TEXT | `stop`, `tool_calls`, `length` |
-| `error` | TEXT | Error message if call failed |
-| `latency_ms` | REAL | Total wall-clock time |
-| `ttft_ms` | REAL | Time to first token (streaming only) |
-| `prompt_tokens` | INTEGER | Input token count |
-| `completion_tokens` | INTEGER | Output token count |
-| `total_tokens` | INTEGER | Total token count |
-
-## Useful SQL Queries
-
-### Recent conversations (last 2 hours, human-readable)
 ```sql
-SELECT created_at, triggered_by, source,
-       messages->-1->>'content' AS user_message,
-       LEFT(response_content, 300) AS response_preview,
-       latency_ms, prompt_tokens, completion_tokens
-FROM llm_call_log
-WHERE triggered_by NOT IN ('cache_warm', 'warmup', 'repair')
-  AND created_at > now() - interval '2 hours'
-ORDER BY created_at DESC;
+SELECT created_at, triggered_by, LEFT(response_content, 200), latency_ms
+FROM llm_call_log WHERE triggered_by NOT IN ('cache_warm','repair')
+ORDER BY created_at DESC LIMIT 20;
 ```
 
-### Full conversation reconstruction (by conversation_id)
-```sql
-SELECT id, created_at, triggered_by, pass_number, tool_round,
-       messages, response_content, response_tool_calls, finish_reason
-FROM llm_call_log
-WHERE conversation_id = 'CONVERSATION_ID_HERE'
-ORDER BY id;
-```
-
-### Performance overview
-```sql
-SELECT triggered_by,
-       COUNT(*) AS calls,
-       ROUND(AVG(latency_ms)) AS avg_latency_ms,
-       ROUND(AVG(prompt_tokens)) AS avg_prompt_tok,
-       ROUND(AVG(completion_tokens)) AS avg_comp_tok
-FROM llm_call_log
-WHERE created_at > now() - interval '24 hours'
-GROUP BY triggered_by
-ORDER BY calls DESC;
-```
-
-### Find user corrections / dissatisfaction
-```sql
-SELECT a.conversation_id, a.response_content AS mocha_said,
-       b.messages->-1->>'content' AS user_followup
-FROM llm_call_log a
-JOIN llm_call_log b ON b.created_at > a.created_at
-  AND b.created_at < a.created_at + interval '5 minutes'
-  AND b.triggered_by NOT IN ('cache_warm', 'repair')
-WHERE a.triggered_by NOT IN ('cache_warm', 'repair')
-  AND (b.messages->-1->>'content' ILIKE '%no,%'
-    OR b.messages->-1->>'content' ILIKE '%wrong%'
-    OR b.messages->-1->>'content' ILIKE '%not what%'
-    OR b.messages->-1->>'content' ILIKE '%I meant%')
-ORDER BY a.created_at DESC
-LIMIT 20;
-```
-
-## Key Files
+## Key files
 
 | Purpose | Path |
 |---------|------|
-| Mocha's personality | `character/soul.md` |
-| Behavior rules | `character/behaviors.yaml` |
-| Emotion definitions | `character/emotions.yaml` |
-| System prompt builder | `character/context.py` |
-| Bridge server (HTTP/WS + turn wrapper) | `bridge/server.py` |
-| **Conversational graph (LangGraph)** | `bridge/graph.py` |
-| **Graph state** | `bridge/graph_state.py` |
-| LLM client (+ shared-vLLM isolation guard) | `bridge/llm_client.py` |
-| PG call logger | `bridge/call_log.py` |
-| Tool schemas | `tools/registry.py` |
-| Tool execution | `tools/executor.py` |
-| Custom tools dir | `tools/custom/` |
-| opus trading proxies (read-only) | `tools/custom/_opus_proxy.py`, `_opus_introspect.py`, `get_trading_briefing.py` |
-| Animation functions | `character/animation_functions.csv` |
-| VRM animation controller | `web/static/js/animation-controller.js` |
+| Personality | `character/soul.md` (re-read every call — edits are live) |
+| Reply contract | `character/chat_style.md` |
+| Prompt builders | `character/context.py` (`build_chat_prompt` fast / `build_system_prompt` deep) |
+| Conversational graph | `bridge/graph.py` |
+| LLM client (+ breaker, health, api_key_env) | `bridge/llm_client.py` |
+| Fast→deep fallback helper | `bridge/server.py:active_fast_client` |
+| Life-context ledger | `memory/life_context.py` |
+| Desk proxy (read-only) | `tools/custom/_opus_proxy.py`, `_opus_introspect.py` |
+| Autonomy engine + composers | `autonomy/engine.py` |
+| Systemd units (repo copies) | `scripts/systemd/*.service` (installed at `~/.config/systemd/user/`) |
 | Central config | `config.yaml` |
-
-## Animation / Body Language
-
-The character's body language is driven by a clip-based animation system. The LLM
-picks a gesture by name (e.g. `speak_pointing`, `wave`, `dance_loop`); the web
-app's animation controller plays the corresponding pre-converted FBX clip via
-per-bone quaternion retargeting to VRM.
-
-- **Clip roster:** `character/animation_functions.csv` — 76 functions, each
-  flagged looping or oneshot, with Start/Loop/End phase clips for stateful
-  gestures (dance_loop, sing, seiza, etc.).
-- **Controller:** `web/static/js/animation-controller.js` — state machine
-  (IDLE → STARTING → LOOPING → ENDING → IDLE for loopable; IDLE → PLAYING_ONCE
-  → IDLE for oneshot). 250 ms crossfade between clips. Random idle fidget every
-  8–15 s.
-- **Default idle:** `idle_breathe` (looped).
-- **Lip-sync:** handled by `stt/viseme_map.py` — phoneme timestamps from the
-  STT `/align` endpoint map to 5-channel viseme weights (aa, ih, ou, ee, oh)
-  and drive VRM mouth blendshapes client-side.
 
 ## Conventions
 
-- `character/soul.md` and `character/behaviors.yaml` are re-read on every LLM call — changes take effect immediately, no restart needed.
-- Tool definitions follow OpenAI function-calling schema format.
-- Custom tools in `tools/custom/` must export `TOOL_DEF` (dict) and `async def execute(args: dict) -> str`.
-- Hot-reload custom tools: call `POST http://127.0.0.1:8090/admin/reload-tools` or import and call `tools.registry.reload_custom_tools()`.
-- Log all LLM calls via `bridge.call_log.log_call()` with an appropriate `CallContext(triggered_by=...)`.
-
-## Custom Tool Template
-
-```python
-"""Custom tool: example_tool."""
-
-TOOL_DEF = {
-    "type": "function",
-    "function": {
-        "name": "example_tool",
-        "description": "What this tool does",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "param1": {"type": "string", "description": "Parameter description"},
-            },
-            "required": ["param1"],
-        },
-    },
-}
-
-
-async def execute(arguments: dict) -> str:
-    """Execute the tool and return a string result."""
-    param1 = arguments.get("param1", "")
-    # Implementation here
-    return f"Result for {param1}"
-```
+- `character/soul.md` / `behaviors.yaml` re-read on every LLM call — no restart.
+- Custom tools in `tools/custom/` export `TOOL_DEF` + `async def execute(args) -> str`;
+  hot-reload via `POST http://127.0.0.1:8090/admin/reload-tools`.
+- Log LLM calls via `bridge.call_log.log_call()` with a `CallContext`.
+- Never add a desk tool to the proxy allowlist unless it is read-only; the
+  allowlist is the prime-directive boundary (tests pin it).
+- Tests: `.venv/bin/python -m pytest tests/ bridge/test_*.py` (155+ pass, no
+  live services needed except tests/test_graph_live.py).

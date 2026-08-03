@@ -184,7 +184,15 @@ async def _rephrase_stall(S, seed: str, hint: str, user_text: str | None) -> str
         if user_text:
             ctx += f"\nIka just said: {user_text[:200]}"
         ctx += "\nSay your one short line now."
-        res = await S.llm_client.chat(
+        try:
+            client = await S.active_fast_client()
+        except AttributeError:   # test doubles without the fallback helper
+            client = S.llm_client
+        if client is not S.llm_client:
+            # Fast lane down: don't burn a remote generation slot on a filler
+            # line (and don't race the main deep pass for it) — the seed is fine.
+            return seed
+        res = await client.chat(
             [{"role": "system", "content": _STALL_REPHRASE_SYSTEM},
              {"role": "user", "content": ctx}],
             temperature=0.7, max_tokens=20, enable_thinking=False,
@@ -302,8 +310,17 @@ async def llm_pass_node(state: TurnState) -> dict:
     chunk_idx = state["chunk_idx"]
     full_text_parts = state["full_text_parts"]
 
-    # Route: deep model (Qwen-32B) for reasoning/tool turns, else the fast 3B.
-    client = S.llm_deep if state.get("route") == "deep" else S.llm_client
+    # Route: deep model (deepseek-v3, sparks gateway) for reasoning/tool turns,
+    # else the fast local 8B — falling back to deep when the local lane is down
+    # (breaker open / health probe failing, e.g. GPU held by a training run).
+    if state.get("route") == "deep":
+        client = S.llm_deep
+    else:
+        client = await S.active_fast_client()
+        if client is not S.llm_client:
+            log.info("[graph] job=%s fast lane down — serving turn on the deep "
+                     "endpoint (%s)", state.get("job_id"), client.model)
+            state["fast_fell_back"] = True
     state["pass_model"] = client.model
     # Disable Qwen's <think> on the FIRST pass: it only decides whether to call
     # a tool and speaks a lead-in, and a silent think block lands BEFORE the
@@ -325,7 +342,9 @@ async def llm_pass_node(state: TurnState) -> dict:
     # so this is the single opening cover, not a double.)
     _stall_task = None
     if (state.get("route") == "deep" and int(state.get("tool_round", 0)) == 0
-            and not state.get("started_stall") and not state.get("escalated")):
+            and not state.get("started_stall") and not state.get("escalated")
+            and not state.get("fast_fell_back")):
+        # (Also skip when the fast lane is down — the filler runs on that lane.)
         # (Skip on escalated turns: the fast model's <escalate/> cover already spoke.)
         state["started_stall"] = True
         # Also claim the `stalled` flag so run_tools_node won't speak a SECOND
@@ -493,7 +512,8 @@ async def log_pass_node(state: TurnState) -> dict:
     latency_ms = (time.monotonic() - state["pass_started"]) * 1000
     S._pipeline_state["llm_ms"] = round(latency_ms, 1)
     _pass_ctx = dataclasses.replace(state["base_ctx"], pass_number=1)
-    _logc = S.llm_deep if state.get("route") == "deep" else S.llm_client
+    _logc = (S.llm_deep if (state.get("route") == "deep"
+                            or state.get("fast_fell_back")) else S.llm_client)
     asyncio.create_task(S.call_log.log_call(
         _pass_ctx, model=_logc.model,
         temperature=_logc.default_temperature,
@@ -1009,75 +1029,61 @@ def _parse_interpret(content: str) -> dict | None:
 
 async def _kg_consult(pair: list) -> dict | None:
     """Consult the desk's shared knowledge graph (read-only, via the opus proxy)
-    for the relationship between two entities. Returns the parsed kg_query JSON
-    or None. Fail-silent and bounded — never breaks a turn.
+    for the relationship between two entities. Fail-silent and bounded — never
+    breaks a turn.
 
     This is the structural cure for the 'Anthropic?' confabulation: instead of
     inventing 'Anthropic's stock', Mocha learns the real, CITED link (AMZN holds
-    a stake in Anthropic) — or learns there is no known link (a gap)."""
+    a stake in Anthropic) — or learns there is no known link (a gap).
+
+    Implementation note: the desk's two-entity kg_query tool was deleted
+    2026-07-20; the surviving surface is kg_neighbors(entity) → 1-hop edges.
+    We fetch pair[0]'s neighborhood and scan the (trust-sorted) edges for
+    pair[1]. Returns {found, entity, match, other} where match is the first
+    edge naming pair[1], or None."""
     if not (isinstance(pair, (list, tuple)) and len(pair) >= 2 and pair[0] and pair[1]):
         return None
     try:
         import json
         from tools.custom._opus_proxy import call_opus
         out = await call_opus(
-            "kg_query",
-            {"entity": str(pair[0]), "related_to": str(pair[1]), "caller": "mocha"},
+            "kg_neighbors",
+            {"entity": str(pair[0]), "caller": "mocha"},
             "Knowledge graph",
         )
         obj = json.loads(out)
         if obj.get("__panel__") or "error" in obj:  # proxy error envelope
             return None
-        return obj
+        other = str(pair[1]).strip().lower()
+        match = None
+        for e in obj.get("edges") or []:
+            names = f"{e.get('subject','')} {e.get('object','')}".lower()
+            if other and other in names:
+                match = e
+                break
+        return {"found": bool(obj.get("found")), "entity": obj.get("entity"),
+                "match": match, "other": str(pair[1])}
     except Exception as e:  # noqa: BLE001 — consult is best-effort
         log.info("[graph] kg_consult skipped: %s", e)
         return None
 
 
-async def _kg_raise_gap(pair: list, question: str | None) -> None:
-    """Append a missing-link gap to the desk's research backlog so the nightly
-    gap-worker can dispatch a cited search to fill it. This is the ONE sanctioned
-    Mocha→desk write (append-only, non-impactful — it inserts a kg_gap row, never
-    an edge/order). It is NOT on the LLM tool menu; interpret_node calls it
-    deterministically on a detected gap, through the proxy's WRITE_ALLOWLIST.
-    Fail-silent and bounded — never breaks a turn."""
-    if not (isinstance(pair, (list, tuple)) and len(pair) >= 2 and pair[0] and pair[1]):
-        return
-    try:
-        import json
-        from tools.custom._opus_proxy import call_opus
-        out = await call_opus(
-            "kg_raise_gap",
-            {"src_entity": str(pair[0]), "dst_entity": str(pair[1]),
-             "question": (question or "")[:240], "caller": "mocha"},
-            "Knowledge graph",
-        )
-        log.info("[graph] kg gap raised %s↔%s: %s", pair[0], pair[1],
-                 (json.loads(out) if out else {}))
-    except Exception as e:  # noqa: BLE001 — append is best-effort
-        log.info("[graph] kg_raise_gap skipped: %s", e)
-
-
 def _kg_fact_from(obj: dict) -> str | None:
-    """Turn a kg_query result into a one-line, citation-bearing fact for the
+    """Turn a _kg_consult result into a one-line, citation-bearing fact for the
     composer, or None when there's nothing grounded to say."""
     if not obj or not obj.get("found"):
         return None
-    rel = obj.get("related")
-    if not rel:
-        return None
-    if rel.get("known") and rel.get("connected") and obj.get("edges"):
-        e = obj["edges"][0]
+    e = obj.get("match")
+    if e:
         quote = (e.get("quote") or "").strip()
+        if not quote:
+            quote = f"{e.get('subject')} —{e.get('rel')}→ {e.get('object')}"
         ev = e.get("evidence_id")
         cite = f" (desk evidence #{ev})" if ev else ""
         return f"KNOWLEDGE GRAPH (cited, trust this over guessing): {quote}{cite}"
-    # known-but-unrelated, or the other entity is itself a gap
-    if rel.get("known") and not rel.get("connected"):
-        return (f"KNOWLEDGE GRAPH: no known relationship recorded between "
-                f"{obj.get('entity',{}).get('name')} and {rel.get('name')}. "
-                "Don't invent one.")
-    return None
+    ent_name = (obj.get("entity") or {}).get("name") or (obj.get("entity") or {}).get("query")
+    return (f"KNOWLEDGE GRAPH: no known relationship recorded between "
+            f"{ent_name} and {obj.get('other')}. Don't invent one.")
 
 
 async def interpret_node(state: TurnState) -> dict:
@@ -1089,7 +1095,7 @@ async def interpret_node(state: TurnState) -> dict:
     from bridge import server as S
     if not _needs_interpret(state):
         return state
-    client = S.llm_client if state.get("realtime") else S.llm_deep
+    client = (await S.active_fast_client()) if state.get("realtime") else S.llm_deep
     msgs = [{"role": "system", "content": _interpret_system(state)}]
     rc = state.get("reply_context")
     if rc:
@@ -1122,15 +1128,12 @@ async def interpret_node(state: TurnState) -> dict:
                 fact = _kg_fact_from(kg)
                 if fact:
                     read["kg_fact"] = fact
-                elif kg.get("found") is False or (
-                    kg.get("related") and not kg["related"].get("known")
-                ):
-                    # entity (or its counterpart) is unknown → a gap. Flag it so
-                    # she says she'll look into it rather than confabulate, AND
-                    # append it to the desk's research backlog so the nightly
-                    # gap-worker can dispatch a cited search to fill it.
+                else:
+                    # entity is unknown to the graph → a gap. Flag it so she
+                    # says she'll look into it rather than confabulate. (The
+                    # desk-side gap-backlog write was retired with the
+                    # standalone split — Mocha is fully read-only now.)
                     read["kg_gap"] = read.get("kg_pair")
-                    await _kg_raise_gap(read.get("kg_pair"), read.get("asking"))
         log.info("[graph] job=%s read intent: %s%s", state.get("job_id"),
                  str(read.get("asking", ""))[:90],
                  " [+kg]" if read.get("kg_fact") else (" [kg-gap]" if read.get("kg_gap") else ""))
@@ -1208,7 +1211,7 @@ async def _emit_task_ask(state: TurnState, ask_for: str | None) -> None:
     retry budget. Fail-soft: emits nothing if generation fails (turn still ends)."""
     from bridge import server as S
     try:
-        res = await S.llm_client.chat(
+        res = await (await S.active_fast_client()).chat(
             [{"role": "system", "content": _TASK_ASK_SYSTEM},
              {"role": "user", "content":
               f"Ika said: {(state.get('user_text') or '')[:240]}\n"

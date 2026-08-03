@@ -2,6 +2,11 @@
 'Anthropic?' confabulation. The consult grounds a relationship question in the
 desk's cited graph (or flags a gap) instead of guessing.
 
+Since 2026-08-02 (standalone split) the consult uses kg_neighbors — the desk's
+surviving KG read surface — and derives the two-entity relation by scanning the
+returned edges. There is no Mocha→desk write anymore (kg_raise_gap was deleted
+desk-side 2026-07-20).
+
 Pure-logic + stubbed-proxy tests (no live desk subprocess)."""
 
 import asyncio
@@ -17,12 +22,13 @@ def _graph():
 
 # ── _kg_fact_from (pure) ─────────────────────────────────────────────────────
 
-def test_kg_fact_connected_carries_quote_and_citation():
+def test_kg_fact_matched_edge_carries_quote_and_citation():
     g = _graph()
     obj = {"found": True, "entity": {"name": "AMAZON COM INC"},
-           "related": {"known": True, "connected": True, "name": "Anthropic"},
-           "edges": [{"rel": "invested_in", "evidence_id": 20378,
-                      "quote": "Amazon has invested up to $8 billion in Anthropic."}]}
+           "match": {"subject": "AMAZON COM INC", "rel": "invested_in",
+                     "object": "Anthropic", "evidence_id": 20378,
+                     "quote": "Amazon has invested up to $8 billion in Anthropic."},
+           "other": "Anthropic"}
     fact = g._kg_fact_from(obj)
     assert fact
     assert "Amazon has invested up to $8 billion" in fact
@@ -30,25 +36,34 @@ def test_kg_fact_connected_carries_quote_and_citation():
     assert "KNOWLEDGE GRAPH" in fact
 
 
-def test_kg_fact_known_but_unrelated_says_so():
+def test_kg_fact_matched_edge_without_quote_falls_back_to_triple():
     g = _graph()
     obj = {"found": True, "entity": {"name": "AMAZON COM INC"},
-           "related": {"known": True, "connected": False, "name": "Tesla"},
-           "edges": []}
+           "match": {"subject": "AMAZON COM INC", "rel": "invested_in",
+                     "object": "Anthropic", "quote": ""},
+           "other": "Anthropic"}
+    fact = g._kg_fact_from(obj)
+    assert fact and "invested_in" in fact and "Anthropic" in fact
+
+
+def test_kg_fact_known_entity_no_match_says_no_relationship():
+    g = _graph()
+    obj = {"found": True, "entity": {"name": "AMAZON COM INC"},
+           "match": None, "other": "Tesla"}
     fact = g._kg_fact_from(obj)
     assert fact and "no known relationship" in fact.lower()
+    assert "Tesla" in fact and "Don't invent" in fact
 
 
-def test_kg_fact_gap_or_unknown_returns_none():
+def test_kg_fact_unknown_entity_returns_none():
     g = _graph()
-    assert g._kg_fact_from({"found": False}) is None
-    assert g._kg_fact_from({"found": True, "related": {"known": False}}) is None
-    assert g._kg_fact_from({"found": True, "related": None}) is None
+    assert g._kg_fact_from({"found": False, "match": None, "other": "X"}) is None
+    assert g._kg_fact_from(None) is None
 
 
 # ── _kg_consult (stubbed proxy) ──────────────────────────────────────────────
 
-def test_kg_consult_parses_proxy_json(monkeypatch):
+def test_kg_consult_calls_kg_neighbors_and_scans_edges(monkeypatch):
     g = _graph()
     import tools.custom._opus_proxy as proxy
     seen = {}
@@ -56,13 +71,54 @@ def test_kg_consult_parses_proxy_json(monkeypatch):
     async def fake_call(tool, args, title):
         seen["tool"] = tool
         seen["args"] = args
-        return json.dumps({"found": True, "related": {"known": True, "connected": True}})
+        return json.dumps({
+            "found": True, "entity": {"name": "AMAZON COM INC"},
+            "edges": [
+                {"subject": "AMAZON COM INC", "rel": "competes_with",
+                 "object": "Walmart", "quote": "…", "evidence_id": 1},
+                {"subject": "AMAZON COM INC", "rel": "invested_in",
+                 "object": "Anthropic", "evidence_id": 20378,
+                 "quote": "Amazon has invested up to $8 billion in Anthropic."},
+            ],
+        })
 
     monkeypatch.setattr(proxy, "call_opus", fake_call)
     out = asyncio.run(g._kg_consult(["AMZN", "Anthropic"]))
+    assert seen["tool"] == "kg_neighbors"
+    assert seen["args"]["entity"] == "AMZN"
     assert out and out["found"] is True
-    assert seen["tool"] == "kg_query"
-    assert seen["args"]["entity"] == "AMZN" and seen["args"]["related_to"] == "Anthropic"
+    assert out["match"] and out["match"]["evidence_id"] == 20378
+    assert out["other"] == "Anthropic"
+
+
+def test_kg_consult_no_matching_edge_gives_match_none(monkeypatch):
+    g = _graph()
+    import tools.custom._opus_proxy as proxy
+
+    async def fake_call(tool, args, title):
+        return json.dumps({
+            "found": True, "entity": {"name": "AMAZON COM INC"},
+            "edges": [{"subject": "AMAZON COM INC", "rel": "competes_with",
+                       "object": "Walmart", "quote": "…"}],
+        })
+
+    monkeypatch.setattr(proxy, "call_opus", fake_call)
+    out = asyncio.run(g._kg_consult(["AMZN", "Tesla"]))
+    assert out and out["found"] is True and out["match"] is None
+
+
+def test_kg_consult_unknown_entity_reports_not_found(monkeypatch):
+    g = _graph()
+    import tools.custom._opus_proxy as proxy
+
+    async def fake_call(tool, args, title):
+        return json.dumps({"found": False, "entity": {"query": "Wakanda"},
+                           "edges": [], "related": None,
+                           "note": "'Wakanda' is not in the knowledge graph yet (a gap)."})
+
+    monkeypatch.setattr(proxy, "call_opus", fake_call)
+    out = asyncio.run(g._kg_consult(["Wakanda", "AMZN"]))
+    assert out and out["found"] is False and out["match"] is None
 
 
 def test_kg_consult_error_envelope_returns_none(monkeypatch):
@@ -108,9 +164,10 @@ def test_interpret_node_attaches_kg_fact(monkeypatch):
 
     async def fake_consult(pair):
         return {"found": True, "entity": {"name": "AMAZON COM INC"},
-                "related": {"known": True, "connected": True, "name": "Anthropic"},
-                "edges": [{"rel": "invested_in", "evidence_id": 20378,
-                           "quote": "Amazon has invested up to $8 billion in Anthropic."}]}
+                "match": {"subject": "AMAZON COM INC", "rel": "invested_in",
+                          "object": "Anthropic", "evidence_id": 20378,
+                          "quote": "Amazon has invested up to $8 billion in Anthropic."},
+                "other": "Anthropic"}
 
     monkeypatch.setattr(g, "_kg_consult", fake_consult)
 
@@ -122,7 +179,7 @@ def test_interpret_node_attaches_kg_fact(monkeypatch):
     assert not read.get("kg_gap")
 
 
-def test_interpret_node_flags_gap_when_unknown(monkeypatch):
+def test_interpret_node_flags_gap_when_entity_unknown(monkeypatch):
     g = _graph()
     from bridge import server as S
 
@@ -130,62 +187,21 @@ def test_interpret_node_flags_gap_when_unknown(monkeypatch):
         async def chat(self, msgs, **kw):
             return {"content": json.dumps({
                 "asking": "is AMZN related to Wakanda",
-                "kg_pair": ["AMZN", "Wakanda"],
+                "kg_pair": ["Wakanda", "AMZN"],
             })}
 
     monkeypatch.setattr(S, "llm_deep", FakeClient())
     monkeypatch.setattr(S, "_get_user_history", lambda uid: [])
 
     async def fake_consult(pair):
-        return {"found": True, "entity": {"name": "AMAZON COM INC"},
-                "related": {"query": "Wakanda", "known": False}, "edges": []}
-
-    raised = {}
-
-    async def fake_raise(pair, question):
-        raised["pair"] = pair
-        raised["question"] = question
+        return {"found": False, "entity": {"query": "Wakanda"},
+                "match": None, "other": "AMZN"}
 
     monkeypatch.setattr(g, "_kg_consult", fake_consult)
-    monkeypatch.setattr(g, "_kg_raise_gap", fake_raise)
     state = {"user_text": "Wakanda?", "reply_context": "AMZN news", "realtime": False, "user_id": "ika"}
     out = asyncio.run(g.interpret_node(state))
-    assert out["intent_read"].get("kg_gap") == ["AMZN", "Wakanda"]
+    assert out["intent_read"].get("kg_gap") == ["Wakanda", "AMZN"]
     assert not out["intent_read"].get("kg_fact")
-    # the gap was appended to the desk backlog (the one sanctioned Mocha write)
-    assert raised.get("pair") == ["AMZN", "Wakanda"]
-
-
-def test_kg_raise_gap_calls_proxy_append_only(monkeypatch):
-    g = _graph()
-    import tools.custom._opus_proxy as proxy
-    seen = {}
-
-    async def fake_call(tool, args, title):
-        seen["tool"] = tool
-        seen["args"] = args
-        return json.dumps({"gap_id": 7, "deduped": False})
-
-    monkeypatch.setattr(proxy, "call_opus", fake_call)
-    asyncio.run(g._kg_raise_gap(["AMZN", "Anthropic"], "is AMZN tied to Anthropic?"))
-    assert seen["tool"] == "kg_raise_gap"           # the ONE write tool
-    assert seen["args"]["src_entity"] == "AMZN"
-    assert seen["args"]["dst_entity"] == "Anthropic"
-
-
-def test_kg_raise_gap_bad_pair_is_noop(monkeypatch):
-    g = _graph()
-    import tools.custom._opus_proxy as proxy
-    called = {"n": 0}
-
-    async def fake_call(tool, args, title):
-        called["n"] += 1
-        return "{}"
-
-    monkeypatch.setattr(proxy, "call_opus", fake_call)
-    asyncio.run(g._kg_raise_gap(["AMZN"], "q"))      # only one entity
-    asyncio.run(g._kg_raise_gap(None, "q"))
-    assert called["n"] == 0
 
 
 def test_interpret_node_skips_consult_on_realtime(monkeypatch):

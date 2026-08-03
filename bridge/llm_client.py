@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 from typing import AsyncIterator
 
@@ -136,14 +137,32 @@ class LLMClient:
         self.repetition_penalty: float | None = float(_rp) if _rp else None
 
         timeout = float(config.get("request_timeout_s", 360))
+        # api_key: literal value, or api_key_env: name of an env var holding it
+        # (so secrets stay in .env, never in the tracked config.yaml).
         api_key = config.get("api_key", "")
+        if not api_key and config.get("api_key_env"):
+            api_key = os.environ.get(str(config["api_key_env"]), "")
         headers = {}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
 
         self._http = httpx.AsyncClient(timeout=timeout, headers=headers)
 
-        # Isolation guard for the SHARED opus-trading vLLM (see _LLMThrottle).
+        # Only Qwen3 chat templates understand the enable_thinking kwarg —
+        # sending chat_template_kwargs to other models (deepseek-v3 on the
+        # sparks gateway) is at best ignored and at worst a 400. Gate it here
+        # so callers don't need to know which lane they're on.
+        self._supports_thinking = "qwen" in self.model.lower()
+
+        # Cached health state for cheap lane-selection checks (fast→deep
+        # fallback when the local GPU lane is down). TTL-cached so a turn never
+        # pays more than one 2s probe per window, and a healthy local vLLM
+        # answers in ~1ms.
+        self._health_ok: bool = True
+        self._health_at: float = 0.0
+
+        # Isolation guard (see _LLMThrottle) — bounds Mocha's load on shared
+        # inference (today: the sparks-cluster gateway on the deep lane).
         iso = config.get("isolation", {}) or {}
         self._throttle = _LLMThrottle(
             max_concurrency=int(iso.get("max_concurrency", 1)),
@@ -152,6 +171,27 @@ class LLMClient:
             fail_threshold=int(iso.get("breaker_fail_threshold", 4)),
             cooldown_s=float(iso.get("breaker_cooldown_s", 20)),
         )
+
+    @property
+    def circuit_open(self) -> bool:
+        """True while the breaker is tripped (still inside its cooldown)."""
+        t = self._throttle
+        if not t._open:
+            return False
+        return (time.monotonic() - t._opened_at) < t._cooldown
+
+    async def healthy_cached(self, ttl_s: float = 30.0) -> bool:
+        """Cheap reachability check against /health, cached for ttl_s."""
+        now = time.monotonic()
+        if self._health_at and (now - self._health_at) < ttl_s:
+            return self._health_ok
+        try:
+            resp = await self._http.get(self._health_url, timeout=2.0)
+            self._health_ok = resp.status_code == 200
+        except Exception:
+            self._health_ok = False
+        self._health_at = now
+        return self._health_ok
 
     # ------------------------------------------------------------------
     #  Non-streaming chat
@@ -192,7 +232,7 @@ class LLMClient:
         if tools:
             body["tools"] = tools
             body["tool_choice"] = "auto"
-        if enable_thinking is not None:
+        if enable_thinking is not None and self._supports_thinking:
             body["chat_template_kwargs"] = {"enable_thinking": enable_thinking}
 
         try:
@@ -205,6 +245,14 @@ class LLMClient:
         failure = False
         try:
             resp = await self._http.post(self._chat_url, json=body)
+            if resp.status_code in (502, 503, 504, 524):
+                # Transient edge/tunnel failure (remote gateway behind
+                # Cloudflare: busy generation slot → 524 at ~100s). One retry
+                # after a short pause — the same policy the desk's spark proxy
+                # uses — then give up gracefully.
+                log.warning("LLM HTTP %s — one retry in 2s", resp.status_code)
+                await asyncio.sleep(2.0)
+                resp = await self._http.post(self._chat_url, json=body)
             if resp.status_code != 200:
                 failure = True
                 log.error("LLM HTTP %s: %s", resp.status_code, resp.text[:2000])
@@ -305,7 +353,7 @@ class LLMClient:
         if tools:
             body["tools"] = tools
             body["tool_choice"] = "auto"
-        if enable_thinking is not None:
+        if enable_thinking is not None and self._supports_thinking:
             body["chat_template_kwargs"] = {"enable_thinking": enable_thinking}
 
         async with self._http.stream("POST", self._chat_url, json=body) as resp:

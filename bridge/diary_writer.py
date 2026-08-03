@@ -187,7 +187,8 @@ async def _compose_diary_via_llm(
     falls back to a minimal structural summary so the page is never empty.
     """
     try:
-        from bridge.server import llm_client
+        from bridge.server import active_fast_client
+        llm_client = await active_fast_client()
         from bridge.call_log import log_call, CallContext
     except Exception as exc:
         log.warning("diary: llm_client not available: %s", exc)
@@ -442,3 +443,15 @@ async def finalize_today() -> None:
     await diary_store.finalize_page(today)
     session_scratchpad.clear()
     log.info("diary: finalized %s at local midnight", today)
+
+    # Nightly life-context merge: fold the finalized page into the ledger of
+    # what's currently in motion in Ika's life. Deep lane (better structured
+    # merge), fire-and-forget — midnight upkeep must never block the heartbeat.
+    try:
+        page = await diary_store.get_page(today)
+        if page:
+            from bridge.server import llm_deep
+            from memory import life_context
+            asyncio.create_task(life_context.update_from_diary(page, llm_deep))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("diary: life-context merge skipped: %s", exc)

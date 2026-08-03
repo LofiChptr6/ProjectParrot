@@ -138,9 +138,18 @@ case "${1:-all}" in
         # STT (Whisper) removed — text-only input; freed its ~5.5GB VRAM for
         # Mocha's own LLM. Re-add `start_service stt "stt.service:app" 8091` to
         # bring voice input back.
-        start_service tts "tts.service:app" 8092
-        echo "  Waiting for TTS model to load..."
-        sleep 5
+        #
+        # GPU hold: when var/GPU_HOLD exists (box GPU reserved, e.g. a training
+        # run), skip TTS — bridge + web still run and Mocha stays alive in
+        # text-only mode (LLM turns ride the remote deep endpoint via
+        # llm.fallback_to_deep). Delete var/GPU_HOLD + restart for voice.
+        if [ -f "$SCRIPT_DIR/var/GPU_HOLD" ]; then
+            echo "  var/GPU_HOLD present — GPU reserved; skipping TTS (text-only mode)."
+        else
+            start_service tts "tts.service:app" 8092
+            echo "  Waiting for TTS model to load..."
+            sleep 5
+        fi
         start_service bridge "bridge.server:app" 8090
         start_service web "web.app:app" 8080
         echo ""
@@ -165,8 +174,7 @@ case "${1:-all}" in
         echo "  Telegram, Discord — set enabled: true + bot_token"
         echo "  CLI REPL — enabled by default (if bridge runs in foreground)"
         echo ""
-        echo "👉 Meet Mocha on the trading desk dashboard: http://127.0.0.1:8501"
-        echo "   (or your cloudflared 'mocha' tunnel). Standalone web app: http://$EXTERNAL_HOST:8080"
+        echo "👉 Meet Mocha: http://$EXTERNAL_HOST:8080  (public: https://project-hello-mocha.com)"
         echo "   Bridge debug/monitor: http://$EXTERNAL_HOST:8090/monitor"
         ;;
     stt)       activate_venv; start_service stt "stt.service:app" 8091 ;;

@@ -2,16 +2,17 @@
 set -uo pipefail
 
 # ---------------------------------------------------------------------------
-# project mocha — first-time setup  (post-migration architecture)
+# ProjectMocha — first-time setup  (standalone since 2026-08-02)
 #
-# Mocha is co-located inside "opus trading" and SHARES that desk's vLLM, so she
-# does NOT run her own LLM container. This script therefore only:
+# Mocha runs her own fast vLLM (Qwen3-8B-FP8 :8893, project-mocha-vllm.service)
+# and routes deep/thinking turns to the sparks-cluster gateway (deepseek-v3).
+# This script only:
 #   1. builds the Python venv + installs deps (torch + requirements, incl. langgraph)
 #   2. prepares .env
-#   3. sanity-checks the shared vLLM (:8000) and a few key imports
+#   3. sanity-checks the fast vLLM (:8893) and a few key imports
 #   4. leaves an install note (INSTALL_NOTES.md) + a full log (logs/setup-*.log)
 #
-# It does NOT touch Docker, opus, or the GPU's running vLLM.
+# It does NOT touch Docker or any running vLLM.
 # ---------------------------------------------------------------------------
 
 cd "$(dirname "$0")"
@@ -39,8 +40,8 @@ finish() {
     echo "- **Status:** ${STATUS}"
     echo "- **Python:** ${PYVER:-?}  (\`${PYBIN:-?}\`)"
     echo "- **Torch:** ${TORCH:-not installed}"
-    echo "- **Architecture:** shares opus trading's vLLM at \`$(grep -m1 base_url config.yaml | awk '{print $2}')\` — no own vLLM/Docker."
-    echo "- **Services to run after this:** \`./start.sh all\` → bridge :8090, STT :8091, TTS :8092, web :8080."
+    echo "- **Architecture:** own fast vLLM at \`$(grep -m1 base_url config.yaml | awk '{print $2}')\` + deepseek-v3 deep lane on the sparks gateway."
+    echo "- **Services to run after this:** \`./start.sh all\` → bridge :8090, TTS :8092, web :8080."
     echo "- **Full log:** \`${LOG}\`"
     echo ""
   } >> "$NOTE"
@@ -120,9 +121,9 @@ green "==> Sanity checks …"
 BASEURL="$(grep -m1 'base_url' config.yaml | awk '{print $2}')"
 HEALTH="${BASEURL%/v1}/health"
 if curl -sf --connect-timeout 2 "$HEALTH" >/dev/null 2>&1; then
-  green "  Shared vLLM reachable at ${BASEURL}"
+  green "  Fast vLLM reachable at ${BASEURL}"
 else
-  yellow "  Shared vLLM not reachable at ${BASEURL} — make sure opus trading's vLLM is up before chatting."
+  yellow "  Fast vLLM not reachable at ${BASEURL} — start project-mocha-vllm (or rely on llm.fallback_to_deep)."
 fi
 python - <<'PY' || yellow "  (import check reported an issue — see log)"
 import importlib

@@ -13,12 +13,21 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import os
 import time
 from pathlib import Path
 
-OPUS_DIR = Path(__file__).resolve().parents[3]  # project_mocha/tools/custom -> opus trading root
-assert (OPUS_DIR / "mcp_server.py").exists(), f"opus root not found at {OPUS_DIR}"
+# Desk root — the opus trading repo this proxy shells into. Mocha is standalone
+# (ProjectMocha) as of 2026-08-02, so the desk location is explicit, not derived
+# from our own path. Override with DESK_ROOT; if the desk is missing Mocha still
+# boots and every desk tool degrades to a spoken error panel.
+OPUS_DIR = Path(os.environ.get("DESK_ROOT", "/home/tianyizhang/opus trading"))
 OPUS_PY = OPUS_DIR / ".venv" / "bin" / "python"
+if not (OPUS_DIR / "mcp_server.py").exists():
+    logging.getLogger(__name__).warning(
+        "opus trading desk not found at %s — desk tools will be unavailable", OPUS_DIR
+    )
 SUBPROCESS_TIMEOUT_SEC = 30.0
 PROXY_CLIENT_ID = "42"
 
@@ -71,7 +80,7 @@ async def call_opus(tool: str, arguments: dict, error_title: str) -> str:
     # PRIME-DIRECTIVE GATE (structural, not menu-only): the tool name is about to
     # be f-string'd into `from mcp_server import {tool}`, which can reach ANY desk
     # tool (place_order, kill-switch, …). Default-deny everything that is not an
-    # allowlisted read tool or the one sanctioned append-only write (kg_raise_gap).
+    # allowlisted read tool — the boundary is fully read-only.
     from tools.custom._opus_introspect import is_tool_allowed
     if not is_tool_allowed(tool):
         return _error_envelope(
