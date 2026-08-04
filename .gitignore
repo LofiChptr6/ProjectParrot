@@ -71,3 +71,4 @@ vendor/
 
 # Claude Code local state (plans, memory, session data)
 .claude/
+data/history/
