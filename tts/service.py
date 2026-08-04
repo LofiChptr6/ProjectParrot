@@ -176,6 +176,10 @@ async def synthesize(req: SynthRequest):
             gen_text=req.text,
             speed=req.speed,
             cfg_strength=cfg_strength,
+            # Diffusion steps: F5 default 32. Synthesis time scales ~linearly;
+            # 16 halves per-chunk latency at a small quality cost. Tunable in
+            # config.yaml tts.nfe_step.
+            nfe_step=int(config.get("nfe_step", 32)),
         )
     except FileNotFoundError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e

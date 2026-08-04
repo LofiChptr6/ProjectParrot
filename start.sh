@@ -135,17 +135,19 @@ status() {
 case "${1:-all}" in
     all)
         activate_venv
-        # STT (Whisper) removed — text-only input; freed its ~5.5GB VRAM for
-        # Mocha's own LLM. Re-add `start_service stt "stt.service:app" 8091` to
-        # bring voice input back.
-        #
         # GPU hold: when var/GPU_HOLD exists (box GPU reserved, e.g. a training
-        # run), skip TTS — bridge + web still run and Mocha stays alive in
-        # text-only mode (LLM turns ride the remote deep endpoint via
+        # run), skip TTS + STT — bridge + web still run and Mocha stays alive in
+        # text-only mode (LLM turns ride the remote failsafe via
         # llm.fallback_to_deep). Delete var/GPU_HOLD + restart for voice.
         if [ -f "$SCRIPT_DIR/var/GPU_HOLD" ]; then
-            echo "  var/GPU_HOLD present — GPU reserved; skipping TTS (text-only mode)."
+            echo "  var/GPU_HOLD present — GPU reserved; skipping TTS/STT (text-only mode)."
         else
+            # STT (voice input + lip-sync /align) — gated by config stt.enabled.
+            if python -c "import sys, yaml; sys.exit(0 if (yaml.safe_load(open('$SCRIPT_DIR/config.yaml')).get('stt') or {}).get('enabled') else 1)" 2>/dev/null; then
+                start_service stt "stt.service:app" 8091
+            else
+                echo "  stt.enabled: false — voice input off (text-only)."
+            fi
             start_service tts "tts.service:app" 8092
             echo "  Waiting for TTS model to load..."
             sleep 5

@@ -23,15 +23,15 @@ network:
   internal_host: "127.0.0.1"
 
 llm:
-  # Mocha's OWN small/fast model (Qwen3-8B-FP8 on vLLM, GPU :8893), served by
-  # project-mocha-vllm.service. She no longer shares opus's 32B — faster replies
-  # and total inference isolation from the trading desk. Qwen3-8B replaced
-  # Llama-3.2-3B (2026-07-02): the 3B fabricated live numbers, repeated itself,
-  # broke character, and wrote customer-service Chinese. Same VRAM slot (fp8
-  # weights + fp8 KV). The rate-limit + circuit-breaker in bridge/llm_client.py
-  # still applies.
+  # Mocha's OWN model (vLLM on :8893, project-mocha-vllm.service):
+  # Qwen3-30B-A3B-Instruct-2507-FP8 — a 30B MoE with 3.3B ACTIVE params, so it
+  # decodes at small-model speed with 32B-class quality. Replaced Qwen3-8B-FP8
+  # (2026-08-04, the audit's model consolidation): one local model now serves
+  # BOTH lanes — "fast" (lean chat prompt) and "deep" (full-toolkit prompt) are
+  # prompt/sampling MODES on the same server, not different machines. History:
+  # Llama-3.2-3B → Qwen3-8B (2026-07-02, the 3B fabricated + repeated) → this.
   base_url: http://127.0.0.1:8893/v1
-  model: Qwen/Qwen3-8B-FP8
+  model: Qwen/Qwen3-30B-A3B-Instruct-2507-FP8
   # Prompt-inclusive repetition penalty (vLLM). Discourages the fast model from
   # recycling its own recent replies out of the (now unredacted) history —
   # observed: the same "brain on autopilot" riff three turns straight.
@@ -57,41 +57,59 @@ llm:
     burst: 1
     breaker_fail_threshold: 4 # still fail fast if the local vLLM hangs
     breaker_cooldown_s: 15
-  # ── Model routing ──────────────────────────────────────────────────────────
-  # Deep/THINKING model for reasoning/tool-heavy turns — deepseek-v3 on the
-  # sparks-cluster gateway (Cloudflare tunnel spark-llm), 2026-08-02. This
-  # replaced opus trading's shared local Qwen-32B (:8000, retired with the desk
-  # GPU 2026-07-30) and fully decouples Mocha's inference from the desk box.
-  # Remove this block to disable routing (everything stays on the fast 8B).
+  # ── Deep mode ───────────────────────────────────────────────────────────────
+  # SAME local server as the fast lane (2026-08-04) — "deep" is now the
+  # full-toolkit prompt + number-fidelity sampling mode, not a slower machine.
+  # Tool turns stop paying a remote round-trip; the keyword router just picks
+  # which prompt the local MoE speaks from. deepseek-v3 moved to `remote` below
+  # (outage failsafe only).
   deep:
+    base_url: http://127.0.0.1:8893/v1
+    model: Qwen/Qwen3-30B-A3B-Instruct-2507-FP8
+    # Disable the fast client's repetition penalty here — tool synthesis must
+    # be free to restate exact numbers from results (0/absent → omitted).
+    repetition_penalty: 0
+    # Local 16k context; think-room budget no longer needed (2507-Instruct is a
+    # non-thinking model), but keep headroom for long tool results.
+    max_tokens: 4096
+    request_timeout_s: 120
+    # Her own GPU — no shared resource to protect. Mirror the fast lane's guard
+    # (breaker only, no rate cap).
+    isolation:
+      max_concurrency: 3
+      rate_limit_per_min: 0
+      burst: 1
+      breaker_fail_threshold: 4
+      breaker_cooldown_s: 15
+  # ── Remote failsafe ────────────────────────────────────────────────────────
+  # deepseek-v3 on the sparks-cluster gateway (Cloudflare tunnel spark-llm).
+  # Used ONLY when the local lane is down (GPU_HOLD training run, vLLM crash):
+  # active_fast_client / active_deep_client route turns here so Mocha degrades
+  # to slow-but-alive instead of silent. Never on the healthy conversational
+  # path — observed 67-90s generations make it unusable for real-time.
+  remote:
     base_url: https://llm.project-hello-mocha.com/v1
     model: deepseek-v3
     # Secret stays in .env — llm_client resolves this env var into the
     # Authorization: Bearer header (never put the key in this tracked file).
     api_key_env: SPARK_LLM_API_KEY
-    # Disable the fast client's repetition penalty here — tool synthesis must
-    # be free to restate exact numbers from results (0/absent → omitted).
     repetition_penalty: 0
-    # The gateway serves DeepSeek-V3-AWQ with a 16384-token context window and
-    # no <think> block (non-reasoning chat model) — 3072 output is ample and
-    # leaves ~13k for prompt (system + memories + 22-turn history).
+    # DeepSeek-V3-AWQ, 16384-token window — 3072 out leaves ~13k for prompt.
     max_tokens: 3072
-    # Remote gateway: cold starts and busy generation slots are real (observed
-    # Cloudflare 524 at ~100s when the cluster is saturated). Fail fast enough
-    # that a turn degrades to the fast lane instead of hanging the bridge.
+    # Remote gateway: cold starts and busy slots are real (observed Cloudflare
+    # 524 at ~100s when saturated). Fail fast instead of hanging the bridge.
     request_timeout_s: 180
-    # Bound Mocha's load on the SHARED sparks gateway (the trading desk's LLM
-    # lanes route there too since 2026-07-30) — a Mocha bug must never starve
-    # desk inference. Same prime directive, new choke point.
+    # Bound Mocha's load on the SHARED sparks gateway (desk lanes route there
+    # too since 2026-07-30) — a Mocha bug must never starve desk inference.
     isolation:
       max_concurrency: 2
       rate_limit_per_min: 30
       burst: 8
       breaker_fail_threshold: 3
       breaker_cooldown_s: 30
-  # When the fast lane's circuit breaker is open (e.g. the local GPU is held by
-  # a training run and :8893 is down), route fast turns through the deep remote
-  # endpoint instead of failing the turn. Latency degrades; Mocha stays alive.
+  # When the local lane's circuit breaker is open (e.g. the GPU is held by a
+  # training run and :8893 is down), route turns through the remote failsafe
+  # instead of failing them. Latency degrades; Mocha stays alive.
   fallback_to_deep: true
   # Heuristic router (no extra LLM call → no TTFT cost): default to the fast
   # local model; escalate to deep on these signals. Tool turns also
@@ -141,13 +159,21 @@ llm:
     # reply isn't taxed a remote round-trip.
 
 stt:
-  # Voice INPUT removed (text-only) to free ~5.5GB VRAM for Mocha's own LLM.
-  # start.sh no longer launches it; health checks skip it when disabled. Set
-  # true + re-add the start_service line in start.sh to bring voice input back.
-  enabled: false
+  # Voice input RE-ENABLED 2026-08-04 (the GPU is Mocha's now — the desk moved
+  # its LLM lanes off-box, so the old "free ~5.5GB for her LLM" tradeoff is
+  # gone). start.sh launches it when enabled; lip-sync visemes come back
+  # automatically (the bridge skips /align while this is false).
+  enabled: true
   host: 0.0.0.0
   port: 8091  # remapped 8001->8091: opus trading owns 8001 (llm-proxy)
-  model: large-v3
+  # large-v3-turbo: ~4x faster decode than large-v3 at near-equal WER for
+  # short utterances. The service falls back to large-v3 automatically if the
+  # turbo weights fail to load.
+  model: large-v3-turbo
+  # Decode-speed knobs (see stt/service.py): the bridge VADs upstream, so
+  # Whisper's internal VAD pass is redundant.
+  beam_size: 2
+  vad_filter: false
   device: cuda
   compute_type: float16
   # GPU assignment: all services on Blackwell (GPU 0)
@@ -185,6 +211,10 @@ tts:
   # Bridge also strips "!" → "." before sending text to TTS, so this knob is
   # mostly belt-and-suspenders for ALL CAPS / strong emphasis cases.
   cfg_strength: 2.2
+  # Diffusion steps per synthesis (F5 default 32). Latency scales ~linearly:
+  # 16 ≈ half the per-chunk synth time, slightly rougher audio. 32 = stock
+  # quality. Benchmarked on this box in docs/audits (2026-08-04). Judge by ear.
+  nfe_step: 32
 
 memory:
   # In-process mem0 store (no HTTP service). See memory/mem0_store.py.

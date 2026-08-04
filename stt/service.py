@@ -42,12 +42,26 @@ async def load_model():
     gpu_id = int(config.get("gpu_id", 0))
     device = config["device"]
     log.info(f"Loading Whisper {config['model']} on {device}:{gpu_id}...")
-    model = WhisperModel(
-        config["model"],
-        device=device,
-        device_index=gpu_id,
-        compute_type=config["compute_type"],
-    )
+    try:
+        model = WhisperModel(
+            config["model"],
+            device=device,
+            device_index=gpu_id,
+            compute_type=config["compute_type"],
+        )
+    except Exception as exc:  # noqa: BLE001 — e.g. turbo variant unavailable
+        fallback = "large-v3"
+        if config["model"] == fallback:
+            raise
+        log.warning("Whisper %s failed to load (%s) — falling back to %s",
+                    config["model"], exc, fallback)
+        config["model"] = fallback
+        model = WhisperModel(
+            fallback,
+            device=device,
+            device_index=gpu_id,
+            compute_type=config["compute_type"],
+        )
     log.info("Whisper model loaded.")
 
     # Load torchaudio MMS forced alignment model
@@ -78,8 +92,11 @@ async def transcribe(file: UploadFile = File(...)):
     segments, info = model.transcribe(
         audio_data,
         language=language,
-        beam_size=5,
-        vad_filter=True,
+        # beam 2 ≈ half the decode time of the old beam 5 at negligible WER
+        # cost for short utterances; the bridge already VADs upstream, so
+        # Whisper's internal VAD pass is redundant work (both configurable).
+        beam_size=int(config.get("beam_size", 2)),
+        vad_filter=bool(config.get("vad_filter", False)),
         initial_prompt=config.get("initial_prompt"),
         hotwords=config.get("hotwords"),
     )

@@ -1,9 +1,12 @@
 [Unit]
-Description=ProjectMocha — dedicated fast LLM (Qwen3-8B-FP8 on vLLM, GPU)
+Description=ProjectMocha — dedicated LLM (Qwen3-30B-A3B MoE FP8 on vLLM, GPU)
 Documentation=https://github.com/LofiChptr6/ProjectParrot
-# Mocha's own fast model on this box (HomePCBlackwell) — total inference
-# isolation from everything else on the common path. Qwen3-8B-FP8 replaced
-# Llama-3.2-3B 2026-07-02 (the 3B was below the floor for persona-holding).
+# Mocha's own model on this box (HomePCBlackwell) — total inference isolation
+# from everything else on the common path. Qwen3-30B-A3B-Instruct-2507 (MoE,
+# 3.3B active params → small-model decode speed at 32B-class quality) replaced
+# Qwen3-8B 2026-08-04 and serves BOTH lanes (fast chat + deep tool mode).
+# History: Llama-3.2-3B → Qwen3-8B 2026-07-02 (the 3B was below the floor
+# for persona-holding).
 # The vllm BINARY comes from the opus trading venv — shared box tooling (like
 # CUDA), not a project coupling; ProjectMocha's own venv doesn't carry the
 # multi-GB vllm stack. If that venv moves, update the two paths below.
@@ -20,10 +23,12 @@ WorkingDirectory=/home/tianyizhang/ProjectMocha
 # HF_TOKEN comes from Mocha's (gitignored) .env — keeps the token out of this unit.
 EnvironmentFile=/home/tianyizhang/ProjectMocha/.env
 Environment="PATH=/home/tianyizhang/opus trading/.venv/bin:/usr/local/bin:/usr/bin:/bin"
-ExecStart=/bin/bash -c 'exec "/home/tianyizhang/opus trading/.venv/bin/vllm" serve Qwen/Qwen3-8B-FP8 \
-    --quantization fp8 \
-    --gpu-memory-utilization 0.13 \
-    --max-model-len 12288 \
+# 0.42 of 96GB ≈ 40GB: ~31GB FP8 weights + ~9GB KV/graphs. Leaves ~55GB free
+# for TTS/STT and any returning training workload. Quantization auto-detected
+# from the checkpoint's FP8 config.
+ExecStart=/bin/bash -c 'exec "/home/tianyizhang/opus trading/.venv/bin/vllm" serve Qwen/Qwen3-30B-A3B-Instruct-2507-FP8 \
+    --gpu-memory-utilization 0.42 \
+    --max-model-len 16384 \
     --max-num-seqs 4 \
     --enable-prefix-caching \
     --host 127.0.0.1 \

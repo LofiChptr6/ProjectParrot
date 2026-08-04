@@ -118,35 +118,59 @@ llm_client = LLMClient(llm_config)
 config["llm_url"] = llm_client._base_url.rsplit("/v1", 1)[0]
 
 # ── Model routing ──────────────────────────────────────────────────────────
-# Default = the fast/friendly model above (Llama-3.2-3B, Mocha's own :8893).
-# Deep = opus's shared Qwen-32B (smarter + better at the tool format), used for
-# turns that need reasoning or data tools. Heuristic router (no extra LLM call,
-# so no TTFT cost); the graph also auto-escalates to deep once a tool fires.
-# The deep client inherits the isolation guard (it hits the shared trading vLLM).
+# Since 2026-08-04 "fast" and "deep" are two PROMPT/SAMPLING modes on the same
+# local server (:8893, Qwen3-30B-A3B MoE): fast = lean chat prompt + repetition
+# penalty; deep = full-toolkit prompt + number-fidelity sampling. The heuristic
+# router (no extra LLM call, no TTFT cost) picks the mode; the graph also
+# auto-escalates to deep once a tool fires. `llm.remote` (deepseek-v3 on the
+# sparks gateway) exists purely as the outage failsafe for both.
 _deep_cfg = {**llm_config, **(llm_config.get("deep") or {})}
 llm_deep = (LLMClient(_deep_cfg)
             if (llm_config.get("deep") or {}).get("base_url") else llm_client)
 
-# Fast→deep fallback (config llm.fallback_to_deep): when the local fast lane is
-# down — e.g. the box's GPU is held by a training run and :8893 never came up —
-# serve fast/background passes on the deep remote endpoint instead of failing.
+_remote_cfg_raw = llm_config.get("remote") or {}
+llm_remote = (LLMClient({**llm_config, **_remote_cfg_raw})
+              if _remote_cfg_raw.get("base_url") else None)
+
+# Local→remote fallback (config llm.fallback_to_deep, name kept for compat):
+# when the local lane is down — e.g. the box's GPU is held by a training run
+# and :8893 never came up — serve turns on the remote failsafe instead of
+# failing. With no `remote` block configured, the old behavior remains (fast
+# falls back to whatever `deep` points at, if that differs).
+_OUTAGE_CLIENT = llm_remote if llm_remote is not None else llm_deep
 LLM_FALLBACK_TO_DEEP = (bool(llm_config.get("fallback_to_deep"))
-                        and llm_deep is not llm_client)
+                        and _OUTAGE_CLIENT is not llm_client)
 
 
 async def active_fast_client() -> LLMClient:
     """The client for fast/cheap passes (chat first pass, interpret, stall
     rephrase, diary, autonomy composer): the local fast lane when healthy,
-    else the deep remote when fallback is enabled. TTL-cached health probe —
-    effectively free when the local vLLM is up."""
+    else the outage failsafe when fallback is enabled. TTL-cached health
+    probe — effectively free when the local vLLM is up."""
     if LLM_FALLBACK_TO_DEEP:
         try:
             down = llm_client.circuit_open or not await llm_client.healthy_cached()
         except AttributeError:
             down = False  # test doubles / partial clients: treat as healthy
         if down:
-            return llm_deep
+            return _OUTAGE_CLIENT
     return llm_client
+
+
+async def active_deep_client() -> LLMClient:
+    """Deep-mode client (full-toolkit prompt + number-fidelity sampling).
+    The local server when healthy; the remote failsafe otherwise. When no
+    separate remote is configured this is just llm_deep, unprobed — the old
+    behavior."""
+    if (LLM_FALLBACK_TO_DEEP and llm_remote is not None
+            and llm_deep is not llm_remote):
+        try:
+            down = llm_deep.circuit_open or not await llm_deep.healthy_cached()
+        except AttributeError:
+            down = False
+        if down:
+            return llm_remote
+    return llm_deep
 _routing_cfg = llm_config.get("routing", {}) or {}
 _ROUTE_KEYWORDS = [k.lower() for k in _routing_cfg.get("keywords", [])]
 _TICKER_RE = re.compile(r"\$[A-Za-z]{1,5}\b")  # $NVDA-style cashtags only

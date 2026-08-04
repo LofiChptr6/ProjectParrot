@@ -369,12 +369,18 @@ async def llm_pass_node(state: TurnState) -> dict:
     # else the fast local 8B — falling back to deep when the local lane is down
     # (breaker open / health probe failing, e.g. GPU held by a training run).
     if state.get("route") == "deep":
-        client = S.llm_deep
+        try:
+            client = await S.active_deep_client()
+        except AttributeError:   # test doubles without the helper
+            client = S.llm_deep
+        if client is not S.llm_deep:
+            log.info("[graph] job=%s local lane down — deep turn on the remote "
+                     "failsafe (%s)", state.get("job_id"), client.model)
     else:
         client = await S.active_fast_client()
         if client is not S.llm_client:
-            log.info("[graph] job=%s fast lane down — serving turn on the deep "
-                     "endpoint (%s)", state.get("job_id"), client.model)
+            log.info("[graph] job=%s fast lane down — serving turn on the "
+                     "failsafe endpoint (%s)", state.get("job_id"), client.model)
             state["fast_fell_back"] = True
     state["pass_model"] = client.model
     # Disable Qwen's <think> on the FIRST pass: it only decides whether to call
@@ -562,7 +568,7 @@ async def log_pass_node(state: TurnState) -> dict:
     _logc = (S.llm_deep if (state.get("route") == "deep"
                             or state.get("fast_fell_back")) else S.llm_client)
     asyncio.create_task(S.call_log.log_call(
-        _pass_ctx, model=_logc.model,
+        _pass_ctx, model=state.get("pass_model") or _logc.model,
         temperature=_logc.default_temperature,
         max_tokens=_logc.default_max_tokens,
         stream=True, enable_thinking=False,
@@ -958,11 +964,14 @@ async def verify_node(state: TurnState) -> dict:
         # artifact/time/consistency pass — run that on the local fast lane so a
         # plain Telegram reply isn't taxed a full remote-deep round-trip.
         if tool_ran or rescue:
-            _vclient = S.llm_deep
+            try:
+                _vclient = await S.active_deep_client()
+            except AttributeError:   # test doubles without the helper
+                _vclient = S.llm_deep
         else:
             try:
                 _vclient = await S.active_fast_client()
-            except AttributeError:   # test doubles without the helper
+            except AttributeError:
                 _vclient = S.llm_deep
         res = await _vclient.chat(
             [{"role": "system", "content": sys_prompt},
