@@ -47,6 +47,18 @@ _tools_cfg = _cfg.get("tools", {})
 _WORKING_DIR = _tools_cfg.get("working_dir", str(ROOT))
 _MAX_TOOL_ROUNDS = _tools_cfg.get("max_rounds", 5)
 _TOOL_TIMEOUT = _tools_cfg.get("timeout", 30)
+# Per-call wall-clock cap for every non-bash tool. Without this, a hung tool
+# (dead API, wedged subprocess pipe) silently stalls the whole conversation for
+# up to the 120s bash budget. Known-slow tools get explicit overrides.
+_PER_CALL_TIMEOUT = float(_tools_cfg.get("per_call_timeout", 25))
+_TIMEOUT_OVERRIDES: dict = dict(_tools_cfg.get("timeout_overrides") or {})
+
+
+def _tool_deadline(name: str) -> float:
+    try:
+        return float(_TIMEOUT_OVERRIDES.get(name, _PER_CALL_TIMEOUT))
+    except (TypeError, ValueError):
+        return _PER_CALL_TIMEOUT
 _BASH_BLOCKLIST_DEFAULT = [
     "rm -rf /",
     "rm -rf /*",
@@ -101,15 +113,22 @@ async def execute_tool(name: str, arguments: dict) -> str:
         elif name == "list_dir":
             result = _list_dir(resolved_args.get("path", _WORKING_DIR))
         elif name == "web_search":
-            result = _web_search(
-                query=resolved_args.get("query", ""),
-                max_results=int(resolved_args.get("max_results", 5)),
+            result = await asyncio.wait_for(
+                _web_search(
+                    query=resolved_args.get("query", ""),
+                    max_results=int(resolved_args.get("max_results", 5)),
+                ),
+                timeout=_tool_deadline(name),
             )
         elif name in _CUSTOM_EXECUTORS:
-            result = await _CUSTOM_EXECUTORS[name](resolved_args)
+            result = await asyncio.wait_for(
+                _CUSTOM_EXECUTORS[name](resolved_args), timeout=_tool_deadline(name))
         else:
             result = f"Unknown tool: {name}"
             _ok = False
+    except asyncio.TimeoutError:
+        result = f"Tool error ({name}): timed out after {_tool_deadline(name):.0f}s"
+        _ok = False
     except Exception as exc:
         result = f"Tool error ({name}): {exc}"
         _ok = False
@@ -175,7 +194,7 @@ async def execute_tool(name: str, arguments: dict) -> str:
 # a code change. Export BRAVE_API_KEY before launching the bridge.
 _BRAVE_API_KEY = os.environ.get("BRAVE_API_KEY", "")
 
-def _web_search(query: str, max_results: int = 5) -> str:
+async def _web_search(query: str, max_results: int = 5) -> str:
     """Search the web via Brave Search API and return top results."""
     log.info("Tool web_search: %r (max_results=%d)", query[:80], max_results)
     max_results = min(max(1, max_results), 10)
@@ -183,12 +202,14 @@ def _web_search(query: str, max_results: int = 5) -> str:
         return "[web_search disabled: BRAVE_API_KEY env var not set]"
     try:
         import httpx
-        resp = httpx.get(
-            "https://api.search.brave.com/res/v1/web/search",
-            params={"q": query, "count": max_results},
-            headers={"X-Subscription-Token": _BRAVE_API_KEY, "Accept": "application/json"},
-            timeout=10,
-        )
+        # Async client: the old sync httpx.get froze the whole event loop
+        # (every concurrent turn and websocket) for up to 10s per search.
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                "https://api.search.brave.com/res/v1/web/search",
+                params={"q": query, "count": max_results},
+                headers={"X-Subscription-Token": _BRAVE_API_KEY, "Accept": "application/json"},
+            )
         resp.raise_for_status()
         data = resp.json()
         results = []

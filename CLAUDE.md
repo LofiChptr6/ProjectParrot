@@ -49,14 +49,33 @@ The trading desk stays at `~/opus trading` and is reached read-only over MCP.
   synthesis. `llm_pass_node` also falls back fast→deep when the local lane is
   down (`state["fast_fell_back"]`).
 - Tools are inline `<tool_call>` tags (not function-calling), executed in
-  `run_tools_node`; `interpret_node` grounds two-entity questions via
-  `kg_neighbors` (`_kg_consult` scans the 1-hop edges for the counterpart).
+  `run_tools_node` under a per-call timeout (`tools.per_call_timeout`, 25s
+  default + `timeout_overrides`); `interpret_node` grounds two-entity questions
+  via `kg_neighbors` and now LOGS to PG (`triggered_by='interpret'`). It runs
+  on realtime surfaces only for reply threads (the bare ≤6-word trigger was a
+  TTFT tax); buffered channels keep the terse-message trigger.
+- Stall fillers, the escalate cover, and per-chunk TTS audio are **realtime
+  surfaces only** — buffered channels (telegram/discord/cli/eval) get text-only
+  chunks and no fillers. The first stall line is recorded into the tool-loop's
+  assistant echo and the realtime transcript (`state["stall_line"]`), so the
+  synthesis pass doesn't re-acknowledge. Tool rounds ≥2 speak one grounded
+  progress beat per round.
+- Verifier (non-realtime, every turn): tool turns + rescues on the deep lane;
+  clean tool-free drafts on the local fast lane.
 - Per-turn UI events flow through an `asyncio.Queue` relayed by
-  `bridge/server.py:_run_inline_turn` — its event contract must not change.
+  `bridge/server.py:_run_inline_turn`. Event contract: existing event shapes
+  must not change; `viseme_update` (late lip-sync upgrade for an
+  already-emitted chunk, keyed by `chunk_idx`/`index`) is additive — alignment
+  runs off the critical path and is skipped entirely while STT is disabled.
 
 ## Memory layers (5)
 
-1. **Short-term** — last 22 turns in RAM (`memory.short_term_limit`).
+1. **Short-term** — last 22 turns (`memory.short_term_limit`), RAM +
+   persisted to `data/history/<uid>.json` (`bridge/history_store.py`) so a
+   bridge restart no longer wipes her memory of the conversation. Turns that
+   fall out of the window are folded into a **rolling summary**
+   (`server._summarize_history_span`, fast lane, `triggered_by='summary'`)
+   injected as an `[Earlier this conversation — condensed]` system message.
 2. **mem0 facts** — Chroma + SQLite under `memory/`; retrieval via
    `server._query_memories`, which applies the **novelty gate**: a fragment
    surfaced in the last ~6h is spent (dropped unless results starve). This is
@@ -78,6 +97,11 @@ The trading desk stays at `~/opus trading` and is reached read-only over MCP.
 - `autonomy/engine.py`: 12-utterance ledger + `_is_near_dup` Jaccard filter +
   `_strip_template_closer` (deterministically removes trailing
   want-to-guess/bet/check hook sentences — see tests/test_autonomy_closers.py).
+- `autonomy/engine.py` (2026-08): **entity-level daily dedup** (a subject like
+  DBC shares once per day regardless of article), **engagement-adaptive quiet**
+  (3 unanswered shares → silent until Ika speaks; persisted across restarts),
+  and **closer-shape rotation** (4 deterministic ending shapes, questions
+  allowed at most 1-in-4 — see tests/test_autonomy_variety.py).
 - vLLM `repetition_penalty: 1.08` on the fast lane only (deep must restate
   exact numbers).
 - mem0 novelty gate (above).
@@ -86,8 +110,12 @@ The trading desk stays at `~/opus trading` and is reached read-only over MCP.
 
 Every LLM call logs to `postgresql://mocha:5369@127.0.0.1:5432/mocha`, table
 `llm_call_log` (same schema as before the split — `triggered_by`, `messages`
-JSONB, `response_content`, latency/ttft/token columns). Useful queries live in
-git history and reporting docs; the quick one:
+JSONB, `response_content`, latency/ttft/token columns). Live `triggered_by`
+values: `channel`, `chat_stream`, `ws_live`, `ws_voice_stream`, `autonomy`,
+`diary_writer`, `admin_eval`, `cache_warm`, `interpret`, `summary`
+(`pass_number` 1 = main pass, 2 = verifier). `shiro`, `nori`, `repair` are
+legacy rows from before the LangGraph rewrite. Useful queries live in git
+history and reporting docs; the quick one:
 
 ```sql
 SELECT created_at, triggered_by, LEFT(response_content, 200), latency_ms

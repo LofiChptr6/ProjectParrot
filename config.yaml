@@ -45,19 +45,17 @@ llm:
   # Optional: set if vLLM was started with --api-key
   # api_key: ""
   request_timeout_s: 360
-  # If any segment exceeds this word count, run repair/split.
-  repair_max_words_per_segment: 60
   # Isolation guard for the SHARED opus-trading vLLM (bridge/llm_client.py).
   # Bounds Mocha's worst-case load so a Mocha bug can never starve Corvus's
   # trading inference. Defaults shown; tune only if needed.
   isolation:
-    # FAST client = Mocha's DEDICATED 3B (:8893). Nothing to protect here, so
-    # don't rate-limit it (that was adding multi-second waits under load). The
-    # strict guard lives on the `deep` client below (the shared trading vLLM).
-    max_concurrency: 3        # allow a little parallelism on the dedicated 3B
+    # FAST client = Mocha's DEDICATED local model (Qwen3-8B on :8893). Nothing
+    # to protect here, so don't rate-limit it (that was adding multi-second
+    # waits under load). The strict guard lives on the `deep` client below.
+    max_concurrency: 3        # allow a little parallelism on the dedicated model
     rate_limit_per_min: 0     # 0 = no rate cap
     burst: 1
-    breaker_fail_threshold: 4 # still fail fast if the 3B hangs
+    breaker_fail_threshold: 4 # still fail fast if the local vLLM hangs
     breaker_cooldown_s: 15
   # ── Model routing ──────────────────────────────────────────────────────────
   # Deep/THINKING model for reasoning/tool-heavy turns — deepseek-v3 on the
@@ -95,8 +93,9 @@ llm:
   # a training run and :8893 is down), route fast turns through the deep remote
   # endpoint instead of failing the turn. Latency degrades; Mocha stays alive.
   fallback_to_deep: true
-  # Heuristic router (no extra LLM call → no TTFT cost): default to the fast 3B;
-  # escalate to deep on these signals. Tool turns also auto-escalate (synthesis).
+  # Heuristic router (no extra LLM call → no TTFT cost): default to the fast
+  # local model; escalate to deep on these signals. Tool turns also
+  # auto-escalate (synthesis).
   routing:
     enabled: true
     min_words: 40
@@ -104,9 +103,9 @@ llm:
                conviction, attribution, briefing, hedge, exposure, drawdown,
                earnings, catalyst, stock, ticker, price, market, analyze,
                explain, compare, forecast, valuation]
-    # Tool/lookup intent → route the tool-EMITTING pass to Qwen (not the 3B,
-    # which fumbles inline tool-call JSON). Kept narrow so casual chat stays on
-    # the 3B and off opus's shared GPU. Omit to use the in-code default list.
+    # Tool/lookup intent → route the tool-EMITTING pass to the deep lane (the
+    # small fast model fumbles inline tool-call JSON). Kept narrow so casual
+    # chat stays local. Omit to use the in-code default list.
     tool_keywords: [news, headline, weather, forecast, temperature, "look up",
                     lookup, search, google, schedule, remind, reminder, calendar,
                     diary, "show me", "pull up", "what's the", "whats the",
@@ -128,16 +127,18 @@ llm:
                     "all time high", "all-time high", "new high", "new low",
                     crash, crashing, "cool off", "cooled off", earnings]
   # Output verifier — on NON-realtime surfaces (telegram/discord/cli, cron, and
-  # the eval harness) Qwen re-reads the drafted reply before it's sent and repairs
-  # leaked artifacts (<think>, raw JSON, stray tags) + claims not backed by the
-  # tool results. The webapp (typed + live voice) streams live and skips this.
-  # Fail-open: any verifier error keeps the original draft. See graph.py:verify_node.
+  # the eval harness) the drafted reply is re-read before it's sent: leaked
+  # artifacts (<think>, raw JSON, stray tags), unbacked claims, time/user-history
+  # fabrications, and self-contradictions are repaired. The webapp (typed + live
+  # voice) streams live and skips this. Fail-open: any verifier error keeps the
+  # original draft. See graph.py:verify_node.
   verifier:
     enabled: true
     realtime_sources: [web, ws_live, voice, voice-stream]
-    # The verifier only fires when a tool ran (data fidelity) or the draft looks
-    # malformed (leaked <think>/JSON/tags). Clean tool-free prose is sent as-is,
-    # so her voice on personal replies is never reprocessed.
+    # EVERY non-realtime turn verifies. Lane split (2026-08): tool turns and
+    # empty-draft rescues run on the deep model (data fidelity); clean tool-free
+    # drafts run the same checks on the local fast lane so a plain Telegram
+    # reply isn't taxed a remote round-trip.
 
 stt:
   # Voice INPUT removed (text-only) to free ~5.5GB VRAM for Mocha's own LLM.
@@ -350,7 +351,14 @@ tools:
   # working_dir intentionally unset — defaults to this repo's root (tools/
   # registry.py falls back to ROOT), so the project can move without edits.
   max_rounds: 5
-  timeout: 120  # generous: a tool round may need time for multi-step data fetches
+  timeout: 120  # bash_exec budget only (bash is not on Mocha's allowlist)
+  # Wall-clock cap per tool call — a hung tool stalls the whole conversation,
+  # so the default is conversational (25s), with overrides for known-slow
+  # multi-step desk fetches.
+  per_call_timeout: 25
+  timeout_overrides:
+    get_trading_briefing: 90
+    get_position_brief: 60
 
   # Shell-execution safety. Substring match; case-sensitive. Applies to all
   # callers of bash_exec (bash_exec is not in Mocha's allowlist — no shell access).

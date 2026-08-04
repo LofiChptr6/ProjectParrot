@@ -24,6 +24,7 @@ import datetime as dt
 import json
 import logging
 import random
+import re
 import time
 from pathlib import Path
 from typing import Optional
@@ -106,6 +107,26 @@ _STATE_PATH = ROOT / "data" / "autonomy_state.json"
 _RECENT_MAX = 12
 _persist: Optional[dict] = None
 
+# ---------------------------------------------------------------------------
+#  Variety & engagement tunables (2026-08-03 audit: "DBC shared 4× in a day,
+#  ~10 shares/day for weeks with near-zero replies, every share ending on the
+#  same hook"). Module constants by design — deliberately NOT config.yaml knobs.
+# ---------------------------------------------------------------------------
+
+# How many wall-clock share timestamps we keep for the engagement gate.
+_SHARE_TIMES_MAX = 8
+# If this many consecutive shares fired with no user activity after any of
+# them, Mocha goes quiet (news + drift/bored/lonely) until Ika speaks again.
+_UNANSWERED_SHARES_TO_QUIET = 3
+# Per tick, how many pool candidates we'll pop looking for a fresh-subject item
+# before giving up (keeps one tick from draining the whole curiosity pool).
+_SUBJECT_SKIP_MAX_TRIES = 4
+# Cap on subject keys extracted per item (realistic items yield 2–5).
+_SUBJECT_KEYS_MAX = 8
+# If a title+snippet contains more distinct bare ALL-CAPS tokens than this,
+# it's a SHOUTY HEADLINE, not a list of tickers — skip the bare-caps rule.
+_SUBJECT_CAPS_TOKEN_LIMIT = 6
+
 
 def _load_persist() -> dict:
     try:
@@ -115,10 +136,16 @@ def _load_persist() -> dict:
             d.setdefault("turns", 0)            # news / check-in budget
             d.setdefault("reconnect_turns", 0)  # separate "welcome back" budget
             d.setdefault("recent", [])
+            d.setdefault("shared_subjects", [])   # entity keys shared TODAY (dedup)
+            d.setdefault("share_times", [])       # epoch stamps of recent shares
+            d.setdefault("share_count", 0)        # lifetime shares → closer rotation
+            d.setdefault("last_user_epoch", 0.0)  # persisted mirror of presence
             return d
     except Exception as exc:
         log.warning("autonomy: failed to read state (%s) — starting fresh", exc)
-    return {"day": "", "turns": 0, "reconnect_turns": 0, "recent": []}
+    return {"day": "", "turns": 0, "reconnect_turns": 0, "recent": [],
+            "shared_subjects": [], "share_times": [], "share_count": 0,
+            "last_user_epoch": 0.0}
 
 
 def _save_persist() -> None:
@@ -153,6 +180,12 @@ def _maybe_reset_daily_counter() -> None:
         p["turns"] = 0
         p["reconnect_turns"] = 0
         p["recent"] = []
+        # Entity-level dedup is a DAILY ledger — a subject is fair game again
+        # tomorrow. share_times / share_count / last_user_epoch deliberately
+        # survive the rollover: the unanswered-shares gate must keep her quiet
+        # across midnight (the audit showed days of pushes with zero replies),
+        # and the closer-shape rotation should stay evenly distributed.
+        p["shared_subjects"] = []
         _save_persist()
     # Restart-proofing: seed the in-memory mirror from the persisted truth.
     _mocha_state["autonomous_turns_today"] = int(p.get("turns", 0))
@@ -176,6 +209,70 @@ def _stamp_greeting() -> None:
     p = _get_persist()
     p["last_hello_epoch"] = time.time()
     _save_persist()
+
+
+# ---------------------------------------------------------------------------
+#  Engagement-adaptive quiet — talking into the void is a signal, act on it
+# ---------------------------------------------------------------------------
+# The audit found ~10 shares/day for weeks with almost no replies (one day: 36
+# pushes, 0 answers). The caps bound volume but nothing ADAPTED to being
+# ignored. Rule: if the last _UNANSWERED_SHARES_TO_QUIET shares all postdate
+# Ika's last activity, every further news share and drift/bored/lonely check-in
+# is suppressed until he speaks again. Reconnect greetings and first_hello live
+# in handle_client_hello and stay exempt — a hello when he shows up is warmth,
+# not a push. The gate lifts on its own: any user activity moves
+# last-user-activity past the newest shares, and the condition goes false.
+
+# One-shot log guard so the suppression line lands once per episode, not per tick.
+_suppression_logged: bool = False
+
+
+def _should_suppress_for_disengagement(share_epochs: list,
+                                       last_user_epoch: float,
+                                       threshold: int = _UNANSWERED_SHARES_TO_QUIET) -> bool:
+    """Pure decision: have the ``threshold`` most recent shares ALL gone
+    unanswered (i.e. every one of them happened after the last user activity)?
+
+    ``share_epochs`` are wall-clock stamps of past autonomous shares (any
+    order); ``last_user_epoch`` is when Ika last said anything (0.0 = never).
+    Fewer than ``threshold`` shares can never suppress."""
+    if threshold <= 0:
+        return False
+    times = sorted(float(t) for t in (share_epochs or []))
+    recent = times[-threshold:]
+    if len(recent) < threshold:
+        return False
+    # All of the newest `threshold` shares postdate the last user activity —
+    # equivalent to the oldest of them doing so.
+    return recent[0] > float(last_user_epoch or 0.0)
+
+
+def _effective_last_user_epoch() -> float:
+    """Wall-clock 'when did Ika last say anything'. The live source of truth is
+    presence (fed by bridge/server._touch_interaction on every inbound message);
+    the persisted mirror covers the window right after a bridge restart, when
+    presence's in-memory clock is blank but the share history on disk is not."""
+    try:
+        from autonomy import presence
+        live = float(presence.last_activity_epoch())
+    except Exception:
+        live = 0.0
+    return max(live, float(_get_persist().get("last_user_epoch", 0.0)))
+
+
+def _sync_last_user_epoch() -> None:
+    """Mirror presence's wall-clock activity stamp into the persisted state (at
+    heartbeat granularity, writing only when it moved) so the unanswered-shares
+    gate keeps working across bridge restarts."""
+    try:
+        from autonomy import presence
+        ep = float(presence.last_activity_epoch())
+    except Exception:
+        return
+    p = _get_persist()
+    if ep > float(p.get("last_user_epoch", 0.0)) + 1.0:
+        p["last_user_epoch"] = ep
+        _save_persist()
 
 
 # ---------------------------------------------------------------------------
@@ -362,7 +459,14 @@ async def _compose_news_share(item: dict) -> list[dict]:
         messages.append({"role": "system", "content": pnl_msg})
     for entry in conversation_history[-MAX_HISTORY:]:
         messages.append({"role": entry["role"], "content": entry["content"]})
-    messages.append({"role": "user", "content": _news_share_prompt(item)})
+
+    # Closer-shape rotation: one concrete directive per share, cycled by the
+    # persisted counter (advanced in _note_news_share only when a share actually
+    # lands, so a declined/failed compose retries the same shape).
+    shape_id, shape_directive = _share_shape(int(_get_persist().get("share_count", 0)))
+    log.info("autonomy: news share closer shape=%s", shape_id)
+    messages.append({"role": "user", "content": _news_share_prompt(item)
+                     + "\nShape for THIS share: " + shape_directive})
 
     # Knowledge-graph garnish: if the item names a company we have a cited
     # relationship for, hand Mocha that ONE grounded fact (read-only proxy).
@@ -373,7 +477,14 @@ async def _compose_news_share(item: dict) -> list[dict]:
             "trust this over guessing. Weave it into ONE clause ONLY if it's relevant "
             "to the item; do not read the evidence id aloud]:\n- " + kg_line)})
 
-    return await _llm_to_segments(messages, source="autonomy:news")
+    segments = await _llm_to_segments(messages, source="autonomy:news")
+    if not _shape_allows_question(shape_id):
+        # Post-filter enforcement: the template-closer stripper already ran in
+        # _post_filter; this additionally drops any OTHER trailing question when
+        # the current shape forbids one (a lone question survives — imperfect
+        # beats silent).
+        segments = _enforce_statement_close(segments)
+    return segments
 
 
 # All-caps tokens that look like tickers but aren't — keeps the regex fallback
@@ -383,6 +494,133 @@ _TICKER_STOPWORDS = frozenset({
     "FDA", "USA", "EPS", "NYSE", "ESG", "SPAC", "YOY", "FY", "USD", "API", "EV",
     "AND", "THE", "FOR", "NEW", "Q1", "Q2", "Q3", "Q4",
 })
+
+
+# ---------------------------------------------------------------------------
+#  Entity-level daily dedup — one subject per day, however many articles exist
+# ---------------------------------------------------------------------------
+# The curiosity pool dedups by article URL/title hash, so four DIFFERENT
+# articles about DBC all fired in one day. We extract coarse SUBJECT keys from
+# each candidate (title+snippet) and keep a per-day set of already-shared keys
+# in the persisted state; any overlap → skip the item. Extraction is
+# deliberately conservative: a missed key costs one repeat, a false key
+# silences a genuinely fresh find.
+
+# Tokens that look like tickers/names but are common-noise — never subject keys.
+# Superset of _TICKER_STOPWORDS. NASA-style org acronyms are here on purpose:
+# "NASA" is in most space headlines, and keying on it would collapse every
+# space story into one subject.
+_SUBJECT_STOPWORDS = _TICKER_STOPWORDS | frozenset({
+    "US", "UK", "EU", "UN", "IT", "TV", "PC", "PM", "AM", "OK", "VS", "PR",
+    "AGI", "LLM", "GPU", "CPU", "IMF", "ECB", "BOJ", "DOJ", "FTC", "EPA",
+    "NASA", "WSJ", "CNBC", "CNN", "BBC", "NYT", "PBS", "UPDATE", "LIVE",
+})
+
+# Capitalized-but-common words that must never become plain-name keys
+# (headlines are Title Case, so capitalization alone proves nothing).
+_COMMON_CAP_WORDS = frozenset({
+    "the", "a", "an", "this", "that", "these", "those", "what", "why", "how",
+    "when", "where", "who", "here", "there", "with", "from", "into", "over",
+    "after", "before", "amid", "says", "said", "will", "would", "could",
+    "should", "new", "big", "top", "just", "now", "today", "yesterday",
+    "tomorrow", "week", "month", "year", "report", "stocks", "shares",
+    "stock", "market", "markets", "news", "update", "latest", "breaking",
+})
+
+_TICKER_DOLLAR_RE = re.compile(r"\$([A-Za-z]{1,5})\b")          # $DBC, $nvda
+_TICKER_CAPS_RE = re.compile(r"\b([A-Z]{2,5})\b")               # DBC, NVDA
+_CAMEL_NAME_RE = re.compile(r"\b([A-Z][a-z]+(?:[A-Z][A-Za-z]*)+)\b")  # CoStar, DeepSeek
+_PLAIN_NAME_RE = re.compile(r"\b([A-Z][a-z]{2,})\b")            # Tesla, Invesco
+_POSSESSIVE_NAME_RE = re.compile(r"\b([A-Z][a-z]{2,})[’']s\b")  # Tesla's → Tesla
+
+
+def _salient_plain_name(text: str) -> Optional[str]:
+    """The single most-repeated plain Capitalized word (≥2 mentions), or None.
+
+    Repetition across title+snippet is the salience signal — it's what keeps
+    ordinary Title-Case headline words (one mention each) from becoming keys
+    while still catching the actual subject ("Tesla … Tesla shares fell…")."""
+    counts: dict[str, int] = {}
+    first_pos: dict[str, int] = {}
+    for m in _PLAIN_NAME_RE.finditer(text):
+        tok = m.group(1)
+        low = tok.lower()
+        if low in _COMMON_CAP_WORDS or tok.upper() in _SUBJECT_STOPWORDS:
+            continue
+        counts[low] = counts.get(low, 0) + 1
+        first_pos.setdefault(low, m.start())
+    best: Optional[str] = None
+    for low, n in counts.items():
+        if n < 2:
+            continue
+        if (best is None or n > counts[best]
+                or (n == counts[best] and first_pos[low] < first_pos[best])):
+            best = low
+    return best
+
+
+def _extract_subject_keys(title: str, snippet: str = "") -> set:
+    """Coarse, lowercased subject keys for one news item (title+snippet).
+
+    Rules (each high-precision on its own):
+      1. ``$XXX`` cashtags.
+      2. Standalone ALL-CAPS ticker-like tokens (2–5 letters), unless the text
+         is a shouty all-caps headline (> _SUBJECT_CAPS_TOKEN_LIMIT distinct).
+      3. Internal-capital names — CoStar, DeepSeek, OpenAI.
+      4. Possessive capitalized words — "Nvidia's run…" marks a proper noun.
+      5. The most salient plain capitalized word (repeated ≥2 times).
+    All rules pass through the stoplists; keys are lowercased so "$DBC", "DBC"
+    and "CoStar"/"CoStar Group's CoStar" converge."""
+    text = f"{title or ''} {snippet or ''}".strip()
+    if not text:
+        return set()
+    keys: set = set()
+    for tok in _TICKER_DOLLAR_RE.findall(text):
+        if tok.upper() not in _SUBJECT_STOPWORDS:
+            keys.add(tok.lower())
+    caps = [t for t in _TICKER_CAPS_RE.findall(text) if t not in _SUBJECT_STOPWORDS]
+    if len(set(caps)) <= _SUBJECT_CAPS_TOKEN_LIMIT:
+        keys.update(t.lower() for t in caps)
+    for tok in _CAMEL_NAME_RE.findall(text):
+        if tok.upper() not in _SUBJECT_STOPWORDS:
+            keys.add(tok.lower())
+    for tok in _POSSESSIVE_NAME_RE.findall(text):
+        low = tok.lower()
+        if low not in _COMMON_CAP_WORDS and tok.upper() not in _SUBJECT_STOPWORDS:
+            keys.add(low)
+    salient = _salient_plain_name(text)
+    if salient:
+        keys.add(salient)
+    if len(keys) > _SUBJECT_KEYS_MAX:
+        keys = set(sorted(keys)[:_SUBJECT_KEYS_MAX])
+    return keys
+
+
+def _subjects_shared_today() -> set:
+    """The persisted set of subject keys already shared today (reset at the
+    daily rollover in _maybe_reset_daily_counter)."""
+    return set(_get_persist().get("shared_subjects", []))
+
+
+def _news_subject_conflict(item: dict, shared: Optional[set] = None) -> set:
+    """Subject keys of ``item`` that were already shared today. Empty set =
+    fresh subject, fine to share. Pass ``shared`` explicitly for a pure call
+    (tests); default reads the persisted daily set."""
+    keys = _extract_subject_keys(item.get("title") or "", item.get("snippet") or "")
+    if shared is None:
+        shared = _subjects_shared_today()
+    return keys & shared
+
+
+def _note_news_share(item: dict) -> None:
+    """Post-delivery bookkeeping for a news share: record its subject keys in
+    today's dedup set and advance the closer-shape rotation counter."""
+    p = _get_persist()
+    keys = _extract_subject_keys(item.get("title") or "", item.get("snippet") or "")
+    if keys:
+        p["shared_subjects"] = sorted(set(p.get("shared_subjects", [])) | keys)
+    p["share_count"] = int(p.get("share_count", 0)) + 1
+    _save_persist()
 
 
 async def _kg_news_annotation(item: dict) -> str | None:
@@ -425,6 +663,40 @@ def _avoid_message(recent: list[str]) -> str:
         "Say something different in substance AND wording, or stay silent. Do "
         "not paraphrase any of the above."
     )
+
+
+# ---------------------------------------------------------------------------
+#  Closer-shape rotation — structure an 8B model can actually follow
+# ---------------------------------------------------------------------------
+# The share prompt bans the "Want to guess…?" hook and says "vary your shape",
+# but a fast model needs a concrete instruction, not an exhortation. We keep a
+# persisted share counter and cycle one explicit shape directive per share.
+# Shapes a/b/c forbid a question close (enforced in post-filter); shape d
+# explicitly allows ONE real question — so questions still happen, just not on
+# every single share.
+
+_SHAPE_ROTATION: tuple = (
+    ("statement",
+     "End on the observation itself — a flat, declarative last sentence."),
+    ("take",
+     "End with what YOU make of it — your one-line take."),
+    ("callback",
+     "End with a callback to something from your recent conversation if one "
+     "genuinely fits; otherwise just end plainly."),
+    ("question",
+     "You may end with ONE real question this time — only if you actually "
+     "want his answer."),
+)
+
+
+def _share_shape(counter: int) -> tuple:
+    """Deterministic (shape_id, directive) for the Nth share, cycling a/b/c/d."""
+    return _SHAPE_ROTATION[int(counter) % len(_SHAPE_ROTATION)]
+
+
+def _shape_allows_question(shape_id: str) -> bool:
+    """Only the 'question' shape may end on a question mark."""
+    return shape_id == "question"
 
 
 def _news_share_prompt(item: dict) -> str:
@@ -651,6 +923,10 @@ def _try_parse_segments_json(content: str) -> Optional[list[dict]]:
 # post-filter strips any trailing sentence matching this shape.
 _TEMPLATE_CLOSER_RE = None  # compiled lazily below
 
+# Sentence splitter shared by the closer strippers, keeping enders. 中文句号/问号
+# included — the closer habit exists in both registers.
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?。！？])\s+")
+
 
 def _strip_template_closer(text: str) -> str:
     """Drop a trailing 'Want to guess…?'-style hook sentence. Returns the text
@@ -662,13 +938,45 @@ def _strip_template_closer(text: str) -> str:
         _TEMPLATE_CLOSER_RE = _re.compile(
             r"(?i)\b(want to|wanna|care to|dare you to) "
             r"(guess|bet|check|hear|see|know|take a stab|dig)\b")
-    # Split into sentences, keeping enders. 中文句号/问号 included — the closer
-    # habit exists in both registers.
-    parts = _re.split(r"(?<=[.!?。！？])\s+", text.strip())
+    parts = _SENTENCE_SPLIT_RE.split(text.strip())
     if len(parts) >= 2 and parts[-1].endswith(("?", "？")) \
             and _TEMPLATE_CLOSER_RE.search(parts[-1]):
         return " ".join(parts[:-1]).strip()
     return text
+
+
+def _strip_question_closer(text: str) -> str:
+    """Shape enforcement (the _strip_template_closer mechanism, generalized):
+    when the rotation shape forbids a question close, drop ANY trailing
+    question sentence — provided a non-question sentence precedes it. A lone
+    question is returned unchanged: imperfect beats silent."""
+    parts = _SENTENCE_SPLIT_RE.split(text.strip())
+    if (len(parts) >= 2 and parts[-1].endswith(("?", "？"))
+            and not parts[-2].endswith(("?", "？"))):
+        return " ".join(parts[:-1]).strip()
+    return text
+
+
+def _enforce_statement_close(segments: list) -> list:
+    """Apply the no-question-close rule (shapes a/b/c) to parsed segments.
+
+    Strips a trailing question sentence from the final segment; if the final
+    segment IS a lone question but a non-question segment precedes it, drops
+    that segment. A lone question with nothing before it is kept."""
+    if not segments:
+        return segments
+    last = (segments[-1].get("text") or "").strip()
+    stripped = _strip_question_closer(last)
+    if stripped != last:
+        log.info("autonomy: shape forbids a question close — stripped trailing "
+                 "question from: %r", last)
+        return segments[:-1] + [{**segments[-1], "text": stripped}]
+    if (last.endswith(("?", "？")) and len(segments) >= 2
+            and not (segments[-2].get("text") or "").rstrip().endswith(("?", "？"))):
+        log.info("autonomy: shape forbids a question close — dropped trailing "
+                 "question segment: %r", last)
+        return segments[:-1]
+    return segments
 
 
 def _post_filter(segments: list[dict],
@@ -784,6 +1092,12 @@ def _mark_spoke(text: str = "", *, reconnect: bool = False) -> None:
         p["reconnect_turns"] = int(p.get("reconnect_turns", 0)) + 1
     else:
         p["turns"] = int(p.get("turns", 0)) + 1
+        # Engagement gate bookkeeping: wall-clock stamps of proactive shares
+        # (news AND check-ins; greetings excluded). Compared against the last
+        # user-activity epoch to detect "N shares in a row into the void".
+        stamps = p.setdefault("share_times", [])
+        stamps.append(time.time())
+        del stamps[:-_SHARE_TIMES_MAX]
     if text:
         recent = p.setdefault("recent", [])
         recent.append(text)
@@ -799,7 +1113,7 @@ def _mark_spoke(text: str = "", *, reconnect: bool = False) -> None:
 
 async def decide_tick() -> None:
     """One heartbeat: evaluate state, maybe speak."""
-    global _last_eval_monotonic
+    global _last_eval_monotonic, _suppression_logged
     cfg = _cfg()
     if not cfg["enabled"]:
         return
@@ -807,6 +1121,7 @@ async def decide_tick() -> None:
     from bridge.server import _mocha_state, _last_interaction_time, _ws_clients
 
     _maybe_reset_daily_counter()
+    _sync_last_user_epoch()
 
     now = time.monotonic()
 
@@ -833,6 +1148,20 @@ async def decide_tick() -> None:
     from autonomy import presence
     if not presence.is_idle(float(cfg.get("idle_after_s", 600.0))):
         return
+
+    # Engagement-adaptive quiet: N shares in a row with zero user activity after
+    # them means Ika is not engaging — stop pushing (news AND drift/bored/lonely
+    # check-ins) until he speaks. Greetings (reconnect/first_hello) live in
+    # handle_client_hello and are exempt. Lifts on its own: any user activity
+    # makes the newest shares no longer all-unanswered.
+    if _should_suppress_for_disengagement(
+            _get_persist().get("share_times", []), _effective_last_user_epoch()):
+        if not _suppression_logged:
+            log.info("autonomy: %d unanswered shares — staying quiet until Ika speaks",
+                     _UNANSWERED_SHARES_TO_QUIET)
+            _suppression_logged = True
+        return
+    _suppression_logged = False
 
     elapsed = now - _last_interaction_time
     topic = _mocha_state.get("last_topic_summary") or ""
@@ -865,10 +1194,29 @@ async def decide_tick() -> None:
     #    pool is empty or curiosity is disabled, in which case we fall through to
     #    a (rare) check-in. A dull item she declines to share is simply dropped —
     #    it doesn't burn a spoken turn.
+    #    Entity-level daily dedup: the pool dedups by article URL, so a fourth
+    #    DIFFERENT article about DBC still fires — here we skip any candidate
+    #    whose subject keys were already shared today and try the next one
+    #    (bounded, so one tick can't drain the pool).
+    item = None
+    skipped_dup_subject = False
     try:
         from autonomy import curiosity
         await curiosity.maybe_refill()
-        item = await curiosity.next_item()
+        shared_today = _subjects_shared_today()
+        for _ in range(_SUBJECT_SKIP_MAX_TRIES):
+            cand = await curiosity.next_item()
+            if cand is None:
+                break
+            conflict = _news_subject_conflict(cand, shared_today)
+            if conflict:
+                skipped_dup_subject = True
+                log.info("autonomy: skipping news item %r — subject(s) %s already "
+                         "shared today", (cand.get("title") or "")[:80],
+                         sorted(conflict))
+                continue
+            item = cand
+            break
     except Exception as exc:
         log.warning("autonomy: curiosity lookup failed: %s", exc)
         item = None
@@ -878,6 +1226,7 @@ async def decide_tick() -> None:
         res = await _deliver(segments, "news")
         if res["spoke"]:
             _mark_spoke(take)
+            _note_news_share(item)  # today's subject keys + shape-rotation counter
             _mocha_state["mood"] = "curious"
             # Record what she sent — keyed by the Telegram message_id so a later
             # reply resolves back to this exact article, plus a mem0 record for
@@ -888,6 +1237,11 @@ async def decide_tick() -> None:
             except Exception as exc:
                 log.warning("autonomy: news_ledger record failed: %s", exc)
         return  # spent this tick on a real find — don't also fire filler
+    if skipped_dup_subject:
+        # Every candidate this tick was a same-subject repeat. Stay silent
+        # rather than falling through to a content-free check-in — silence
+        # beats "I dropped your news so here's filler instead".
+        return
 
     # 2) No find available. By default she stays silent — she only speaks
     #    unprompted when she has a genuinely fresh item, never content-free

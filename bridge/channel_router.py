@@ -28,11 +28,24 @@ _PRIMARY_USER_PATH = ROOT / "data" / "primary_user.json"
 #  Primary user (Telegram chat_id) — learned from first POST /channel
 # ---------------------------------------------------------------------------
 
+# mtime-keyed cache: this file is read 3+ times per turn (time message,
+# today-block, memory metadata) yet changes only when a channel identity does.
+_PRIMARY_CACHE: tuple[float, Optional[dict]] | None = None
+
+
 def load_primary_user() -> Optional[dict]:
+    global _PRIMARY_CACHE
     if not _PRIMARY_USER_PATH.exists():
         return None
     try:
-        return json.loads(_PRIMARY_USER_PATH.read_text(encoding="utf-8"))
+        mtime = _PRIMARY_USER_PATH.stat().st_mtime
+        if _PRIMARY_CACHE and _PRIMARY_CACHE[0] == mtime:
+            cached = _PRIMARY_CACHE[1]
+            # Copy: save_primary_user mutates the returned dict before writing.
+            return dict(cached) if cached is not None else None
+        data = json.loads(_PRIMARY_USER_PATH.read_text(encoding="utf-8"))
+        _PRIMARY_CACHE = (mtime, data)
+        return dict(data)
     except Exception as exc:
         log.warning("Failed to read primary_user.json: %s", exc)
         return None

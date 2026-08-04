@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -175,6 +176,11 @@ def _build_metadata(role: str, extra: Optional[dict] = None) -> dict:
 #  Public async API
 # ---------------------------------------------------------------------------
 
+# One extraction at a time (thread-side): add() runs in to_thread and drives an
+# LLM call against the same fast vLLM that serves live turns.
+_EXTRACT_SEM = threading.BoundedSemaphore(1)
+
+
 async def add(
     text: str,
     role: str = "user",
@@ -199,7 +205,11 @@ async def add(
         try:
             store = get_store()
             msg = [{"role": role if role in ("user", "assistant") else "user", "content": text}]
-            store.add(msg, user_id=uid, metadata=meta, infer=infer)
+            # Serialize fact-extraction: each add() fires an LLM call at the same
+            # vLLM the live turn uses (fast-lane concurrency cap is 3), so a burst
+            # of unserialized adds can starve the next turn's TTFT.
+            with _EXTRACT_SEM:
+                store.add(msg, user_id=uid, metadata=meta, infer=infer)
         except Exception as exc:
             log.warning("mem0 add failed: %s", exc)
 

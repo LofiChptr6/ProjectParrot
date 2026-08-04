@@ -573,12 +573,13 @@
   transcribed text
   -> LLM pipeline
 
-  VISEME LIP-SYNC (parallel to TTS)
+  VISEME LIP-SYNC (background, after TTS — chunk emits first, `viseme_update`
+  upgrades it; skipped while STT is disabled)
   ===================================
   TTS audio + text
        |
        v
-  STT :8001 /align
+  STT :8091 /align
   (MMS forced alignment)
        |
        v

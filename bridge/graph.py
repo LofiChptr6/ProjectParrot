@@ -3,10 +3,15 @@
 This replaces the hand-rolled ReAct ``while`` loop that lived in
 ``bridge/server.py:_run_inline_turn``. The control flow is now a graph:
 
-    build_messages → llm_pass → log_pass → [should_continue?]
-                          ↑                    │
-                          └──── run_tools ←────┤ (pending tools & round < max)
-                                               └→ finalize → END
+    router → interpret → build_messages → llm_pass → log_pass → [should_continue?]
+                                               ↑                    │
+                          (escalate →) llm_pass ⇄ run_tools ←───────┤
+                                                                    └→ verify → finalize → END
+
+("fast" = the local dedicated model, currently Qwen3-8B-FP8 on :8893; "deep" =
+the remote thinking lane, currently deepseek-v3 via the sparks gateway. Older
+comments below may still say "3B" — that was the original Llama-3.2-3B fast
+model, retired 2026-07-02; read it as "the fast lane".)
 
 LangGraph owns ONLY the orchestration (the loop, the conditional tool edge,
 node sequencing). The streaming LLM call + inline-tag parser stay inside the
@@ -63,6 +68,62 @@ _HANDLE_REMINDER = (
 
 async def _emit(state: TurnState, ev: dict) -> None:
     await state["emit"].put(ev)
+
+
+def _join_speech(parts: list) -> str:
+    """Join speech chunks into display text. Chunks come out of the parser
+    stripped, so a bare ``"".join`` glues sentences ("I'm Mocha.Got a…")."""
+    return " ".join(p.strip() for p in (parts or []) if p and p.strip())
+
+
+def _format_ack(ack: str) -> str:
+    """Normalize a spoken stall ack for prepending to text ("on it" → "on it.")."""
+    ack = (ack or "").strip()
+    if ack and ack[-1] not in ".!?…":
+        ack += "."
+    return ack
+
+
+def _spawn_viseme_update(state: TurnState, text: str, idx: int, audio: bytes | None) -> None:
+    """Run lip-sync alignment OFF the critical path: the speech chunk is already
+    emitted (audio plays on the client's analyser fallback); when /align returns,
+    a follow-up ``viseme_update`` upgrades that chunk. Skipped entirely while STT
+    is disabled — no dead-port POST per chunk. Best-effort; late results after a
+    finished turn land on a drained queue and are simply never read."""
+    from bridge import server as S
+    if not audio or not text or not getattr(S, "_STT_ENABLED", False):
+        return
+
+    async def _task() -> None:
+        try:
+            v = await S._generate_visemes(audio, text)
+            if v and v.get("viseme_b64"):
+                await _emit(state, {
+                    "type": "viseme_update", "chunk_idx": idx,
+                    "viseme_b64": v["viseme_b64"],
+                    "viseme_fps": v.get("viseme_fps", 30),
+                    "viseme_frames": v.get("viseme_frames", 0),
+                })
+        except Exception as e:  # noqa: BLE001 — lip-sync must never break a turn
+            log.debug("[graph] viseme update failed: %s", e)
+
+    asyncio.create_task(_task())
+
+
+async def _synth_and_emit(state: TurnState, text: str, idx: int) -> None:
+    """Shared tail for every spoken chunk: synth → emit immediately (no viseme
+    wait) → schedule the viseme upgrade in the background. Buffered surfaces
+    (telegram/discord/cli/eval) get text-only chunks — synthesizing audio nobody
+    plays cost an F5 round-trip per chunk on every text turn."""
+    from bridge import server as S
+    audio = (await S._synthesize(text, user_id=state.get("user_id"))
+             if state.get("realtime") else None)
+    await _emit(state, {
+        "type": "speech_chunk", "chunk_idx": idx, "text": text,
+        "audio_base64": base64.b64encode(audio).decode() if audio else None,
+        "viseme_b64": None, "viseme_fps": 30, "viseme_frames": 0,
+    })
+    _spawn_viseme_update(state, text, idx, audio)
 
 
 # Arg keys most likely to carry the "what" of a lookup, in priority order.
@@ -231,8 +292,6 @@ async def _emit_stall(state: TurnState, reserved_idx: int | None = None) -> None
         else:
             idx = state["chunk_idx"]
             state["chunk_idx"] = idx + 1
-        audio = await S._synthesize(line, user_id=state.get("user_id"))
-        viseme = (await S._generate_visemes(audio, line) if audio else None) or {}
         # Webapp only: nudge the VRM avatar into a visible "thinking" pose (the
         # calm/explaining loop pose) while the tool + (often deep) synthesis run.
         # The stall speech_chunk below carries no gesture of its own, so without
@@ -241,13 +300,9 @@ async def _emit_stall(state: TurnState, reserved_idx: int | None = None) -> None
         # on LOOPING), so the clip plays through. Telegram has no avatar, so this
         # is a no-op there.
         await _emit(state, {"type": "gesture", "name": "thinking"})
-        await _emit(state, {
-            "type": "speech_chunk", "chunk_idx": idx, "text": line,
-            "audio_base64": base64.b64encode(audio).decode() if audio else None,
-            "viseme_b64": viseme.get("viseme_b64"),
-            "viseme_fps": viseme.get("viseme_fps", 30),
-            "viseme_frames": viseme.get("viseme_frames", 0),
-        })
+        await _synth_and_emit(state, line, idx)
+        # First filler only — later progress beats don't replace the turn's ack.
+        state.setdefault("stall_line", line)
     except Exception as e:
         log.warning("[graph] stall filler failed: %s", e)
 
@@ -257,8 +312,8 @@ async def _emit_stall(state: TurnState, reserved_idx: int | None = None) -> None
 # ──────────────────────────────────────────────────────────────────────────
 
 async def route_node(state: TurnState) -> dict:
-    """Heuristic model pick for this turn (fast 3B vs deep Qwen-32B). No LLM
-    call, so it costs ~0ms / no TTFT hit. Tool turns later escalate to deep."""
+    """Heuristic model pick for this turn (local fast lane vs remote deep lane).
+    No LLM call, so it costs ~0ms / no TTFT hit. Tool turns later escalate to deep."""
     from bridge import server as S
     # A reply to a shared news item needs the deep model: it carries the article
     # context and may call recall_news to find similar pieces (the fast 3B has no
@@ -341,9 +396,12 @@ async def llm_pass_node(state: TurnState) -> dict:
     # (Qwen is told to skip its own lead-in before a tool call — see context.py —
     # so this is the single opening cover, not a double.)
     _stall_task = None
-    if (state.get("route") == "deep" and int(state.get("tool_round", 0)) == 0
+    if (state.get("realtime")
+            and state.get("route") == "deep" and int(state.get("tool_round", 0)) == 0
             and not state.get("started_stall") and not state.get("escalated")
             and not state.get("fast_fell_back")):
+        # (Realtime only: on buffered surfaces the reply arrives whole, so a
+        # filler is pure noise — the "On it." bubbles Ika saw on Telegram.)
         # (Also skip when the fast lane is down — the filler runs on that lane.)
         # (Skip on escalated turns: the fast model's <escalate/> cover already spoke.)
         state["started_stall"] = True
@@ -389,18 +447,7 @@ async def llm_pass_node(state: TurnState) -> dict:
                         state["job_id"], chunk_idx, unmapped)
         chunk_text = S._clean_spoken(chunk_text)
         full_text_parts.append(chunk_text)
-        audio_bytes = await S._synthesize(chunk_text, user_id=state.get("user_id"))
-        viseme = (await S._generate_visemes(audio_bytes, chunk_text)
-                  if audio_bytes else None) or {}
-        await _emit(state, {
-            "type": "speech_chunk",
-            "chunk_idx": chunk_idx,
-            "text": chunk_text,
-            "audio_base64": (base64.b64encode(audio_bytes).decode() if audio_bytes else None),
-            "viseme_b64": viseme.get("viseme_b64"),
-            "viseme_fps": viseme.get("viseme_fps", 30),
-            "viseme_frames": viseme.get("viseme_frames", 0),
-        })
+        await _synth_and_emit(state, chunk_text, chunk_idx)
         chunk_idx += 1
 
     async def _flush_pretool() -> None:
@@ -557,7 +604,7 @@ def should_continue(state: TurnState) -> str:
             and not state.get("escalated")
             and not state.get("realtime")
             and S.TOOLS_ENABLED):
-        draft = "".join(state.get("full_text_parts") or [])
+        draft = _join_speech(state.get("full_text_parts"))
         known: set[str] = set()
         for m in (state.get("messages") or []):
             known |= S._numbers_in(str(m.get("content") or ""))
@@ -598,22 +645,16 @@ async def escalate_node(state: TurnState) -> dict:
         log.warning("[graph] escalate prompt rebuild failed: %s", e)
 
     # Perceived-latency cover for the (slower) deep pass — transient, not recorded
-    # in full_text_parts (mirrors the tool stall).
-    if not state.get("stalled"):
+    # in full_text_parts (mirrors the tool stall). Realtime only: on buffered
+    # surfaces nothing is audible until the reply is done anyway.
+    if state.get("realtime") and not state.get("stalled"):
         state["stalled"] = True
         try:
             line = S._escalate_stall_line(state.get("job_id", 0))
             idx = state["chunk_idx"]
             state["chunk_idx"] = idx + 1
-            audio = await S._synthesize(line, user_id=state.get("user_id"))
-            viseme = (await S._generate_visemes(audio, line) if audio else None) or {}
-            await _emit(state, {
-                "type": "speech_chunk", "chunk_idx": idx, "text": line,
-                "audio_base64": base64.b64encode(audio).decode() if audio else None,
-                "viseme_b64": viseme.get("viseme_b64"),
-                "viseme_fps": viseme.get("viseme_fps", 30),
-                "viseme_frames": viseme.get("viseme_frames", 0),
-            })
+            await _synth_and_emit(state, line, idx)
+            state["stall_line"] = line
         except Exception as e:
             log.warning("[graph] escalate stall failed: %s", e)
     return state
@@ -631,18 +672,33 @@ async def run_tools_node(state: TurnState) -> dict:
     tool_round = state["tool_round"]
 
     # Record the assistant's last spoken output so the follow-up call has context.
-    messages.append({"role": "assistant", "content": state["pass_content"]})
+    # Include the spoken stall ack once: without it the synthesis pass doesn't
+    # know she already said "on it" and tends to re-acknowledge ("okay, let me
+    # see…") on top of the filler.
+    _echo = state["pass_content"]
+    if state.get("stall_line") and not state.get("stall_line_recorded"):
+        state["stall_line_recorded"] = True
+        _ack = _format_ack(state["stall_line"])
+        _echo = f"{_ack} {_echo}".strip() if _echo else _ack
+    messages.append({"role": "assistant", "content": _echo})
 
-    # Perceived-latency cover: speak a fresh, action-grounded filler — but ONLY if
-    # she went silent before the tool fired. If the model already streamed a lead-in
-    # this turn (it lives in full_text_parts; the injected filler deliberately does
-    # not), that's the user's audible cover already and a second line would just be
-    # redundant. The decision is made once per turn either way.
-    if not state.get("stalled"):
-        state["stalled"] = True
-        spoken_so_far = "".join(state.get("full_text_parts") or []).strip()
-        if len(spoken_so_far) < 12:
+    # Perceived-latency cover, REALTIME surfaces only (buffered surfaces get the
+    # reply whole — a filler there is just a stray bubble). First round: speak an
+    # action-grounded filler only if she went silent before the tool fired (a
+    # streamed lead-in is already the audible cover). Later rounds: one grounded
+    # progress beat per round, so a 3-round lookup isn't 20s of dead air after a
+    # single "on it".
+    if state.get("realtime"):
+        if not state.get("stalled"):
+            state["stalled"] = True
+            spoken_so_far = _join_speech(state.get("full_text_parts"))
+            if len(spoken_so_far) < 12:
+                await _emit_stall(state)
+        elif tool_round >= 1:
             await _emit_stall(state)
+    else:
+        # Claim the flag so the escalate cover stays silent here too.
+        state["stalled"] = True
 
     for tc in pending:
         tool_round += 1
@@ -657,11 +713,13 @@ async def run_tools_node(state: TurnState) -> dict:
             "tool_args_preview": tool_args_str[:200],
             "tool_args": args,
         })
-        await S._broadcast_monitor({
+        # Monitor fan-out is observability, not conversation — don't let a slow
+        # monitor client add latency inside the tool loop.
+        asyncio.create_task(S._broadcast_monitor({
             "type": "tool_activity", "action": "call",
             "job_id": state["job_id"], "round": tool_round, "tool_name": tool_name,
             "tool_args": json.dumps(args)[:500],
-        })
+        }))
 
         t_tool = time.monotonic()
         try:
@@ -676,11 +734,11 @@ async def run_tools_node(state: TurnState) -> dict:
             "tool_name": tool_name, "result_preview": result[:500],
             "duration_ms": round(tool_ms, 1),
         })
-        await S._broadcast_monitor({
+        asyncio.create_task(S._broadcast_monitor({
             "type": "tool_activity", "action": "result",
             "job_id": state["job_id"], "round": tool_round, "tool_name": tool_name,
             "result_preview": result[:800], "duration_ms": round(tool_ms, 1),
-        })
+        }))
 
         messages.append({
             "role": "tool",
@@ -716,7 +774,13 @@ async def finalize_node(state: TurnState) -> dict:
     # against leaked <think>/JSON/tag artifacts AND leaked handle syntax
     # (e.g. a fabricated `num:513.32…`) reaching the user, even on the realtime
     # webapp path that skips the Qwen verifier.
-    full_text = S._clean_leaked_handles(S._sanitize_outgoing("".join(state["full_text_parts"])))
+    full_text = S._clean_leaked_handles(S._sanitize_outgoing(_join_speech(state["full_text_parts"])))
+
+    # History truthfulness on realtime surfaces: the transient stall ack WAS
+    # spoken, so the transcript (and the next turn's context) should carry it.
+    # Buffered surfaces never spoke it, so their sent text stays clean.
+    if full_text and state.get("realtime") and state.get("stall_line"):
+        full_text = f"{_format_ack(state['stall_line'])} {full_text}"
 
     # Empty-output guard: a realtime turn can think-truncate to nothing (the
     # verifier's empty-rescue only runs non-realtime). Don't leave the user in
@@ -731,15 +795,7 @@ async def finalize_node(state: TurnState) -> dict:
         try:
             idx = state["chunk_idx"]
             state["chunk_idx"] = idx + 1
-            audio = await S._synthesize(fb, user_id=state.get("user_id"))
-            viseme = (await S._generate_visemes(audio, fb) if audio else None) or {}
-            await _emit(state, {
-                "type": "speech_chunk", "chunk_idx": idx, "text": fb,
-                "audio_base64": base64.b64encode(audio).decode() if audio else None,
-                "viseme_b64": viseme.get("viseme_b64"),
-                "viseme_fps": viseme.get("viseme_fps", 30),
-                "viseme_frames": viseme.get("viseme_frames", 0),
-            })
+            await _synth_and_emit(state, fb, idx)
         except Exception as e:
             log.warning("[graph] empty-fallback synth failed: %s", e)
         full_text = fb
@@ -835,7 +891,7 @@ async def verify_node(state: TurnState) -> dict:
 
     if state.get("realtime") or not S._verifier_enabled():
         return state
-    draft = "".join(state.get("full_text_parts") or []).strip()
+    draft = _join_speech(state.get("full_text_parts"))
     tool_ran = int(state.get("tool_round", 0)) > 0
     raw_attempt = (state.get("pass_content") or "").strip()
 
@@ -897,7 +953,18 @@ async def verify_node(state: TurnState) -> dict:
             max_tok = 600
 
         t0 = time.monotonic()
-        res = await S.llm_deep.chat(
+        # Lane choice: tool-turn fidelity checks and rescues need the deep
+        # model's judgment; a clean tool-free chat draft only needs the cheap
+        # artifact/time/consistency pass — run that on the local fast lane so a
+        # plain Telegram reply isn't taxed a full remote-deep round-trip.
+        if tool_ran or rescue:
+            _vclient = S.llm_deep
+        else:
+            try:
+                _vclient = await S.active_fast_client()
+            except AttributeError:   # test doubles without the helper
+                _vclient = S.llm_deep
+        res = await _vclient.chat(
             [{"role": "system", "content": sys_prompt},
              {"role": "user", "content": user_block}],
             temperature=0.3 if rescue else 0.2, max_tokens=max_tok, enable_thinking=False,
@@ -909,7 +976,7 @@ async def verify_node(state: TurnState) -> dict:
         try:
             _vctx = dataclasses.replace(state["base_ctx"], pass_number=2)
             asyncio.create_task(S.call_log.log_call(
-                _vctx, model=S.llm_deep.model, temperature=0.2, max_tokens=600,
+                _vctx, model=_vclient.model, temperature=0.2, max_tokens=600,
                 stream=False, enable_thinking=False, tools_provided=False,
                 messages=[{"role": "system", "content": "[verify]"},
                           {"role": "user", "content": user_block}],
@@ -1005,6 +1072,14 @@ def _needs_interpret(state: TurnState) -> bool:
         return True
     if state.get("reply_context"):
         return True
+    # Realtime surfaces skip the bare terse-message trigger: it taxed nearly
+    # every casual web message (≤6 words is most chat) with a full LLM
+    # round-trip before the first token. The composing pass sees the same
+    # history; the interpret read pays for itself only on reply threads
+    # (handled above) and on buffered channels where latency is cheaper and
+    # the KG consult is available.
+    if state.get("realtime"):
+        return False
     t = (state.get("user_text") or "").strip()
     return bool(t) and len(t.split()) <= 6
 
@@ -1107,8 +1182,27 @@ async def interpret_node(state: TurnState) -> dict:
         pass
     msgs.append({"role": "user", "content": state.get("user_text", "")})
     try:
+        _t0 = time.monotonic()
         r = await client.chat(msgs, max_tokens=220, enable_thinking=False)
         read = _parse_interpret((r.get("content") or "").strip())
+        # Log the read pass — it was invisible to llm_call_log, which made this
+        # whole step unmeasurable in offline analysis (and its latency tax easy
+        # to forget).
+        try:
+            _ictx = dataclasses.replace(state["base_ctx"], triggered_by="interpret")
+            asyncio.create_task(S.call_log.log_call(
+                _ictx, model=client.model, temperature=client.default_temperature,
+                max_tokens=220, stream=False, enable_thinking=False,
+                tools_provided=False, messages=msgs,
+                response_content=(r.get("content") or None),
+                finish_reason=r.get("finish_reason"),
+                latency_ms=(time.monotonic() - _t0) * 1000,
+                prompt_tokens=(r.get("usage") or {}).get("prompt_tokens"),
+                completion_tokens=(r.get("usage") or {}).get("completion_tokens"),
+                total_tokens=(r.get("usage") or {}).get("total_tokens"),
+            ))
+        except Exception:  # noqa: BLE001 — logging must never break the turn
+            pass
     except Exception as e:
         log.warning("[graph] interpret_node failed: %s", e)
         read = None
@@ -1187,15 +1281,7 @@ async def _emit_reply_chunk(state: TurnState, text: str) -> None:
     idx = state["chunk_idx"]
     state["chunk_idx"] = idx + 1
     state.setdefault("full_text_parts", []).append(text)
-    audio = await S._synthesize(text, user_id=state.get("user_id"))
-    viseme = (await S._generate_visemes(audio, text) if audio else None) or {}
-    await _emit(state, {
-        "type": "speech_chunk", "chunk_idx": idx, "text": text,
-        "audio_base64": base64.b64encode(audio).decode() if audio else None,
-        "viseme_b64": viseme.get("viseme_b64"),
-        "viseme_fps": viseme.get("viseme_fps", 30),
-        "viseme_frames": viseme.get("viseme_frames", 0),
-    })
+    await _synth_and_emit(state, text, idx)
 
 
 _TASK_ASK_SYSTEM = (

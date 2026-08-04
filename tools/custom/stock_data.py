@@ -50,7 +50,7 @@ TOOL_DEF = {
 
 async def execute(arguments: dict) -> str:
     """Fetch stock data and return compact JSON with numeric values handle-wrapped."""
-    import yfinance as yf
+    import asyncio
 
     raw = arguments.get("symbols", "") or arguments.get("ticker", "") or arguments.get("symbol", "")
     symbols = [s.strip().upper() for s in raw.split(",") if s.strip()][:10]
@@ -58,6 +58,14 @@ async def execute(arguments: dict) -> str:
 
     if not symbols:
         return "Error: no symbols provided."
+
+    # yfinance is fully synchronous (network + pandas) — run it off the event
+    # loop so a slow Yahoo response can't freeze every concurrent turn.
+    return await asyncio.to_thread(_fetch_sync, symbols, period)
+
+
+def _fetch_sync(symbols: list, period: str) -> str:
+    import yfinance as yf
 
     results = []
     for sym in symbols:

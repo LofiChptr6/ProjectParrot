@@ -53,13 +53,27 @@ def cap_for(account_type: str) -> int | None:
     return REGISTERED_DAILY_TOKEN_CAP
 
 
+# 60s TTL cache for the per-user daily SUM — this aggregate ran on the TTFT
+# path of every anon turn. A cap check may lag real usage by up to a minute,
+# which is fine for an abuse cap (the cap is approximate by nature: the
+# in-flight turn's own tokens aren't counted either).
+_USED_CACHE: dict[str, tuple[float, int]] = {}
+_USED_CACHE_TTL_S = 60.0
+
+
 async def tokens_used_today(user_id: str) -> int:
     """Sum total_tokens for this user across all LLM calls today (host TZ).
 
     Returns 0 if user_id is None/empty, the pool isn't initialized, or no rows.
+    Cached for 60s per user.
     """
     if not user_id:
         return 0
+    import time as _time
+    hit = _USED_CACHE.get(user_id)
+    now = _time.monotonic()
+    if hit and (now - hit[0]) < _USED_CACHE_TTL_S:
+        return hit[1]
     pool = call_log.get_pool()
     if pool is None:
         return 0
@@ -72,7 +86,13 @@ async def tokens_used_today(user_id: str) -> int:
         """,
         user_id,
     )
-    return int(row["used"] or 0) if row else 0
+    used = int(row["used"] or 0) if row else 0
+    _USED_CACHE[user_id] = (now, used)
+    # Bound the cache — anon ids churn.
+    if len(_USED_CACHE) > 512:
+        for k, _ in sorted(_USED_CACHE.items(), key=lambda kv: kv[1][0])[:256]:
+            _USED_CACHE.pop(k, None)
+    return used
 
 
 async def check_quota(

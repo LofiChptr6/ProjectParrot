@@ -64,6 +64,7 @@ let isPlaying         = false;
 let interruptRequested = false;
 const _seenSegments   = new Set();  // dedup: "job_id:index"
 let currentAudioSource = null;
+let currentPlayingSeg  = null;  // segment in playSegment(), for late viseme attach
 let audioCtx           = null;
 
 /**
@@ -444,6 +445,12 @@ function handleLiveMessage(msg) {
             for (const key of _seenSegments) {
                 if (key.startsWith(msg.job_id + ':')) _seenSegments.delete(key);
             }
+            break;
+
+        case 'viseme_update':
+            // Bridge emits speech_segment without waiting for phoneme
+            // alignment; the viseme data follows in this event once ready.
+            attachLateVisemes(msg);
             break;
 
         case 'interrupt':
@@ -1452,6 +1459,11 @@ async function gchatSend() {
                         _gchatEnqueueChunk(exIdx, segShape);
                     }
 
+                } else if (evt.type === 'viseme_update') {
+                    // Alignment finished after its speech_chunk was emitted;
+                    // attach to the queued/playing chunk (drop if finished).
+                    _gchatAttachLateVisemes(exIdx, evt);
+
                 } else if (evt.type === 'speech_end') {
                     // No-op visually; audio queue drains on its own.
 
@@ -1495,6 +1507,7 @@ const _gchatChunkQueue = {
     nextStart: 0,            // absolute context time when next chunk should start
     lastSource: null,        // current source (for barge-in stop)
     activeChunks: 0,         // for tracking playback state
+    registry: new Map(),     // "exIdx:chunk_idx" → {seg, startAt} for late viseme attach
 };
 
 function _gchatEnsureAudioCtx() {
@@ -1509,6 +1522,10 @@ function _gchatEnsureAudioCtx() {
 
 function _gchatEnqueueChunk(exIdx, seg) {
     const ctx = _gchatEnsureAudioCtx();
+    // Registered before the async decode so a viseme_update landing mid-decode
+    // still attaches (the decode callback re-reads seg.viseme_b64 below).
+    const regKey = `${exIdx}:${seg.chunk_idx}`;
+    _gchatChunkQueue.registry.set(regKey, { seg, startAt: null });
     const bytes = Uint8Array.from(atob(seg.audio_base64), c => c.charCodeAt(0));
     ctx.decodeAudioData(bytes.buffer.slice(0)).then((buffer) => {
         const source = ctx.createBufferSource();
@@ -1527,6 +1544,9 @@ function _gchatEnqueueChunk(exIdx, seg) {
         gain.gain.setValueAtTime(1.0, Math.max(startAt + CROSSFADE, endAt - CROSSFADE));
         gain.gain.linearRampToValueAtTime(0.0, endAt);
 
+        const entry = _gchatChunkQueue.registry.get(regKey);
+        if (entry) entry.startAt = startAt;
+
         // Schedule visemes
         if (seg.viseme_b64 && window._applyVisemes) {
             _gchatScheduleVisemes(seg, startAt, ctx);
@@ -1538,12 +1558,14 @@ function _gchatEnqueueChunk(exIdx, seg) {
         _gchatChunkQueue.activeChunks++;
 
         source.onended = () => {
+            _gchatChunkQueue.registry.delete(regKey);
             _gchatChunkQueue.activeChunks--;
             if (_gchatChunkQueue.activeChunks === 0) {
                 if (window._clearLipSync) window._clearLipSync();
             }
         };
     }).catch((err) => {
+        _gchatChunkQueue.registry.delete(regKey);
         console.warn('_gchatEnqueueChunk decode failed:', err);
     });
 }
@@ -1558,11 +1580,33 @@ function _gchatScheduleVisemes(seg, startAt, ctx) {
     const msPerFrame = 1000 / fps;
     for (let i = 0; i < nFrames; i++) {
         const delayMs = (startAt - ctx.currentTime) * 1000 + i * msPerFrame;
+        // Late viseme attach mid-clip: skip frames already in the past
+        // (more than one frame period ago) instead of firing them all at once.
+        if (delayMs < -msPerFrame) continue;
         setTimeout(() => {
             const frame = Array.from(f32.slice(i * 5, i * 5 + 5));
             if (window._applyVisemes) window._applyVisemes(frame);
         }, Math.max(0, delayMs));
     }
+}
+
+// Late viseme delivery: the bridge emits speech_chunk without waiting for
+// alignment, then follows up with viseme_update once it lands. Attach to the
+// still-pending/playing chunk; updates for finished chunks are dropped.
+function _gchatAttachLateVisemes(exIdx, evt) {
+    if (!evt.viseme_b64) return;
+    const entry = _gchatChunkQueue.registry.get(`${exIdx}:${evt.chunk_idx}`);
+    if (!entry) return;  // chunk already finished (or was never enqueued)
+    const seg = entry.seg;
+    seg.viseme_b64    = evt.viseme_b64;
+    seg.viseme_fps    = evt.viseme_fps;
+    seg.viseme_frames = evt.viseme_frames;
+    if (entry.startAt !== null && window._applyVisemes) {
+        // Already scheduled/playing — past frames are skipped by the
+        // scheduler, so this starts at the correct offset into the clip.
+        _gchatScheduleVisemes(seg, entry.startAt, _gchatChunkQueue.ctx);
+    }
+    // startAt null → still decoding; the decode callback schedules from seg.
 }
 
 function _gchatBargeInStopChunks() {
@@ -1572,6 +1616,7 @@ function _gchatBargeInStopChunks() {
     }
     _gchatChunkQueue.nextStart = 0;
     _gchatChunkQueue.activeChunks = 0;
+    _gchatChunkQueue.registry.clear();
 }
 
 // -- Audio playback --
@@ -1744,7 +1789,8 @@ async function playNext() {
         // Apply emotion to VRM
         if (window._applyEmotion) window._applyEmotion(seg.emotion);
 
-        // Decode viseme data
+        // Decode viseme data (may still be absent — a late viseme_update can
+        // attach it mid-play via the hook installed by playSegment)
         const visemes = seg.viseme_b64
             ? decodeVisemes(seg.viseme_b64, seg.viseme_frames)
             : null;
@@ -1772,11 +1818,14 @@ async function playNext() {
 
         // Play audio with synchronized visemes (motion is handled by animation controller)
         if (seg.audio_base64) {
+            currentPlayingSeg = seg;
             await playSegment(
                 seg.audio_base64,
                 visemes,
-                seg.viseme_fps || 30
+                seg.viseme_fps || 30,
+                seg
             );
+            currentPlayingSeg = null;
         }
 
         // Notify bridge: playback ended
@@ -1882,6 +1931,38 @@ function decodeVisemes(b64, numFrames) {
     return frames;
 }
 
+/**
+ * Handle a late viseme_update on the live path. If the target segment is
+ * still queued, attach the data inline (playNext decodes at dequeue); if it
+ * is currently playing, hand decoded frames to playSegment's hook, which
+ * starts the viseme timer at the elapsed-time offset. Updates for segments
+ * that already finished are dropped silently.
+ *
+ * @param {object} msg - {chunk_idx, viseme_b64, viseme_fps, viseme_frames}
+ */
+function attachLateVisemes(msg) {
+    if (!msg.viseme_b64) return;
+    // Live speech_segment messages carry the bridge's chunk_idx as `index`.
+    const match = (s) => s &&
+        (s.chunk_idx !== undefined ? s.chunk_idx : s.index) === msg.chunk_idx;
+
+    if (match(currentPlayingSeg) && currentPlayingSeg._lateVisemes) {
+        currentPlayingSeg._lateVisemes(
+            decodeVisemes(msg.viseme_b64, msg.viseme_frames),
+            msg.viseme_fps || 30
+        );
+        return;
+    }
+
+    const queued = segmentQueue.find(match);
+    if (queued) {
+        queued.viseme_b64    = msg.viseme_b64;
+        queued.viseme_fps    = msg.viseme_fps;
+        queued.viseme_frames = msg.viseme_frames;
+    }
+    // Neither playing nor queued → segment already finished; drop.
+}
+
 // ============================================================================
 //  Audio playback with analyser + synchronized viseme timer
 // ============================================================================
@@ -1893,9 +1974,23 @@ function decodeVisemes(b64, numFrames) {
  * @param {string}     audioB64     - Base64-encoded audio (WAV/OGG)
  * @param {number[][]} visemeFrames - Decoded viseme frames, or null
  * @param {number}     visemeFps    - Viseme playback frame rate
+ * @param {object}     seg          - Segment message, or null. When given, a
+ *                                    `_lateVisemes(frames, fps)` hook is kept
+ *                                    on it so a viseme_update arriving during
+ *                                    playback can take over from the analyser
+ *                                    fallback at the right clip offset.
  * @returns {Promise<void>}
  */
-async function playSegment(audioB64, visemeFrames, visemeFps) {
+async function playSegment(audioB64, visemeFrames, visemeFps, seg = null) {
+    // Install the late-attach hook before any await so a viseme_update can't
+    // slip between dequeue and playback start. Until the clip starts it just
+    // stashes the data; after start it is swapped for the offset variant.
+    let lateFrames = null;
+    let lateFps    = 30;
+    if (seg) {
+        seg._lateVisemes = (frames, fps) => { lateFrames = frames; lateFps = fps; };
+    }
+
     ensureAudioCtx();
     if (audioCtx.state === 'suspended') {
         await audioCtx.resume();
@@ -1920,16 +2015,26 @@ async function playSegment(audioB64, visemeFrames, visemeFps) {
                 source.connect(audioCtx.destination);
             }
 
+            // Visemes that arrived while we were decoding
+            if (!visemeFrames && lateFrames) {
+                visemeFrames = lateFrames;
+                visemeFps    = lateFps;
+            }
+
             // --- Viseme playback timer (server-sent phoneme data) ---
             let vt = null;
+            const startVisemeTimer = (frames, fps, startFrame) => {
+                if (vt) clearInterval(vt);
+                let vf = startFrame;
+                vt = setInterval(() => {
+                    if (vf >= frames.length) { clearInterval(vt); return; }
+                    if (window._applyVisemes) window._applyVisemes(frames[vf]);
+                    vf++;
+                }, 1000 / fps);
+            };
             if (visemeFrames && visemeFrames.length > 0) {
                 // Use server-provided viseme data
-                let vf = 0;
-                vt = setInterval(() => {
-                    if (vf >= visemeFrames.length) { clearInterval(vt); return; }
-                    if (window._applyVisemes) window._applyVisemes(visemeFrames[vf]);
-                    vf++;
-                }, 1000 / visemeFps);
+                startVisemeTimer(visemeFrames, visemeFps, 0);
             } else if (analyser) {
                 // Fallback: audio-driven lip sync from frequency analysis
                 const BANDS = [[0, 25], [25, 68], [68, 170], [170, 340]];
@@ -1958,14 +2063,26 @@ async function playSegment(audioB64, visemeFrames, visemeFps) {
             // --- Cleanup on audio end ---
             source.onended = () => {
                 currentAudioSource = null;
+                if (seg) delete seg._lateVisemes;
                 if (vt) clearInterval(vt);
                 if (window._clearLipSync) window._clearLipSync();
                 resolve();
             };
 
             source.start(0);
+            const startedAt = audioCtx.currentTime;
+            if (seg) {
+                // Now playing: a late viseme_update replaces the analyser
+                // fallback with the server timer at the current clip offset.
+                seg._lateVisemes = (frames, fps) => {
+                    const startFrame = Math.floor((audioCtx.currentTime - startedAt) * fps);
+                    if (startFrame >= frames.length) return;
+                    startVisemeTimer(frames, fps, startFrame);
+                };
+            }
         }, (err) => {
             console.error('Audio decode error:', err);
+            if (seg) delete seg._lateVisemes;
             resolve();
         });
     });
@@ -2008,8 +2125,9 @@ async function startMic() {
         const source = micAudioCtx.createMediaStreamSource(micStream);
 
         // ScriptProcessor is deprecated but works everywhere;
-        // buffer size 640 = 40ms at 16kHz (2 x 20ms frames)
-        micProcessor = micAudioCtx.createScriptProcessor(640, 1, 1);
+        // buffer size must be a power of two — 512 = 32ms at 16kHz, which
+        // matches the bridge-side Silero VAD's internal 512-sample chunks
+        micProcessor = micAudioCtx.createScriptProcessor(512, 1, 1);
         let _micSentCount = 0;
         micProcessor.onaudioprocess = (e) => {
             if (micMuted || !wsLive || wsLive.readyState !== WebSocket.OPEN) return;

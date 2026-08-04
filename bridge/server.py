@@ -5,11 +5,11 @@ Data flow:
   Mic -> [STT] -> text -> [Memory query + LLM] -> response -> [TTS] -> audio -> [browser]
                                                             -> [Memory store]
 
-Multi-segment pipeline:
-  The LLM returns a "segments" array where each entry is one sentence with its
-  own emotion and action.  The bridge resolves animations and synthesises TTS
-  for ALL segments concurrently (asyncio.gather), then streams finished segments
-  to the client in order so playback starts immediately.
+Speech pipeline:
+  The LLM streams inline-tagged text; the parser cuts it into per-sentence
+  chunks (bridge/inline_route.py). Each chunk is synthesized and emitted as
+  soon as it exists; lip-sync alignment runs in the background and arrives as
+  a follow-up `viseme_update` event (see graph._synth_and_emit).
 
 Barge-in:
   When the user sends new input while a response is still being processed, the
@@ -83,7 +83,11 @@ anim_config = full_config.get("animation", {})
 live_config = config.get("live", {})
 
 # Runtime-adjustable config (updated via dashboard Config tab)
-_cfg_vad_final_ms = int(live_config.get("silence_ms_final", 900))
+# `silence_ms` is the documented key in config.yaml's bridge.live block; honor it
+# as the final-endpoint default (it was silently ignored for months — the config
+# said 450 while the VAD actually waited the 900 default).
+_cfg_vad_final_ms = int(live_config.get("silence_ms_final",
+                                        live_config.get("silence_ms", 900)))
 _cfg_vad_interim_ms = int(live_config.get("silence_ms_interim", 350))
 
 # ---------------------------------------------------------------------------
@@ -688,21 +692,123 @@ conversation_history = _user_histories[IKA_USER_ID]
 
 MAX_HISTORY = full_config["memory"].get("short_term_limit", 20)
 
+# Rolling condensed summary of everything trimmed out of the short-term window
+# (per bucket). Injected as an "[Earlier this conversation]" system message so
+# mid-length arcs survive both the window and bridge restarts. Persisted with
+# the history itself (bridge/history_store.py).
+_user_summaries: dict[str, str] = {}
+_history_loaded: set[str] = set()
+
+
+def _ensure_history_loaded(uid: str) -> None:
+    """Lazy disk→RAM hydration, once per bucket. Mutates the existing list in
+    place — module aliases (``conversation_history``) must keep pointing at it."""
+    if uid in _history_loaded:
+        return
+    _history_loaded.add(uid)
+    from bridge import history_store
+    entries, summary = history_store.load_sync(uid)
+    if entries:
+        hist = _user_histories[uid]
+        if not hist:
+            hist.extend(entries[-MAX_HISTORY * 2:])
+        log.info("history: restored %d entries for %s from disk", len(hist), uid)
+    if summary:
+        _user_summaries[uid] = summary
+
 
 def _get_user_history(user_id: str | None) -> list[dict]:
     # Single operator: all real surfaces share Ika's one short-term history, so
     # the prompt and the autonomy composer read the same thread. Eval stays split.
     uid = (user_id or _ANON_USER_ID) if EVAL_ISOLATION.get() else IKA_USER_ID
+    if not EVAL_ISOLATION.get():
+        _ensure_history_loaded(uid)
     return _user_histories[uid]
 
 
+def _get_user_summary(user_id: str | None) -> str:
+    if EVAL_ISOLATION.get():
+        return ""
+    _ensure_history_loaded(IKA_USER_ID)
+    return _user_summaries.get(IKA_USER_ID, "")
+
+
 def _append_history(user_id: str | None, role: str, content: str) -> None:
-    uid = (user_id or _ANON_USER_ID) if EVAL_ISOLATION.get() else IKA_USER_ID
+    if EVAL_ISOLATION.get():
+        uid = user_id or _ANON_USER_ID
+        hist = _user_histories[uid]
+        hist.append({"role": role, "content": content})
+        if len(hist) > MAX_HISTORY * 3:
+            del hist[: len(hist) - MAX_HISTORY * 2]
+        return
+
+    uid = IKA_USER_ID
+    _ensure_history_loaded(uid)
     hist = _user_histories[uid]
     hist.append({"role": role, "content": content})
-    # Bound the list so it doesn't grow forever
+    # Bound the list; hand what falls out to the rolling summarizer instead of
+    # silently forgetting it.
     if len(hist) > MAX_HISTORY * 3:
+        dropped = hist[: len(hist) - MAX_HISTORY * 2]
         del hist[: len(hist) - MAX_HISTORY * 2]
+        try:
+            asyncio.get_running_loop().create_task(
+                _summarize_history_span(uid, dropped))
+        except RuntimeError:
+            pass  # no loop (tests/CLI): the span is lost, same as before
+    from bridge import history_store
+    history_store.schedule_persist(uid, hist, _user_summaries.get(uid, ""))
+
+
+async def _summarize_history_span(uid: str, dropped: list[dict]) -> None:
+    """Fold trimmed-out turns into the bucket's rolling summary (fail-soft,
+    off the turn path). Runs on the fast lane; logged as triggered_by='summary'."""
+    if not dropped:
+        return
+    try:
+        client = await active_fast_client()
+        convo = "\n".join(
+            f"{e.get('role', '?')}: {str(e.get('content', ''))[:400]}" for e in dropped)
+        prev = _user_summaries.get(uid, "")
+        sys_prompt = (
+            "You maintain the condensed memory of an ongoing conversation between "
+            "Ika (the user) and Mocha (the assistant). Merge PREVIOUS SUMMARY and "
+            "NEW TURNS into ONE summary of at most 6 short sentences, third person "
+            "('Ika asked…', 'Mocha found…'). Keep: concrete topics, decisions, "
+            "promises, open threads, corrections, names. Drop: greetings, filler, "
+            "anything already superseded. Never invent numbers — omit a number "
+            "you're not sure of. Output ONLY the summary text."
+        )
+        user_block = f"PREVIOUS SUMMARY:\n{prev or '(none)'}\n\nNEW TURNS:\n{convo}"
+        t0 = time.monotonic()
+        res = await client.chat(
+            [{"role": "system", "content": sys_prompt},
+             {"role": "user", "content": user_block}],
+            temperature=0.3, max_tokens=260, enable_thinking=False,
+        )
+        summary = (res.get("content") or "").strip()[:1800]
+        if summary:
+            _user_summaries[uid] = summary
+            from bridge import history_store
+            history_store.schedule_persist(uid, _user_histories[uid], summary)
+        try:
+            _sctx = CallContext(triggered_by="summary", user_id=uid,
+                                conversation_id=str(_new_job_id()))
+            asyncio.create_task(call_log.log_call(
+                _sctx, model=client.model, temperature=0.3, max_tokens=260,
+                stream=False, enable_thinking=False, tools_provided=False,
+                messages=[{"role": "system", "content": "[history summary]"},
+                          {"role": "user", "content": user_block}],
+                response_content=summary or None,
+                latency_ms=(time.monotonic() - t0) * 1000,
+                prompt_tokens=(res.get("usage") or {}).get("prompt_tokens"),
+                completion_tokens=(res.get("usage") or {}).get("completion_tokens"),
+                total_tokens=(res.get("usage") or {}).get("total_tokens"),
+            ))
+        except Exception:  # noqa: BLE001
+            pass
+    except Exception as exc:  # noqa: BLE001 — memory upkeep must never break anything
+        log.warning("history summary failed for %s: %s", uid, exc)
 
 
 def _get_user_chat_log(user_id: str | None) -> list[dict]:
@@ -1561,6 +1667,17 @@ def _build_inline_messages(user_text: str, memories: list[dict],
             user_id=user_id,
         )
     messages: list[dict] = [{"role": "system", "content": system_prompt}]
+    # Rolling summary of turns that fell out of the short-term window. Placed
+    # BEFORE the history slice: it changes rarely (only when the window trims),
+    # so the prefix cache still covers system prompt + summary on most turns.
+    _cond = _get_user_summary(user_id)
+    if _cond:
+        messages.append({
+            "role": "system",
+            "content": ("[Earlier this conversation — condensed. Background "
+                        "context, not the current topic; numbers here may be "
+                        "stale.] " + _cond),
+        })
     # History numbers are passed through INTACT (2026-07-02; they used to be
     # redacted to `[past #]`). The redaction protected against quoting stale
     # prices as current, but it destroyed cross-turn deduction: "say that drop
@@ -1975,6 +2092,9 @@ def _sanitize_for_tts(text: str) -> str:
     """
     if not text:
         return text
+    # Emoji never reach the synthesizer — F5 tries to *read* them ("face with
+    # tears of joy"). Display text upstream keeps them; only the audio is scrubbed.
+    text = re.sub(r'[\U0001F000-\U0001FAFF☀-➿⬀-⯿️‍]', '', text)
     # Collapse `!` (any run, optionally followed by other punctuation) into
     # a soft period. "wow!" → "wow." / "really?!" → "really?."  / "!!!" → "."
     text = re.sub(r'!+', '.', text)
@@ -3116,6 +3236,9 @@ async def chat_stream(request: Request, text: str, client_id: str = "",
                     yield f"data: {json.dumps(ev)}\n\n"
                 elif etype == "gesture":
                     yield f"data: {json.dumps(ev)}\n\n"
+                elif etype == "viseme_update":
+                    # Late lip-sync upgrade for an already-delivered chunk.
+                    yield f"data: {json.dumps(ev)}\n\n"
                 elif etype == "speech_chunk":
                     if not collected_chunks:
                         await _broadcast_debug_state(
@@ -3532,9 +3655,13 @@ async def admin_clear_memory(request: Request):
     uid = _extract_user_id(request) or _ANON_USER_ID
 
     try:
-        # 1) Always: drop in-process short-term context.
+        # 1) Always: drop in-process short-term context — and its on-disk copy,
+        # or the "cleared" history would resurrect on the next restart.
         _user_histories[uid].clear()
         _user_chat_logs[uid].clear()
+        _user_summaries.pop(uid, None)
+        from bridge import history_store
+        history_store.schedule_persist(uid, [], "")
         log.info("clear-memory window=%s uid=%s (short-term wiped)", window, uid[:8])
 
         # 2) "all" → also wipe long-term layers for this user.
@@ -3857,29 +3984,36 @@ async def channel_intake(req: ChannelRequest):
     jid = _new_job_id()
     log.info("Channel [%s/%s]: %s", req.source, req.user_id, req.text[:80])
 
+    # Single-operator identity: all channels funnel into Ika's one namespace
+    # (the raw chat_id / app_user_id are still used below for outbound routing).
+    # Kick memory search off FIRST so it overlaps the side-writes below instead
+    # of running serially after them.
+    ch_user_id = IKA_USER_ID
+    mem_task = asyncio.create_task(_query_memories(req.text, user_id=ch_user_id))
+
     # Learn / remember the primary user for each channel so the channel router
-    # can DM them proactively (reminders, cron findings, etc.).
+    # can DM them proactively (reminders, cron findings, etc.). File write —
+    # off the event loop.
     if req.user_id and req.user_id != "agent":
         try:
             from bridge.channel_router import save_primary_user
-            save_primary_user(req.source, req.user_id, app_user_id=req.app_user_id)
+            await asyncio.to_thread(
+                save_primary_user, req.source, req.user_id, app_user_id=req.app_user_id)
         except Exception as exc:
             log.warning("save_primary_user failed: %s", exc)
 
     # Persist telegram_chat_id in user settings for proactive delivery.
+    # psycopg2 connect+write — blocking, so run it in a thread.
     if req.source == "telegram" and req.app_user_id and req.user_id not in ("unknown", "agent"):
         try:
             from auth.db import update_user_setting
-            update_user_setting(req.app_user_id, "telegram_chat_id", req.user_id)
+            await asyncio.to_thread(
+                update_user_setting, req.app_user_id, "telegram_chat_id", req.user_id)
         except Exception as exc:
             log.warning("Failed to save telegram_chat_id: %s", exc)
 
     await _broadcast_debug_state("thinking", last_input=req.text)
-
-    # Single-operator identity: all channels funnel into Ika's one namespace
-    # (the raw chat_id / app_user_id are still used above for outbound routing).
-    ch_user_id = IKA_USER_ID
-    memories = await _query_memories(req.text, user_id=ch_user_id)
+    memories = await mem_task
 
     # Reply handling — if Ika replied to one of Mocha's messages, resolve the
     # article she shared so the graph can pick that thread back up.
@@ -4150,6 +4284,17 @@ async def _ws_text_turn(
                     response["viseme_fps"] = ev.get("viseme_fps", 30)
                     response["viseme_frames"] = ev.get("viseme_frames", 0)
                 await ws.send_text(json.dumps(response))
+            elif etype == "viseme_update":
+                # Late lip-sync upgrade; `index` mirrors speech_segment naming,
+                # chunk_idx kept for symmetry with the SSE path.
+                await ws.send_text(json.dumps({
+                    "type": "viseme_update", "job_id": jid,
+                    "index": ev.get("chunk_idx", 0),
+                    "chunk_idx": ev.get("chunk_idx", 0),
+                    "viseme_b64": ev.get("viseme_b64"),
+                    "viseme_fps": ev.get("viseme_fps", 30),
+                    "viseme_frames": ev.get("viseme_frames", 0),
+                }))
             elif etype == "speech_end":
                 full_text = ev.get("full_text") or ""
                 if chunks:
@@ -4462,7 +4607,9 @@ class ConversationController:
 
 @app.websocket("/ws/live")
 async def live_ws(ws: WebSocket):
-    """Stream PCM16 mono 16 kHz in fixed frame multiples (20 ms = 640 bytes per frame).
+    """Stream PCM16 mono 16 kHz in arbitrary-size binary frames (the web client
+    sends 512-sample / 1024-byte ScriptProcessor buffers; the VAD segmenter
+    rebuffers internally, so frame size is not a protocol contract).
 
     Server runs Silero VAD (with webrtcvad fallback), packages utterances on
     silence, runs Whisper per utterance, then the inline-tag pipeline.

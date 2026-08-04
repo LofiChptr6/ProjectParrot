@@ -23,17 +23,37 @@ import yaml
 
 CHARACTER_DIR = Path(__file__).resolve().parent
 
+# mtime-keyed content cache. Character files are re-read on EVERY LLM call by
+# design (hot reload); the cache keeps that contract — an edited file is picked
+# up immediately because its mtime changed — while skipping the 3-4 disk reads
+# per turn in the steady state.
+_FILE_CACHE: dict[str, tuple[float, str]] = {}
+
+
+def _read_file_cached(p: Path) -> str:
+    try:
+        mtime = p.stat().st_mtime
+    except OSError:
+        return ""
+    key = str(p)
+    hit = _FILE_CACHE.get(key)
+    if hit and hit[0] == mtime:
+        return hit[1]
+    text = p.read_text(encoding="utf-8")
+    _FILE_CACHE[key] = (mtime, text)
+    return text
+
 
 def _read_text(name: str) -> str:
     p = CHARACTER_DIR / name
-    return p.read_text(encoding="utf-8") if p.exists() else ""
+    return _read_file_cached(p) if p.exists() else ""
 
 
 def _read_yaml(name: str) -> dict | list:
     p = CHARACTER_DIR / name
     if not p.exists():
         return {}
-    return yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+    return yaml.safe_load(_read_file_cached(p)) or {}
 
 
 def load_emotions() -> list[dict]:
@@ -284,9 +304,9 @@ def build_chat_prompt(tagged: bool = False, user_id: str | None = None) -> str:
     → prefix-cacheable, same as build_system_prompt.
     """
     soul_p = _user_file_for(user_id, "soul.md")
-    soul = soul_p.read_text(encoding="utf-8") if soul_p.exists() else _read_text("soul.md")
+    soul = _read_file_cached(soul_p) if soul_p.exists() else _read_text("soul.md")
     style_p = _user_file_for(user_id, "chat_style.md")
-    style = style_p.read_text(encoding="utf-8") if style_p.exists() else _read_text("chat_style.md")
+    style = _read_file_cached(style_p) if style_p.exists() else _read_text("chat_style.md")
 
     escalate_block = (
         "# Hand off anything real — `<escalate/>`\n"
@@ -425,13 +445,13 @@ def build_system_prompt(
                 return p
         return CHARACTER_DIR / name
 
-    soul = _user_file("soul.md").read_text(encoding="utf-8") if _user_file("soul.md").exists() \
+    soul = _read_file_cached(_user_file("soul.md")) if _user_file("soul.md").exists() \
         else _read_text("soul.md")
 
     def _load_behaviors_for_user() -> list[dict]:
         p = _user_file("behaviors.yaml")
         if p.exists():
-            data = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+            data = yaml.safe_load(_read_file_cached(p)) or {}
             return data.get("behaviors", []) if isinstance(data, dict) else data
         return load_behaviors()
 

@@ -8,6 +8,7 @@ Exposes:
   GET  /health             — health check
 """
 
+import asyncio
 import concurrent.futures
 import io
 import logging
@@ -163,7 +164,13 @@ async def synthesize(req: SynthRequest):
         cfg_strength = float(config.get("cfg_strength", 2.0))
 
     try:
-        wav, sr, _ = tts_model.infer(
+        # infer() blocks 1-2 s (GPU inference) — run it in a worker thread so
+        # the event loop stays responsive (health checks, queued requests).
+        # The module-level ThreadPoolExecutor patch caps asyncio's default
+        # executor at one worker, so concurrent requests still serialise on
+        # the model — intended (see cache-corruption note above).
+        wav, sr, _ = await asyncio.to_thread(
+            tts_model.infer,
             ref_file=ref_audio,
             ref_text=ref_text,
             gen_text=req.text,
@@ -179,6 +186,8 @@ async def synthesize(req: SynthRequest):
             detail=f"TTS failed: {e!s}. If you see TorchCodec/CUDA errors, set tts.device: cpu in config.yaml or ensure reference_text is set to skip ASR on the reference clip.",
         ) from e
 
+    # In-memory WAV encode is ~ms — kept inline: a to_thread hop would queue
+    # behind another request's 1-2 s infer on the single-worker executor.
     buf = io.BytesIO()
     sf.write(buf, wav, samplerate=sr, format="WAV")
     buf.seek(0)

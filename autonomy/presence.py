@@ -28,6 +28,11 @@ IDLE = "idle"
 # Last inbound user activity (a message, or a turn boundary). 0.0 at boot means
 # "no one has spoken yet" → elapsed is huge → we start IDLE, which is correct.
 _last_activity_monotonic: float = 0.0
+# Wall-clock twin of the stamp above (0.0 = nothing since boot). The monotonic
+# clock is right for elapsed-time gating but useless for anything persisted:
+# autonomy's unanswered-shares gate compares this against share timestamps that
+# live on disk and survive restarts, so it needs epoch seconds.
+_last_activity_epoch: float = 0.0
 # Conversational turns currently being served. While >0 we are unconditionally
 # CONVERSING regardless of the clock (a long tool round must not get talked over).
 _turns_in_flight: int = 0
@@ -36,8 +41,9 @@ _state: str = IDLE
 
 def note_user_activity() -> None:
     """Ika just sent something. Enter CONVERSING and reset the silence clock."""
-    global _last_activity_monotonic, _state
+    global _last_activity_monotonic, _last_activity_epoch, _state
     _last_activity_monotonic = time.monotonic()
+    _last_activity_epoch = time.time()
     if _state != CONVERSING:
         log.info("presence: %s → %s (Ika spoke)", _state, CONVERSING)
         _state = CONVERSING
@@ -45,17 +51,19 @@ def note_user_activity() -> None:
 
 def turn_started() -> None:
     """A conversational turn began — hold CONVERSING until it ends."""
-    global _turns_in_flight, _last_activity_monotonic, _state
+    global _turns_in_flight, _last_activity_monotonic, _last_activity_epoch, _state
     _turns_in_flight += 1
     _last_activity_monotonic = time.monotonic()
+    _last_activity_epoch = time.time()
     _state = CONVERSING
 
 
 def turn_ended() -> None:
     """A conversational turn finished. The silence clock starts from here."""
-    global _turns_in_flight, _last_activity_monotonic
+    global _turns_in_flight, _last_activity_monotonic, _last_activity_epoch
     _turns_in_flight = max(0, _turns_in_flight - 1)
     _last_activity_monotonic = time.monotonic()
+    _last_activity_epoch = time.time()
 
 
 def state(idle_after_s: float) -> str:
@@ -89,10 +97,20 @@ def seconds_since_activity() -> float:
     return time.monotonic() - _last_activity_monotonic
 
 
+def last_activity_epoch() -> float:
+    """Wall-clock time of the last user activity (0.0 = none since boot).
+
+    This is the source of truth for "when did Ika last say anything" in a form
+    that persisted consumers can use — autonomy's engagement gate compares it
+    against on-disk share timestamps, which a monotonic stamp can't do."""
+    return _last_activity_epoch
+
+
 def snapshot() -> dict:
     """Introspection helper for admin/debug endpoints. Never raises."""
     return {
         "state": _state,
         "turns_in_flight": _turns_in_flight,
         "seconds_since_activity": round(seconds_since_activity(), 1),
+        "last_activity_epoch": _last_activity_epoch,
     }
