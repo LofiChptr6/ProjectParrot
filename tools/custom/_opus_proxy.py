@@ -135,12 +135,11 @@ async def call_opus(tool: str, arguments: dict, error_title: str) -> str:
 
     try:
         env_obj = json.loads(out)
-    except json.JSONDecodeError as e:
-        return _error_envelope(
-            error_title,
-            f"opus returned non-JSON output: {e}",
-            preview=out[:200],
-        )
+    except json.JSONDecodeError:
+        # Prose tools (get_ticker_dossier defaults to markdown; others may
+        # follow) are valid output, not an error — the LLM reads markdown as
+        # happily as JSON. Only JSON gets the envelope inspection below.
+        return out
 
     # Two valid shapes from opus_trading:
     #   1. Pre-wrapped __panel__ envelope (e.g. get_trading_briefing) — the
@@ -149,13 +148,14 @@ async def call_opus(tool: str, arguments: dict, error_title: str) -> str:
     #   2. Raw analytical data + analyst_note (most deep-dive tools) — Nori
     #      receives the JSON string, reads analyst_note for the framing, and
     #      decides what slides to build via show_slides.
-    if env_obj.get("__panel__") == "create_presentation":
-        return out
+    if isinstance(env_obj, dict):
+        if env_obj.get("__panel__") == "create_presentation":
+            return out
 
-    if "error" in env_obj and len(env_obj) <= 2:
-        # Plain {"error": "..."} from the bootstrap means the MCP call itself
-        # raised — render an error panel so Mocha can speak it.
-        return _error_envelope(error_title, str(env_obj["error"]))
+        if "error" in env_obj and len(env_obj) <= 2:
+            # Plain {"error": "..."} from the bootstrap means the MCP call
+            # itself raised — render an error panel so Mocha can speak it.
+            return _error_envelope(error_title, str(env_obj["error"]))
 
     # Raw data: hand it to Nori as-is. Strip any leading/trailing whitespace
     # so the LLM doesn't see junk.
