@@ -79,7 +79,7 @@ _CUSTOM_EXECUTORS: dict[str, callable] = {}
 _NO_SUBSTITUTE = {"bash_exec", "read_file", "write_file", "list_dir", "git_status"}
 
 
-async def execute_tool(name: str, arguments: dict) -> str:
+async def execute_tool(name: str, arguments: dict, internal: bool = False) -> str:
     """Dispatch a single tool call and return the result as a string.
 
     Two registry hooks wrap the dispatch so tools themselves stay handle-naive:
@@ -89,6 +89,13 @@ async def execute_tool(name: str, arguments: dict) -> str:
 
     The LLM therefore only ever sees handles; real URLs round-trip invisibly
     through the tool layer.
+
+    ``internal=True`` marks a call Mocha did NOT make on the user's behalf —
+    a background cache warm, a health probe. Those must stay invisible: no UI
+    panel broadcast, no open-modal bookkeeping, no scratchpad entry. Without
+    it, the held-ticker cache refresh painted a full-screen "Positions —
+    Unavailable" modal on the user's screen every TTL while the desk was down,
+    and told her prompt that panel was on screen.
     """
     if not isinstance(arguments, dict):
         arguments = {}
@@ -159,7 +166,7 @@ async def execute_tool(name: str, arguments: dict) -> str:
     # Feed every successful tool call into the session scratchpad so Mocha
     # has within-session recall ("play that again") and the diary writer has
     # the day's activity log. Fire-and-forget, never blocking the tool path.
-    if _ok:
+    if _ok and not internal:
         try:
             from bridge import session_scratchpad
             session_scratchpad.add(name, arguments, result)
@@ -168,7 +175,7 @@ async def execute_tool(name: str, arguments: dict) -> str:
 
     # External-tool panel protocol: if the result is a JSON envelope with
     # __panel__, broadcast it as a ui_command and let the bridge render it.
-    if _ok and isinstance(result, str) and result.startswith("{"):
+    if _ok and not internal and isinstance(result, str) and result.startswith("{"):
         try:
             env = json.loads(result)
             if isinstance(env, dict) and env.get("__panel__"):

@@ -136,13 +136,13 @@
 
         if (presPrev)  presPrev.addEventListener('click', () => navigateSlide(-1));
         if (presNext)  presNext.addEventListener('click', () => navigateSlide(1));
-        if (presClose) presClose.addEventListener('click', clearPresentation);
+        if (presClose) presClose.addEventListener('click', closePresentationByUser);
 
         document.addEventListener('keydown', (e) => {
             if (!state.presentation || !panel?.classList.contains('active')) return;
             if (e.key === 'ArrowLeft')  { e.preventDefault(); navigateSlide(-1); }
             if (e.key === 'ArrowRight') { e.preventDefault(); navigateSlide(1); }
-            if (e.key === 'Escape')     { e.preventDefault(); clearPresentation(); }
+            if (e.key === 'Escape')     { e.preventDefault(); closePresentationByUser(); }
         });
 
         // Register with PanelManager for drag/resize
@@ -1597,6 +1597,21 @@
         if (index >= 0 && index < state.presentation.slides.length) {
             renderSlide(index);
         }
+    }
+
+    // User-initiated close (× / Escape) — also tell the bridge, so Mocha's
+    // "[Currently on screen]" line stops advertising a panel Ika just shut.
+    // Server-driven clears (clear_ui, presentation_clear) call
+    // clearPresentation() directly: the bridge already knows about those.
+    function closePresentationByUser() {
+        clearPresentation();
+        try {
+            fetch('/api/ui/modal-closed', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ kind: 'presentation' }),
+            }).catch(() => {});
+        } catch (_) { /* never let a close fail on a network hiccup */ }
     }
 
     function clearPresentation() {

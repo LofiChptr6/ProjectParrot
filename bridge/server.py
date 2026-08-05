@@ -247,7 +247,9 @@ def _rebuild_held_ticker_re() -> None:
 async def _refresh_held_tickers() -> None:
     global _held_tickers, _held_tickers_at, _held_refresh_inflight
     try:
-        raw = await execute_tool("get_positions", {})
+        # internal=True: this is a silent cache warm, not something Mocha did
+        # for Ika — it must not paint a UI panel or land in the scratchpad.
+        raw = await execute_tool("get_positions", {}, internal=True)
         data = json.loads(raw) if raw and raw.lstrip().startswith("{") else {}
         syms = [str(p.get("symbol")).strip().upper()
                 for p in (data.get("positions") or []) if p.get("symbol")]
@@ -3501,6 +3503,21 @@ def _set_open_modal(kind: str, info: dict) -> None:
 
 def _clear_open_modal(kind: str) -> None:
     _OPEN_MODALS.pop(kind, None)
+
+
+class ModalClosedRequest(BaseModel):
+    kind: str = "presentation"
+
+
+@app.post("/api/ui/modal-closed")
+async def api_modal_closed(req: ModalClosedRequest):
+    """The user closed a panel in the browser (× or Escape).
+
+    Without this, ``_OPEN_MODALS`` only ever cleared when Mocha herself called
+    clear_ui, so her prompt kept claiming a dismissed panel was on screen and
+    she'd reference a window Ika was no longer looking at."""
+    _clear_open_modal(req.kind)
+    return {"ok": True, "open": get_open_modals_summary()}
 
 
 def get_open_modals_summary() -> str:
