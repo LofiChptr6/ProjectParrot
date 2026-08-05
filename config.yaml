@@ -129,6 +129,13 @@ llm:
                     diary, "show me", "pull up", "what's the", "whats the",
                     "how much", "how many", "price of", latest, "who won", score,
                     stock, chart, "play ",
+                    # "Feed me" requests — must reach the tool lane so she
+                    # fetches a REAL find instead of confabulating a plausible
+                    # study on the chat lane (observed: an invented octopus
+                    # face-recognition study; the verifier only blocks
+                    # live-data/number fabrications, not fake trivia).
+                    "something interesting", "tell me something", "surprise me",
+                    "anything cool", "fun fact", "何か面白い", "有意思的",
                     # Company names — a casual "is nvidia still ripping?" carries
                     # no cashtag and no 'stock' keyword; the name itself is the
                     # market signal. Substring match, so avoid short/common ones

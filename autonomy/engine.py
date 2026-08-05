@@ -372,7 +372,10 @@ def _internal_prompt_for_state(state: str, topic: str, findings_preview: str = "
                 "\nReal, recent things you ACTUALLY found or shared (your ONLY "
                 f"permitted hooks — quote their substance, don't embellish):\n{findings_preview}\n"
                 "You MAY pick up ONE of these as a light, natural hook, in your own "
-                "words."
+                "words. When you have both kinds, prefer the science/odd find over "
+                "the markets one — a greeting is not a market open. The desk can "
+                "wait unless something dramatic happened. A hook is optional; "
+                "plain glad-you're-back is always enough."
             )
         else:
             base += (

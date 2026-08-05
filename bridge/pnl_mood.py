@@ -150,14 +150,23 @@ def current_mood() -> Optional[str]:
     return b["label"] if b else None
 
 
-def _format_mood_message(b: dict) -> str:
-    """Render the inner-state block from a mood bucket. Pure (testable)."""
+def _format_mood_message(b: dict) -> Optional[str]:
+    """Render the inner-state block from a mood bucket. Pure (testable).
+
+    Returns None for the neutral bucket: a flat day is not a feeling, and
+    injecting "the desk's roughly flat" every turn primed desk-talk on turns
+    that had nothing to do with it ("you there?" → "the desk's flat but
+    breathing"). The line only exists when there's genuine color to carry."""
+    if b["label"] == "steady":
+        return None
     return (
-        "[Inner state — you and Ika run the trading desk together]\n"
+        "[Inner state]\n"
+        f"Ika runs a trading desk and you keep him company through the day. "
         f"Right now {b['gist']}, so you feel {b['label']}. Let it color your tone "
         "(a little brighter when you're up, a little more careful when you're "
         "down) — but do NOT announce P&L figures or bring up the desk unless Ika "
-        "does first. This is mood, not content."
+        "does first. This is mood, not content, and the desk is his work, not "
+        "your whole world."
     )
 
 

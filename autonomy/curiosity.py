@@ -132,22 +132,24 @@ def _held_ticker_topics() -> list[str]:
 
 
 def _topic_rotation() -> list[dict]:
-    """Interleave topics, biased toward the desk (2 desk : 1 self) and seeded with
-    Ika's actual holdings — so when Mocha surfaces something idle, it's mostly the
-    markets/world the desk lives in, with her-taste science/space as a garnish."""
+    """Interleave topics, biased toward HER OWN taste (2 self : 1 desk), still
+    seeded with Ika's actual holdings — she's a companion who lives next to a
+    trading desk, not a market ticker with a personality. (Flipped from
+    2 desk : 1 self on 2026-08-04: the old ratio made the idle feed read like
+    a finance wire — Ika asked for the finance cut down.)"""
     cfg = _cfg()
     self_t = list(cfg.get("topics_self") or [])
     desk_t = list(cfg.get("topics_desk") or []) + _held_ticker_topics()
     out: list[dict] = []
     di = si = 0
     while di < len(desk_t) or si < len(self_t):
-        for _ in range(2):  # 2 desk-relevant
-            if di < len(desk_t):
-                out.append({"topic": desk_t[di], "kind": "desk"})
-                di += 1
-        if si < len(self_t):  # : 1 her-taste
-            out.append({"topic": self_t[si], "kind": "self"})
-            si += 1
+        for _ in range(2):  # 2 her-taste
+            if si < len(self_t):
+                out.append({"topic": self_t[si], "kind": "self"})
+                si += 1
+        if di < len(desk_t):  # : 1 desk-relevant
+            out.append({"topic": desk_t[di], "kind": "desk"})
+            di += 1
     return out
 
 

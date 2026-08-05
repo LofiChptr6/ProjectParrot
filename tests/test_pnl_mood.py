@@ -37,6 +37,16 @@ def test_mood_message_is_soft_and_numberless(pnl_mood):
     assert "mood, not content" in msg
     # It must NOT contain a literal P&L figure — it's a tone prior, not a readout.
     assert "$" not in msg
+    # The desk is his work, not her identity — the co-runner framing is gone.
+    assert "run the trading desk together" not in msg
+
+
+def test_steady_mood_injects_nothing(pnl_mood):
+    """A flat day is not a feeling: no inner-state line at all (the old
+    every-turn 'roughly flat' line primed desk-talk on unrelated turns)."""
+    b = pnl_mood._bucket({"pct": 0.0, "combined": 10})
+    assert b["label"] == "steady"
+    assert pnl_mood._format_mood_message(b) is None
 
 
 def test_current_mood_uses_cache(pnl_mood, monkeypatch):
