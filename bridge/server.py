@@ -73,6 +73,12 @@ from character.context import build_chat_prompt, build_system_prompt
 from tools.handle_registry import substitute_handles_in_text
 
 logging.basicConfig(level=logging.INFO)
+# httpx logs every request URL at INFO and Telegram puts the bot token IN the
+# URL — bridge.log was carrying the secret (found 2026-08-05, same leak class
+# as the desk's book logs). Health probes and LLM calls lose their request
+# lines too; both have their own telemetry.
+for _noisy in ("httpx", "httpcore"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
 log = logging.getLogger("bridge")
 
 ROOT = Path(__file__).resolve().parent.parent
