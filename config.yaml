@@ -88,7 +88,10 @@ llm:
   # to slow-but-alive instead of silent. Never on the healthy conversational
   # path — observed 67-90s generations make it unusable for real-time.
   remote:
-    base_url: https://llm.project-hello-mocha.com/v1
+    # 2026-08-05: direct LAN to the sparks box (was the Cloudflare gateway —
+    # its ~100s edge idle cap killed long generations and its tunnel origin
+    # was the 08-04 outage). Same vLLM, same bearer key, no edge in the path.
+    base_url: http://192.168.0.175:8000/v1
     model: deepseek-v3
     # Secret stays in .env — llm_client resolves this env var into the
     # Authorization: Bearer header (never put the key in this tracked file).
@@ -96,9 +99,10 @@ llm:
     repetition_penalty: 0
     # DeepSeek-V3-AWQ, 16384-token window — 3072 out leaves ~13k for prompt.
     max_tokens: 3072
-    # Remote gateway: cold starts and busy slots are real (observed Cloudflare
-    # 524 at ~100s when saturated). Fail fast instead of hanging the bridge.
-    request_timeout_s: 180
+    # LAN has no Cloudflare idle cap, and DeepSeek decodes ~5 tok/s when busy —
+    # 180s was tuned to fail fast on edge hangs and now cuts real generations.
+    # 360 matches the local lane's ceiling.
+    request_timeout_s: 360
     # Bound Mocha's load on the SHARED sparks gateway (desk lanes route there
     # too since 2026-07-30) — a Mocha bug must never starve desk inference.
     isolation:
