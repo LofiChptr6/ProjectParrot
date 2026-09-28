@@ -58,16 +58,7 @@ const BONE_MAP = {
 };
 
 /** Emotion ID to VRM expression preset + weight */
-const EMOTION_TO_VRM = {
-    neutral:    { preset: 'neutral',   weight: 0.0 },
-    happy:      { preset: 'happy',     weight: 0.8 },
-    excited:    { preset: 'happy',     weight: 1.0 },
-    thinking:   { preset: 'neutral',   weight: 0.0 },
-    sad:        { preset: 'sad',       weight: 0.7 },
-    surprised:  { preset: 'surprised', weight: 0.9 },
-    playful:    { preset: 'happy',     weight: 0.7 },
-    empathetic: { preset: 'sad',       weight: 0.3 },
-};
+import { EMOTION_TO_VRM, resolveEmotion } from './emotion-presets.js';
 
 /** Five-channel viseme names */
 const VISEME_NAMES = ['aa', 'ih', 'ou', 'ee', 'oh'];
@@ -423,7 +414,7 @@ function applyEmotion(emotionId) {
         } catch (e) { /* ignore */ }
     }
 
-    const emo = EMOTION_TO_VRM[emotionId] || { preset: 'neutral', weight: 0 };
+    const emo = resolveEmotion(emotionId, vrm);
     if (emo.preset !== 'neutral') {
         try {
             vrm.expressionManager.setValue(emo.preset, emo.weight);

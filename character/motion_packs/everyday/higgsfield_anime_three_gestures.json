@@ -1,0 +1,62 @@
+{
+  "status": "completed",
+  "review": "Generated video references; motion quality not independently verified and not yet retargeted to Mocha.",
+  "resultUrls": ["https://d8j0ntlcm91z4.cloudfront.net/user_3JwWQ8zHVOnm47WMVgUhUZRmboP/hf_20260928_062211_f5937400-e6b3-4873-ac01-fc8bf21b6059.mp4","https://d8j0ntlcm91z4.cloudfront.net/user_3JwWQ8zHVOnm47WMVgUhUZRmboP/hf_20260928_062210_6cff7b9a-0371-4e75-9775-2d5ba79b79bf.mp4","https://d8j0ntlcm91z4.cloudfront.net/user_3JwWQ8zHVOnm47WMVgUhUZRmboP/hf_20260928_062212_8858be40-a5f0-436c-8c0e-47b270f9dc24.mp4"],
+  "estimatedCredits": 180,
+  "scenes": [
+    {
+      "slug": "offer_hand",
+      "title": "You can take my hand",
+      "action": "Scenario: she quietly offers companionship to someone feeling uncertain. 0-1s she meets the viewer's eyes with a reassuring little smile. 1-2.5s she extends her RIGHT forearm gently forward and slightly to her right at waist height, rotating her relaxed open palm UP as an invitation to take her hand. Keep a natural bend in her elbow and the hand fully visible beside the torso silhouette. Left arm remains comfortably at her side. 2.5-3.8s she holds the offered palm patiently, leans toward the viewer a very small amount, and gives one tiny encouraging nod. 3.8-5s she gently draws the hand back and settles both arms at her sides. A clear held offer, no finger beckoning, waving, palm-down soothing, or grasping an invisible object.",
+      "index": 0,
+      "job_id": "f5937400-e6b3-4873-ac01-fc8bf21b6059",
+      "params": {
+        "model": "seedance_2_5",
+        "mode": "t2v",
+        "duration": 5,
+        "resolution": "1080p",
+        "aspect_ratio": "9:16",
+        "generate_audio": false,
+        "count": 1,
+        "folder_id": "cb266537-0985-4f8e-826b-a27459962ed0",
+        "prompt": "Five-second full-body 3D ANIME CHARACTER ANIMATION. Polished cel-shaded 3D avatar, clean toon outlines, soft painted textures, subtle volumetric lighting; original Japanese adult woman age 24 with adult anime proportions, expressive almond-shaped eyes and shoulder-length dark brown hair. Fitted muted sage short-sleeved knit top, navy ankle-length trousers, white flat sneakers. Quietly affectionate, calm and caring slice-of-life romance personality. Soft open-eyed smile, relaxed shoulders, grounded body, natural coordinated shoulder/elbow/wrist movement, modest clear gestures with gentle follow-through. Fixed front camera, warm gray studio and visible floor, entire head and both feet always inside frame with generous margins, character occupies 75 percent of frame height. Standing throughout with feet planted; no walking, sitting, bouncing, huge grin, theatrical posing, camera movement, cuts, props, text, or dialogue. Consistent anatomy and five fingers per hand. This is a rendered 3D anime character, not live-action or chibi. Scenario: she quietly offers companionship to someone feeling uncertain. 0-1s she meets the viewer's eyes with a reassuring little smile. 1-2.5s she extends her RIGHT forearm gently forward and slightly to her right at waist height, rotating her relaxed open palm UP as an invitation to take her hand. Keep a natural bend in her elbow and the hand fully visible beside the torso silhouette. Left arm remains comfortably at her side. 2.5-3.8s she holds the offered palm patiently, leans toward the viewer a very small amount, and gives one tiny encouraging nod. 3.8-5s she gently draws the hand back and settles both arms at her sides. A clear held offer, no finger beckoning, waving, palm-down soothing, or grasping an invisible object."
+      }
+    },
+    {
+      "slug": "quiet_applause",
+      "title": "I'm quietly proud of you",
+      "action": "Scenario: the viewer shares a small personal success; she is quietly proud. 0-1s her attentive expression warms into a small genuine smile. 1-2s she raises BOTH hands in front of her lower chest, elbows low and relaxed. 2-3.5s she gives exactly TWO small, gentle, unhurried claps: palms meet lightly then separate about 12 centimeters, twice. Hands and fingers remain anatomically stable without interpenetration. A tiny approving nod accompanies the second clap. 3.5-5s her hands separate and lower naturally back to her sides while she holds her warm open-eyed smile. Understated adult affection, no bouncing, cheering, fist pumps, or dramatic excitement.",
+      "index": 1,
+      "job_id": "6cff7b9a-0371-4e75-9775-2d5ba79b79bf",
+      "params": {
+        "model": "seedance_2_5",
+        "mode": "t2v",
+        "duration": 5,
+        "resolution": "1080p",
+        "aspect_ratio": "9:16",
+        "generate_audio": false,
+        "count": 1,
+        "folder_id": "cb266537-0985-4f8e-826b-a27459962ed0",
+        "prompt": "Five-second full-body 3D ANIME CHARACTER ANIMATION. Polished cel-shaded 3D avatar, clean toon outlines, soft painted textures, subtle volumetric lighting; original Japanese adult woman age 24 with adult anime proportions, expressive almond-shaped eyes and shoulder-length dark brown hair. Fitted muted sage short-sleeved knit top, navy ankle-length trousers, white flat sneakers. Quietly affectionate, calm and caring slice-of-life romance personality. Soft open-eyed smile, relaxed shoulders, grounded body, natural coordinated shoulder/elbow/wrist movement, modest clear gestures with gentle follow-through. Fixed front camera, warm gray studio and visible floor, entire head and both feet always inside frame with generous margins, character occupies 75 percent of frame height. Standing throughout with feet planted; no walking, sitting, bouncing, huge grin, theatrical posing, camera movement, cuts, props, text, or dialogue. Consistent anatomy and five fingers per hand. This is a rendered 3D anime character, not live-action or chibi. Scenario: the viewer shares a small personal success; she is quietly proud. 0-1s her attentive expression warms into a small genuine smile. 1-2s she raises BOTH hands in front of her lower chest, elbows low and relaxed. 2-3.5s she gives exactly TWO small, gentle, unhurried claps: palms meet lightly then separate about 12 centimeters, twice. Hands and fingers remain anatomically stable without interpenetration. A tiny approving nod accompanies the second clap. 3.5-5s her hands separate and lower naturally back to her sides while she holds her warm open-eyed smile. Understated adult affection, no bouncing, cheering, fist pumps, or dramatic excitement."
+      }
+    },
+    {
+      "slug": "gentle_pause",
+      "title": "You can stop for today",
+      "action": "Scenario: someone she cares about is overworking; she kindly gives them permission to pause. 0-1s she watches attentively with a soft caring expression. 1-2.5s she lifts her RIGHT hand to lower chest height, palm facing the viewer, fingers softly together and slightly curved, elbow bent and close to her side. It is a gentle 'one moment, you can rest' sign, not a forceful pushing stop. Left arm rests at her side. 2.5-3.5s she holds the upright palm still and gives one small reassuring nod, shoulders relaxed. 3.5-5s she lowers the hand in a loose arc to her side and settles with a small affectionate smile. No palm-down exhale gesture, no waving, no repeated pushing, no finger pointing, no stern or scolding expression.",
+      "index": 2,
+      "job_id": "8858be40-a5f0-436c-8c0e-47b270f9dc24",
+      "params": {
+        "model": "seedance_2_5",
+        "mode": "t2v",
+        "duration": 5,
+        "resolution": "1080p",
+        "aspect_ratio": "9:16",
+        "generate_audio": false,
+        "count": 1,
+        "folder_id": "cb266537-0985-4f8e-826b-a27459962ed0",
+        "prompt": "Five-second full-body 3D ANIME CHARACTER ANIMATION. Polished cel-shaded 3D avatar, clean toon outlines, soft painted textures, subtle volumetric lighting; original Japanese adult woman age 24 with adult anime proportions, expressive almond-shaped eyes and shoulder-length dark brown hair. Fitted muted sage short-sleeved knit top, navy ankle-length trousers, white flat sneakers. Quietly affectionate, calm and caring slice-of-life romance personality. Soft open-eyed smile, relaxed shoulders, grounded body, natural coordinated shoulder/elbow/wrist movement, modest clear gestures with gentle follow-through. Fixed front camera, warm gray studio and visible floor, entire head and both feet always inside frame with generous margins, character occupies 75 percent of frame height. Standing throughout with feet planted; no walking, sitting, bouncing, huge grin, theatrical posing, camera movement, cuts, props, text, or dialogue. Consistent anatomy and five fingers per hand. This is a rendered 3D anime character, not live-action or chibi. Scenario: someone she cares about is overworking; she kindly gives them permission to pause. 0-1s she watches attentively with a soft caring expression. 1-2.5s she lifts her RIGHT hand to lower chest height, palm facing the viewer, fingers softly together and slightly curved, elbow bent and close to her side. It is a gentle 'one moment, you can rest' sign, not a forceful pushing stop. Left arm rests at her side. 2.5-3.5s she holds the upright palm still and gives one small reassuring nod, shoulders relaxed. 3.5-5s she lowers the hand in a loose arc to her side and settles with a small affectionate smile. No palm-down exhale gesture, no waving, no repeated pushing, no finger pointing, no stern or scolding expression."
+      }
+    }
+  ]
+}

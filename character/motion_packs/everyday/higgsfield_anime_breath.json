@@ -1,0 +1,19 @@
+{
+  "jobId": "7b7279be-8ee0-48b5-b114-0bef7493c809",
+  "status": "completed",
+  "estimatedCredits": 60,
+  "scenario": "Take a breath with me: two-handed 3D anime-style video",
+  "params": {
+    "model": "seedance_2_5",
+    "mode": "t2v",
+    "duration": 5,
+    "resolution": "1080p",
+    "aspect_ratio": "9:16",
+    "generate_audio": false,
+    "count": 1,
+    "folder_id": "cb266537-0985-4f8e-826b-a27459962ed0",
+    "prompt": "A five-second full-body 3D ANIME CHARACTER ANIMATION, polished cel-shaded rendered video with clean toon outlines, soft painted textures, subtle three-dimensional lighting and stable volumetric form. An original Japanese anime young ADULT woman age 24, adult body proportions, expressive almond-shaped anime eyes, shoulder-length dark brown hair, fitted muted sage short-sleeved knit top, navy ankle-length trousers, white flat sneakers. Gentle slice-of-life romance aesthetic, relaxed and caring personality. Visibly a rendered 3D anime avatar, NOT a live-action actress, not photorealistic, not chibi. Plain warm gray studio and floor. Fixed front full-body camera, entire head and both shoes always visible, generous empty floor margin. Character occupies 75 percent of frame height. Scenario: 'Take one slow breath with me. You have time.' She comforts someone she cares about through a clear TWO-HANDED soothing gesture. 0-1 seconds: standing relaxed, feet comfortably planted, she looks attentively toward the viewer and raises BOTH forearms to lower-chest height. BOTH hands are open, palms facing DOWN, held shoulder-width apart, fingers relaxed. Both elbows naturally bent, slightly separated from her torso. 1-3.5 seconds: BOTH open hands descend together in one slow, smooth, clearly visible arc from lower-chest height to waist level, guiding a long exhale. Her shoulders gently release downward and her chest settles; a very slight forward inclination shows care. Maintain separation between the hands: no crossing, touching, clapping or clasping. Natural subtle asymmetry and soft elbow/wrist follow-through avoid mechanical mirrored motion. 3.5-5 seconds: BOTH arms ease back to her sides, she gives one small reassuring nod, holds a soft closed-mouth smile with eyes open and settles. Calm affectionate acting, purposeful readable arm movement, unhurried pace. No bouncing, repeated pulses, big grin, excited eyebrows, dramatic head tilt, walking or sitting. No props, text, speech, camera movement or cuts. Keep anatomy, five fingers per hand, clothing and character design consistent across frames. Both hands remain visible for the whole gesture."
+  },
+  "resultUrl": "https://d8j0ntlcm91z4.cloudfront.net/user_3JwWQ8zHVOnm47WMVgUhUZRmboP/hf_20260928_061646_7b7279be-8ee0-48b5-b114-0bef7493c809.mp4",
+  "review": "Completed generation; playback quality not independently verified. Video reference only, no skeletal animation or mesh exported."
+}

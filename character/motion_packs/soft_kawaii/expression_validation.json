@@ -1,0 +1,23 @@
+{
+  "status": "PASS",
+  "custom_expressions": [
+    "smile",
+    "warm_smile",
+    "bright_smile",
+    "bashful",
+    "amused",
+    "playful_wink",
+    "tender",
+    "pout",
+    "sleepy",
+    "kiss",
+    "curious",
+    "laugh_closed"
+  ],
+  "only_expression_json_changed": true,
+  "binary_chunks_unchanged": true,
+  "visemes_and_blinks_unchanged": true,
+  "original_happy_preserved": true,
+  "original_sha256": "dc99c49d16edbaf7978a5dfbda0d4777944346d99e90926153efbcf0a0e73500",
+  "revised_sha256": "d0c59b8b07217de5e5ea068df6d43fd0d067f28540dc56411af92466b2a92fc8"
+}

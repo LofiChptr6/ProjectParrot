@@ -129,6 +129,9 @@ project_mocha/
 
 ## Customization
 
+Expression release scope, motion experiments, saved prompts, and deployment notes:
+[Facial expressions and motion studies](docs/character-expression-and-motion-work.md).
+
 - **Personality** — edit `character/soul.md` (immediate).
 - **Behavior rules** — edit `character/behaviors.yaml` (immediate).
 - **Voice** — replace `audio/reference_voice.wav`, restart TTS.

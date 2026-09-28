@@ -1,15 +1,14 @@
 # Character Emotions
-# Each emotion maps to Unity Animator + VRM BlendShape values.
-# The LLM picks one emotion per reply. Unity uses the id to drive animation.
+# The LLM picks one facial expression per conversational beat.
+# The web renderer maps IDs through web/static/js/emotion-presets.js.
 #
-# Designer: add/remove/rename emotions here. The bridge sends the `id` to Unity;
-# the Animator Controller must have a matching state or integer mapping.
+# Keep IDs aligned with the renderer mapping and Mocha's VRM expression presets.
 #
 # Fields:
-#   id          — sent to Unity (keep lowercase, no spaces)
+#   id          — emitted in <emotion> tags (keep lowercase, no spaces)
 #   label       — human-readable name (for designer reference / logs)
 #   description — plain-language hint fed to the LLM so it picks the right one
-#   face        — VRM BlendShapePreset to apply (Joy, Angry, Sorrow, Fun, Surprised, Neutral)
+#   face        — preset/custom expression; legacy Unity labels remain for older IDs
 #   face_weight — 0.0–1.0 intensity
 #   body_hint   — free-text description of the body animation (for designer / Mixamo clip selection)
 
@@ -23,14 +22,21 @@ emotions:
 
   - id: happy
     label: Happy
-    description: Genuinely pleased, cheerful, or giving good news.
+    description: Strong, delighted happiness with the original broad closed-eye smile. Use for a joyful reaction or celebration; choose smile for everyday mild pleasure.
     face: Joy
     face_weight: 0.8
     body_hint: Slight bounce, open hand gesture, head tilt
 
+  - id: smile
+    label: Smile
+    description: A gentle open-eye smile for mild pleasure, a friendly acknowledgment, or relaxed conversation. Quieter than happy; use warm_smile when the feeling is specifically affectionate.
+    face: smile
+    face_weight: 0.8
+    body_hint: Relaxed posture, small nod, soft attentive gaze
+
   - id: excited
     label: Excited
-    description: Very enthusiastic, amazed, or reacting to something awesome.
+    description: The most exuberant closed-eye happy expression, for a major win or an enthusiastic reaction. Stronger than happy; bright_smile keeps the eyes open.
     face: Fun
     face_weight: 1.0
     body_hint: Energetic bounce, both hands up or clap, wide stance
@@ -69,3 +75,69 @@ emotions:
     face: Sorrow
     face_weight: 0.3
     body_hint: Gentle nod, hands together, slight lean forward
+
+  - id: warm_smile
+    label: Warm smile
+    description: An affectionate open-eye smile for a warm welcome or quiet fondness.
+    face: warm_smile
+    face_weight: 1.0
+
+  - id: bright_smile
+    label: Bright smile
+    description: An open-mouth, open-eye grin for pride or a small shared celebration. More animated than smile while keeping eye contact; happy closes the eyes with delight.
+    face: bright_smile
+    face_weight: 1.0
+
+  - id: bashful
+    label: Bashful
+    description: A restrained shy smile when a sincere compliment catches you off guard.
+    face: bashful
+    face_weight: 1.0
+
+  - id: amused
+    label: Amused
+    description: A knowing smile and slightly softened eyes for a shared joke or affectionate teasing.
+    face: amused
+    face_weight: 1.0
+
+  - id: playful_wink
+    label: Playful wink
+    description: A deliberate one-eye wink for one brief flirty or teasing beat.
+    face: playful_wink
+    face_weight: 1.0
+
+  - id: tender
+    label: Tender
+    description: A small reassuring smile and soft brows while offering comfort or affection.
+    face: tender
+    face_weight: 1.0
+
+  - id: pout
+    label: Playful pout
+    description: A small mock-offended pout in response to harmless teasing.
+    face: pout
+    face_weight: 1.0
+
+  - id: sleepy
+    label: Sleepy
+    description: Half-lidded drowsy eyes when winding down or saying goodnight.
+    face: sleepy
+    face_weight: 1.0
+
+  - id: kiss
+    label: Kiss
+    description: A small pursed-lip expression for a blown kiss or affectionate goodbye.
+    face: kiss
+    face_weight: 1.0
+
+  - id: curious
+    label: Curious
+    description: Slightly lifted brows and attentive open eyes when listening to an interesting story.
+    face: curious
+    face_weight: 1.0
+
+  - id: laugh_closed
+    label: Closed-eye laugh
+    description: An intentional eyes-closed laugh for an actual laugh or punchline. Shares the joyful face of happy, but signals a brief laughing beat; return to smile or amused afterward.
+    face: laugh_closed
+    face_weight: 1.0

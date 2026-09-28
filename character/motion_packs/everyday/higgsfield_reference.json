@@ -1,0 +1,17 @@
+{
+  "projectId": "cb266537-0985-4f8e-826b-a27459962ed0",
+  "jobId": "67bf9646-1982-4f24-bba5-644bb92ebd18",
+  "model": "seedance_2_5",
+  "durationSeconds": 5,
+  "resolution": "1080p",
+  "aspectRatio": "9:16",
+  "estimatedCredits": 60,
+  "purpose": "Standing human performance reference for a future DeepMotion test; not a skeletal animation or a recreation of film footage.",
+  "acting": "Notice someone calling, slight head turn, warm open-eyed smile, tiny acknowledgment nod, settle. Arms relaxed and both feet planted.",
+  "status": "completed",
+  "resultUrl": "https://d8j0ntlcm91z4.cloudfront.net/user_3JwWQ8zHVOnm47WMVgUhUZRmboP/hf_20260928_053013_67bf9646-1982-4f24-bba5-644bb92ebd18.mp4",
+  "actualDurationSeconds": 5.041667,
+  "actualWidth": 1080,
+  "actualHeight": 1920,
+  "review": "Browser playback completed; inspected start, midpoint, and end. Standing subject with relaxed arms, off-camera glance moving to front-facing surprise and a smile. Framing is tight at the feet. Not yet tested in DeepMotion."
+}

@@ -1,0 +1,11 @@
+{
+  "status": "PASS",
+  "emotionChoices": 20,
+  "customPresets": 12,
+  "originalHappyPreserved": true,
+  "happyAndSmileDistinct": true,
+  "bidirectionalSwitchClearsPrevious": true,
+  "avatarFallback": true,
+  "previousEmotionCleared": true,
+  "visemeWeightsPreserved": true
+}

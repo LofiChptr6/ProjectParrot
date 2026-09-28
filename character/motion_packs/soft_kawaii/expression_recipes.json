@@ -1,0 +1,246 @@
+{
+  "recipes": {
+    "smile": {
+      "Fcl_MTH_Fun": 0.72,
+      "Fcl_BRW_Joy": 0.22,
+      "Fcl_EYE_Fun": 0.08
+    },
+    "warm_smile": {
+      "Fcl_MTH_Fun": 0.58,
+      "Fcl_BRW_Fun": 0.18,
+      "Fcl_EYE_Fun": 0.06
+    },
+    "bright_smile": {
+      "Fcl_MTH_Joy": 0.85,
+      "Fcl_BRW_Joy": 0.4,
+      "Fcl_EYE_Joy": 0.14
+    },
+    "bashful": {
+      "Fcl_MTH_Fun": 0.4,
+      "Fcl_BRW_Sorrow": 0.12,
+      "Fcl_EYE_Fun": 0.18
+    },
+    "amused": {
+      "Fcl_MTH_Fun": 0.63,
+      "Fcl_BRW_Fun": 0.4,
+      "Fcl_EYE_Fun": 0.3
+    },
+    "playful_wink": {
+      "Fcl_MTH_Fun": 0.6,
+      "Fcl_BRW_Fun": 0.25,
+      "Fcl_EYE_Joy_R": 0.92
+    },
+    "tender": {
+      "Fcl_MTH_Fun": 0.3,
+      "Fcl_BRW_Sorrow": 0.18,
+      "Fcl_EYE_Fun": 0.1
+    },
+    "pout": {
+      "Fcl_MTH_Angry": 0.28,
+      "Fcl_MTH_Small": 0.3,
+      "Fcl_BRW_Angry": 0.24,
+      "Fcl_EYE_Angry": 0.12
+    },
+    "sleepy": {
+      "Fcl_EYE_Close": 0.46,
+      "Fcl_BRW_Fun": 0.08,
+      "Fcl_MTH_Neutral": 0.12
+    },
+    "kiss": {
+      "Fcl_MTH_U": 0.32,
+      "Fcl_MTH_Small": 0.22,
+      "Fcl_EYE_Fun": 0.12
+    },
+    "curious": {
+      "Fcl_BRW_Surprised": 0.27,
+      "Fcl_EYE_Surprised": 0.15,
+      "Fcl_MTH_Neutral": 0.15
+    }
+  },
+  "original_expressions": {
+    "preset": {
+      "happy": {
+        "morphTargetBinds": [
+          {
+            "node": 91,
+            "index": 3,
+            "weight": 1
+          }
+        ],
+        "isBinary": false,
+        "overrideBlink": "none",
+        "overrideLookAt": "none",
+        "overrideMouth": "none"
+      },
+      "angry": {
+        "morphTargetBinds": [
+          {
+            "node": 91,
+            "index": 1,
+            "weight": 1
+          }
+        ],
+        "isBinary": false,
+        "overrideBlink": "none",
+        "overrideLookAt": "none",
+        "overrideMouth": "none"
+      },
+      "sad": {
+        "morphTargetBinds": [
+          {
+            "node": 91,
+            "index": 4,
+            "weight": 1
+          }
+        ],
+        "isBinary": false,
+        "overrideBlink": "none",
+        "overrideLookAt": "none",
+        "overrideMouth": "none"
+      },
+      "relaxed": {
+        "morphTargetBinds": [
+          {
+            "node": 91,
+            "index": 2,
+            "weight": 1
+          }
+        ],
+        "isBinary": false,
+        "overrideBlink": "none",
+        "overrideLookAt": "none",
+        "overrideMouth": "none"
+      },
+      "surprised": {
+        "morphTargetBinds": [
+          {
+            "node": 91,
+            "index": 5,
+            "weight": 1
+          }
+        ],
+        "isBinary": false,
+        "overrideBlink": "none",
+        "overrideLookAt": "none",
+        "overrideMouth": "none"
+      },
+      "aa": {
+        "morphTargetBinds": [
+          {
+            "node": 91,
+            "index": 39,
+            "weight": 1
+          }
+        ],
+        "isBinary": false,
+        "overrideBlink": "none",
+        "overrideLookAt": "none",
+        "overrideMouth": "none"
+      },
+      "ih": {
+        "morphTargetBinds": [
+          {
+            "node": 91,
+            "index": 40,
+            "weight": 1
+          }
+        ],
+        "isBinary": false,
+        "overrideBlink": "none",
+        "overrideLookAt": "none",
+        "overrideMouth": "none"
+      },
+      "ou": {
+        "morphTargetBinds": [
+          {
+            "node": 91,
+            "index": 41,
+            "weight": 1
+          }
+        ],
+        "isBinary": false,
+        "overrideBlink": "none",
+        "overrideLookAt": "none",
+        "overrideMouth": "none"
+      },
+      "ee": {
+        "morphTargetBinds": [
+          {
+            "node": 91,
+            "index": 42,
+            "weight": 1
+          }
+        ],
+        "isBinary": false,
+        "overrideBlink": "none",
+        "overrideLookAt": "none",
+        "overrideMouth": "none"
+      },
+      "oh": {
+        "morphTargetBinds": [
+          {
+            "node": 91,
+            "index": 43,
+            "weight": 1
+          }
+        ],
+        "isBinary": false,
+        "overrideBlink": "none",
+        "overrideLookAt": "none",
+        "overrideMouth": "none"
+      },
+      "blink": {
+        "morphTargetBinds": [
+          {
+            "node": 91,
+            "index": 13,
+            "weight": 1
+          }
+        ],
+        "isBinary": false,
+        "overrideBlink": "none",
+        "overrideLookAt": "none",
+        "overrideMouth": "none"
+      },
+      "blinkLeft": {
+        "morphTargetBinds": [
+          {
+            "node": 91,
+            "index": 15,
+            "weight": 1
+          }
+        ],
+        "isBinary": false,
+        "overrideBlink": "none",
+        "overrideLookAt": "none",
+        "overrideMouth": "none"
+      },
+      "blinkRight": {
+        "morphTargetBinds": [
+          {
+            "node": 91,
+            "index": 14,
+            "weight": 1
+          }
+        ],
+        "isBinary": false,
+        "overrideBlink": "none",
+        "overrideLookAt": "none",
+        "overrideMouth": "none"
+      },
+      "neutral": {
+        "morphTargetBinds": [
+          {
+            "node": 91,
+            "index": 0,
+            "weight": 1
+          }
+        ],
+        "isBinary": false,
+        "overrideBlink": "none",
+        "overrideLookAt": "none",
+        "overrideMouth": "none"
+      }
+    }
+  }
+}

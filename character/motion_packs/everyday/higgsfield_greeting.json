@@ -1,0 +1,20 @@
+{
+  "jobId": "1aaf87a6-55ee-419b-b93a-b9a149c1a90c",
+  "projectId": "cb266537-0985-4f8e-826b-a27459962ed0",
+  "status": "completed",
+  "estimatedCredits": 60,
+  "purpose": "Anime-inspired standing greeting performance reference for Mocha; requires motion capture and retargeting before use in the app.",
+  "params": {
+    "model": "seedance_2_5",
+    "mode": "t2v",
+    "duration": 5,
+    "resolution": "1080p",
+    "aspect_ratio": "9:16",
+    "count": 1,
+    "generate_audio": false,
+    "prompt": "A polished live-action acting reference with the expressive charm and clear readable posing of a Japanese romantic anime heroine. One fictional Japanese adult woman, age 23, youthful adult appearance, lively and affectionate personality. She wears a fitted coral pink short-sleeve knit top, fitted navy ankle-length trousers and white flat sneakers, with shoulder-length dark hair tucked behind her ears. Plain pale gray studio background and floor, soft even lighting, sharp limbs, realistic human anatomy. FIXED FRONT CAMERA, full body head to shoes always visible, subject occupies only 75 percent of frame height, generous visible floor below both shoes. No cuts, zoom, camera movement, props, captions, dialogue or other people. Five-second clear performance with DISTINCT body action, not a static portrait: 0.0-0.6s she notices her favorite person just in front of her, lights up, eyebrows lift, and makes a small excited knee dip with both feet staying planted. 0.6-2.0s she smoothly raises her RIGHT forearm, elbow bent naturally beside her torso, open hand beside and slightly outside her right cheek without covering or touching her face. She gives two small friendly side-to-side waves with relaxed fingers and a bright open-eyed smile. The left arm stays relaxed and visible beside her body. 2.0-3.4s the wave finishes, she lowers her right hand naturally to her side, shifts her weight subtly onto one leg, tilts her head toward her right shoulder and leans her upper body slightly toward the viewer as if delighted to say 'there you are'. 3.4-5.0s she gently straightens, keeps a warm happy smile and settles both arms at her sides. Charming, playful, confident, sweet anime-inspired girlfriend greeting performed by a real-looking adult human. Readable shoulder and elbow coordination, soft overlapping motion, no abrupt rotations, no huge arm swings, no finger heart, no hand-to-chest pose. Standing throughout, no walking or sitting. Realistic live-action footage, not a cartoon.",
+    "folder_id": "cb266537-0985-4f8e-826b-a27459962ed0"
+  },
+  "resultUrl": "https://d8j0ntlcm91z4.cloudfront.net/user_3JwWQ8zHVOnm47WMVgUhUZRmboP/hf_20260928_053740_1aaf87a6-55ee-419b-b93a-b9a149c1a90c.mp4",
+  "review": "Browser playback sampled: initial alert expression, smiling side lean/head tilt, and arms-down ending observed. Full body visible with limited floor margin. Seeking in native browser player was unreliable; wave timing and full motion quality remain unverified. Not yet captured in DeepMotion or retargeted to Mocha."
+}
